@@ -43,7 +43,12 @@ def db_session() -> Generator[Session, None, None]:
 
     connection = engine.connect()
     transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    # A savepoint per Session transaction lets application rollback() calls
+    # behave like production without rolling back the fixture's outer setup.
+    session = TestingSessionLocal(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+    )
 
     yield session
 
@@ -77,8 +82,12 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         "app.workers.tasks.parse_pdf.spawn_parse_pdf_task",
         new=_sync_spawn_parse_pdf,
     ):
-        with TestClient(app) as c:
-            yield c
+        with patch(
+            "app.workers.tasks.extract_knowledge.spawn_extract_knowledge",
+            return_value="test-extraction-task",
+        ):
+            with TestClient(app) as c:
+                yield c
 
     app.dependency_overrides.clear()
 

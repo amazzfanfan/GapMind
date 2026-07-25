@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.domains.task.models import Task
-from app.domains.task.schemas import TaskCreate, TaskUpdate
+from app.domains.task.schemas import TaskCreate, TaskUpdate, summarize_task_error
 from app.domains.timeline.service import TimelineService
 
 logger = get_logger(__name__)
@@ -210,6 +210,8 @@ class TaskService:
         payload = {"task_type": task.task_type, "status": task.status}
         if extra:
             payload.update(extra)
+        if "error" in payload:
+            payload["error"] = summarize_task_error(payload["error"])
         self.timeline_service.record(
             workspace_id=task.workspace_id,
             event_type=event_type,

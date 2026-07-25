@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 TaskStatus = Literal[
     "queued",
@@ -16,6 +16,25 @@ TaskStatus = Literal[
     "cancel_requested",
     "cancelled",
 ]
+
+
+def summarize_task_error(value: str | None) -> str | None:
+    """Return an actionable message safe for API and UI display."""
+    if not value:
+        return None
+    lowered = value.lower()
+    if "validation errors for extractionoutput" in lowered:
+        return "Knowledge extraction returned an invalid structure. Retry the extraction or inspect worker logs."
+    if "all extracted items were rejected" in lowered:
+        return "Knowledge extraction could not verify any evidence in the paper text."
+    if "evidence_text" in lowered and "parsed_markdown" in lowered:
+        return "Some extracted evidence could not be located in the paper text."
+    if "api_key" in lowered:
+        return "The configured model service is unavailable."
+    first_line = value.splitlines()[0].strip()
+    if len(first_line) <= 180:
+        return first_line
+    return "Task failed. Inspect backend or worker logs for technical details."
 
 
 class TaskCreate(BaseModel):
@@ -58,6 +77,11 @@ class TaskRead(BaseModel):
     is_deleted: bool = False
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _sanitize_error(cls, value: object) -> str | None:
+        return summarize_task_error(str(value)) if value is not None else None
 
 
 class TaskListResponse(BaseModel):

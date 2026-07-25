@@ -66,6 +66,19 @@ class Paper(Base, UUIDPKMixin, TimestampMixin):
     chunk_index_artifact_id: Mapped[str | None] = mapped_column(
         ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Points to the parsed_markdown artifact (.md file with headers + structure)
+    parsed_markdown_artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Knowledge extraction state (Phase 3)
+    # pending | extracting | extracted | failed | not_applicable
+    extract_status: Mapped[str] = mapped_column(
+        String(32), default="not_applicable", nullable=False, index=True
+    )
+    extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Lifecycle
     is_deleted: Mapped[bool] = mapped_column(

@@ -73,6 +73,9 @@ class PaperRead(BaseModel):
     chunk_count: int = 0
     parsed_text_artifact_id: str | None = None
     chunk_index_artifact_id: str | None = None
+    parsed_markdown_artifact_id: str | None = None
+    extract_status: str = "not_applicable"
+    extracted_at: datetime | None = None
     is_deleted: bool = False
     created_at: datetime
     updated_at: datetime

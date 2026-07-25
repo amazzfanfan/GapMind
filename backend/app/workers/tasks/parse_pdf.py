@@ -132,19 +132,8 @@ def _do_parse(
         )
     task_service.update_progress(task_id, 0.4)
 
-    # 3. Chunk the parsed text. We set artifact_id="" here temporarily;
-    # it gets filled in after we create the chunk_index artifact below.
-    created_at = datetime.now(timezone.utc).isoformat()
-    chunks = chunk_parsed_pdf(
-        parsed,
-        workspace_id=paper.workspace_id,
-        paper_id=paper.id,
-        artifact_id="",
-        created_at=created_at,
-    )
-    task_service.update_progress(task_id, 0.6)
-
-    # 4. Save parsed_text artifact (a .txt file with the full cleaned text).
+    # 3. Save parsed_text first. Chunk offsets and source_artifact_id are
+    # defined against this immutable text artifact.
     parsed_text_artifact = artifact_service.save_upload(
         workspace_id=paper.workspace_id,
         filename=f"{paper.id}_parsed_text.txt",
@@ -152,9 +141,30 @@ def _do_parse(
         mime_type="text/plain",
         kind="parsed_text",
     )
+
+    # 4. Chunk the exact parsed_text artifact content.
+    created_at = datetime.now(timezone.utc).isoformat()
+    chunks = chunk_parsed_pdf(
+        parsed,
+        workspace_id=paper.workspace_id,
+        paper_id=paper.id,
+        created_at=created_at,
+        source_artifact_id=parsed_text_artifact.id,
+    )
+    task_service.update_progress(task_id, 0.6)
+
+    # 5. Save parsed_markdown for extraction and evidence anchoring.
+    parsed_md = parsed.to_markdown()
+    parsed_md_artifact = artifact_service.save_upload(
+        workspace_id=paper.workspace_id,
+        filename=f"{paper.id}_{paper.title[:30]}_parsed.md".replace(" ", "_"),
+        content=parsed_md.encode("utf-8"),
+        mime_type="text/markdown",
+        kind="parsed_markdown",
+    )
     task_service.update_progress(task_id, 0.75)
 
-    # 5. Save chunk_index artifact (a .jsonl file with all chunks).
+    # 6. Save chunk_index artifact (a .jsonl file with all chunks).
     chunks_jsonl = "\n".join(json.dumps(_chunk_to_dict(c)) for c in chunks)
     chunk_index_artifact = artifact_service.save_upload(
         workspace_id=paper.workspace_id,
@@ -163,26 +173,23 @@ def _do_parse(
         mime_type="application/jsonl",
         kind="chunk_index",
     )
-    # Fill in artifact_id on each chunk to point to the chunk_index artifact.
-    for c in chunks:
-        c.artifact_id = chunk_index_artifact.id
-
     task_service.update_progress(task_id, 0.9)
 
-    # 6. Export chunks to Contract #1 path: data/chunks/{ws}/{paper}.jsonl
+    # 7. Export chunks to Contract #1 path: data/chunks/{ws}/{paper}.jsonl
     _export_chunks_jsonl(paper.workspace_id, paper.id, chunks)
 
-    # 7. Update paper row with parsing state.
+    # 8. Update paper row with parsing state.
     paper = db.get(Paper, paper.id)  # refresh to avoid stale state
     paper.parse_status = "parsed"
     paper.parsed_at = datetime.now(timezone.utc)
     paper.chunk_count = len(chunks)
     paper.parsed_text_artifact_id = parsed_text_artifact.id
     paper.chunk_index_artifact_id = chunk_index_artifact.id
+    paper.parsed_markdown_artifact_id = parsed_md_artifact.id
     db.commit()
     db.refresh(paper)
 
-    # 8. Transition task to succeeded.
+    # 9. Transition task to succeeded.
     task_service.transition(
         task_id,
         "succeeded",
@@ -190,12 +197,13 @@ def _do_parse(
         result={
             "chunk_count": len(chunks),
             "parsed_text_artifact_id": parsed_text_artifact.id,
+            "parsed_md_artifact_id": parsed_md_artifact.id,
             "chunk_index_artifact_id": chunk_index_artifact.id,
             "page_count": parsed.page_count,
         },
     )
 
-    # 9. Timeline event.
+    # 10. Timeline event.
     TimelineService(db).record(
         workspace_id=paper.workspace_id,
         event_type="paper.parsed",
@@ -217,11 +225,27 @@ def _do_parse(
         chunk_count=len(chunks),
         page_count=parsed.page_count,
     )
+
+    # Spawn knowledge extraction task (Phase 3). Best-effort: if the
+    # extract_knowledge task dispatch fails, the paper is still parsed
+    # and the user can trigger extraction manually later.
+    try:
+        from app.workers.tasks.extract_knowledge import spawn_extract_knowledge
+
+        spawn_extract_knowledge(db, paper.id, paper.workspace_id)
+    except Exception as e:
+        logger.warning(
+            "parse_pdf.spawn_extract_failed",
+            paper_id=paper.id,
+            error=str(e),
+        )
+
     return {
         "status": "succeeded",
         "paper_id": paper.id,
         "chunk_count": len(chunks),
         "parsed_text_artifact_id": parsed_text_artifact.id,
+        "parsed_md_artifact_id": parsed_md_artifact.id,
         "chunk_index_artifact_id": chunk_index_artifact.id,
     }
 
@@ -229,10 +253,12 @@ def _do_parse(
 def _chunk_to_dict(c) -> dict:
     """Serialize a Chunk dataclass to a JSON-compatible dict (Contract #1)."""
     return {
+        "schema_version": "1.0.0",
         "chunk_id": c.chunk_id,
         "workspace_id": c.workspace_id,
         "paper_id": c.paper_id,
-        "artifact_id": c.artifact_id,
+        "source_artifact_id": c.source_artifact_id,
+        "source_artifact_kind": "parsed_text",
         "chunk_index": c.chunk_index,
         "section": c.section,
         "subsection": c.subsection,

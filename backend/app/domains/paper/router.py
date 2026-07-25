@@ -406,6 +406,39 @@ def list_papers(
     )
 
 
+@router.post(
+    "/workspaces/{workspace_id}/papers/{paper_id}/extract",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def trigger_paper_extraction(
+    workspace_id: str,
+    paper_id: str,
+    service: PaperService = Depends(_get_paper_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> dict[str, str]:
+    """Idempotently trigger or retry extraction for a parsed paper."""
+    try:
+        workspace_service.get(workspace_id)
+        paper = service.get(paper_id)
+    except (WorkspaceNotFoundError, PaperNotFoundError) as e:
+        raise _not_found(e) from e
+    if paper.workspace_id != workspace_id:
+        raise _not_found(PaperNotFoundError(paper_id))
+    if not paper.parsed_markdown_artifact_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "paper_not_parsed",
+                "message": "Paper must have parsed_markdown before extraction.",
+            },
+        )
+
+    from app.workers.tasks.extract_knowledge import spawn_extract_knowledge
+
+    task_id = spawn_extract_knowledge(service.db, paper.id, workspace_id)
+    return {"task_id": task_id, "status": "queued"}
+
+
 @router.get(
     "/workspaces/{workspace_id}/papers/{paper_id}",
     response_model=PaperRead,
