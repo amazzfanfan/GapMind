@@ -1,5 +1,11 @@
 # GapMind Benchmark Plan
 
+> 当前执行入口：[`mvp_acceptance_and_sequence.md`](mvp_acceptance_and_sequence.md)
+> 受控比赛案例：[`demo_case_self_interpretable_gnn.md`](demo_case_self_interpretable_gnn.md)
+>
+> 本文保留完整 benchmark 愿景；实际开发先通过 12 篇 Smoke Corpus 和主 Demo Case 的
+> 分阶段 Gate，再扩展到 30–50 篇 Development Set。
+
 ## 1. Benchmark 目标
 
 GapMind 的 MVP 不应只证明“LLM 能总结论文”，而应证明：

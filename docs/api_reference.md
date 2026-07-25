@@ -253,6 +253,20 @@ Workspace 是核心 scope 对象，所有其他资源都归属于某个 workspac
 }
 ```
 
+### `POST /workspaces/{workspace_id}/papers/{paper_id}/extract` ✅
+
+幂等触发或重试知识抽取。Paper 必须已有 `parsed_markdown`；同一 Paper 已存在 queued/running
+抽取任务时返回现有 task，不重复派发。
+
+**响应** `202 Accepted`：
+```json
+{"task_id": "uuid", "status": "queued"}
+```
+
+**错误**：
+- `404 paper_not_found`
+- `409 paper_not_parsed`
+
 ### `GET /workspaces/{workspace_id}/papers/{paper_id}` ✅
 
 获取单个论文。跨 workspace 访问返回 404。
@@ -465,6 +479,61 @@ Workspace 是核心 scope 对象，所有其他资源都归属于某个 workspac
 ## Knowledge
 
 知识图谱。Phase 1b 只读——内容由 Phase 3 抽取 pipeline 写入。
+
+当前存储位置：
+
+- `canonical_entities`：跨论文共享的 Method/Task/Dataset 规范实体；
+- `knowledge_items`：每篇论文独立的 Mention/Claim/Limitation；
+- `knowledge_relations`：条目之间的关系；
+- `evidence_spans`：指向 parsed Markdown 的证据原文；
+- `extraction_runs`：模型、Prompt、状态和错误审计；
+- `extraction_rejections`：逐 item/relation 的拒绝原因和原始对象审计。
+
+前端 Knowledge Workbench 尚未实现。开发期通过以下 API 查看抽取结果：
+
+```text
+GET /api/v1/workspaces/{workspace_id}/knowledge
+GET /api/v1/workspaces/{workspace_id}/knowledge/relations
+GET /api/v1/workspaces/{workspace_id}/knowledge/{item_id}/evidence
+GET /api/v1/workspaces/{workspace_id}/extraction-runs/{run_id}/rejections
+```
+
+### `GET /workspaces/{workspace_id}/extraction-runs/{run_id}/rejections` ✅
+
+分页查看一次抽取运行中被拒绝的 item、relation 或顶层输出。严格校验 run 属于 workspace，
+跨 workspace 与不存在的 run 均返回 `404 extraction_run_not_found`。
+
+**查询参数**：`kind`、`stage`、`reason_code`、`limit`（1-200）、`offset`。
+
+**响应**：
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "extraction_run_id": "uuid",
+      "paper_id": "uuid",
+      "batch_index": 0,
+      "rejection_kind": "item",
+      "stage": "evidence_resolution",
+      "reason_code": "evidence_not_found",
+      "reason_detail": "No exact source span.",
+      "item_type": "claim",
+      "canonical_name": "Claim name",
+      "raw_payload": {"type": "claim"},
+      "evidence_preview": "Rejected evidence text",
+      "created_at": "2026-07-26T00:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Task 的 `payload.extraction_run_id` 在 run 创建后写入；成功或失败结果包含
+`rejected_schema`、`rejected_evidence`、`rejected_relations` 和 `rejected_total`。迁移前
+历史 run 仅有旧计数，拒绝详情无法回填，需重新抽取。
 
 ### `GET /workspaces/{workspace_id}/knowledge` ✅ 🔒
 
