@@ -122,15 +122,15 @@ def _chunk_from(
     *,
     workspace_id="ws-1",
     paper_id="paper-1",
-    artifact_id="art-1",
+    source_artifact_id="art-1",
     created_at="2026-07-19T10:00:00Z",
 ):
     return chunk_parsed_pdf(
         parsed,
         workspace_id=workspace_id,
         paper_id=paper_id,
-        artifact_id=artifact_id,
         created_at=created_at,
+        source_artifact_id=source_artifact_id,
     )
 
 
@@ -150,7 +150,7 @@ def test_chunker_short_text_produces_one_chunk() -> None:
         assert c.chunk_id
         assert c.workspace_id == "ws-1"
         assert c.paper_id == "paper-1"
-        assert c.artifact_id == "art-1"
+        assert c.source_artifact_id == "art-1"
         assert c.text
         assert c.start_char < c.end_char
         assert c.tokens_estimate > 0

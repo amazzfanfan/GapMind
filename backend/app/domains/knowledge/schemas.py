@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +36,10 @@ class KnowledgeItemRead(BaseModel):
 
     id: str
     workspace_id: str
+    paper_id: str | None = None
+    canonical_entity_id: str | None = None
+    extraction_run_id: str | None = None
+    item_key: str | None = None
     type: KnowledgeType
     canonical_name: str
     content: dict[str, Any] = Field(default_factory=dict)
@@ -90,6 +94,8 @@ class EvidenceSpanRead(BaseModel):
     knowledge_item_id: str
     paper_id: str
     artifact_id: str | None = None
+    artifact_kind: str | None = None
+    artifact_version: str | None = None
     chunk_index: int | None = None
     start_char: int | None = None
     end_char: int | None = None
@@ -105,3 +111,239 @@ class EvidenceSpanListResponse(BaseModel):
 
     items: list[EvidenceSpanRead]
     total: int
+
+
+class ExtractionRejectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    extraction_run_id: str
+    paper_id: str
+    batch_index: int | None = None
+    rejection_kind: str
+    stage: str
+    reason_code: str
+    reason_detail: str
+    item_type: str | None = None
+    canonical_name: str | None = None
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    evidence_preview: str | None = None
+    created_at: datetime
+
+
+class ExtractionRejectionListResponse(BaseModel):
+    items: list[ExtractionRejectionRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class ExtractionRejectionCreate(BaseModel):
+    workspace_id: str
+    extraction_run_id: str
+    paper_id: str
+    batch_index: int | None = None
+    rejection_kind: Literal["item", "relation", "output"]
+    stage: Literal[
+        "schema_validation",
+        "evidence_resolution",
+        "relation_resolution",
+    ]
+    reason_code: str = Field(min_length=1, max_length=64)
+    reason_detail: str = Field(min_length=1)
+    item_type: str | None = None
+    canonical_name: str | None = None
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    evidence_preview: str | None = None
+
+
+# ----------------------------------------------------------------- create schemas (Phase 3)
+class KnowledgeItemCreate(BaseModel):
+    """Body for creating a knowledge item (agent extraction or user input)."""
+
+    workspace_id: str
+    paper_id: str | None = None
+    canonical_entity_id: str | None = None
+    extraction_run_id: str | None = None
+    item_key: str | None = None
+    type: KnowledgeType
+    canonical_name: str
+    content: dict[str, Any] = Field(default_factory=dict)
+    source_provenance: dict[str, Any] = Field(default_factory=dict)
+    created_by: CreatedBy = "agent"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    status: KnowledgeStatus = "extracted_candidate"
+
+
+class KnowledgeRelationCreate(BaseModel):
+    workspace_id: str
+    source_id: str
+    target_id: str
+    relation_type: str
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceSpanCreate(BaseModel):
+    workspace_id: str
+    knowledge_item_id: str
+    paper_id: str
+    artifact_id: str | None = None
+    artifact_kind: str | None = None
+    artifact_version: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    text: str | None = None
+    relation: str = "supports"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+# ---------------------------------------------------- strict extraction output
+class EvidencePointer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_char: int = Field(ge=0)
+    # LLM offsets are hints only. Zero is accepted and repaired from the
+    # exact evidence_text before anything is persisted.
+    end_char: int = Field(ge=0)
+
+
+class MethodContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+    problem_addressed: str = Field(min_length=1)
+    inputs: list[str]
+    outputs: list[str]
+    key_idea: str = Field(min_length=1)
+    training_paradigm: Literal["post-hoc", "intrinsic", "hybrid"] | None = None
+    computational_cost: Literal["low", "moderate", "high"] | None = None
+    code_repository: str | None = None
+
+
+class TaskContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+    problem_type: Literal[
+        "classification",
+        "regression",
+        "ranking",
+        "generation",
+        "optimization",
+        "other",
+    ]
+    input_data: str = Field(min_length=1)
+    evaluation_protocol: str | None = None
+    common_datasets: list[str]
+
+
+class DatasetContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+    domain: Literal[
+        "chemistry",
+        "biology",
+        "social-network",
+        "citation-network",
+        "vision",
+        "nlp",
+        "other",
+    ]
+    size: int | None = Field(default=None, ge=0)
+    modality: Literal["graph", "text", "image", "tabular", "multimodal"] | None = None
+    source_url: str | None = None
+    license: str | None = None
+
+
+class ClaimContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1)
+    claim_type: Literal["positive", "negative", "comparative", "conditional"]
+    scope: str | None = None
+    conditions: str | None = None
+
+
+class LimitationContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+    limitation_type: Literal[
+        "computational",
+        "expressiveness",
+        "scalability",
+        "faithfulness",
+        "stability",
+        "data-dependency",
+        "other",
+    ]
+    severity: Literal["low", "moderate", "high"] | None = None
+    affected_scenarios: list[str]
+    proposed_fixes: list[str]
+
+
+class ExtractionItemBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_name: str = Field(min_length=1)
+    source_provenance: EvidencePointer
+    evidence_text: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class MethodExtractionItem(ExtractionItemBase):
+    type: Literal["method"]
+    content: MethodContent
+
+
+class TaskExtractionItem(ExtractionItemBase):
+    type: Literal["task"]
+    content: TaskContent
+
+
+class DatasetExtractionItem(ExtractionItemBase):
+    type: Literal["dataset"]
+    content: DatasetContent
+
+
+class ClaimExtractionItem(ExtractionItemBase):
+    type: Literal["claim"]
+    content: ClaimContent
+
+
+class LimitationExtractionItem(ExtractionItemBase):
+    type: Literal["limitation"]
+    content: LimitationContent
+
+
+ExtractionItem = Annotated[
+    MethodExtractionItem
+    | TaskExtractionItem
+    | DatasetExtractionItem
+    | ClaimExtractionItem
+    | LimitationExtractionItem,
+    Field(discriminator="type"),
+]
+
+
+class ExtractionRelation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: KnowledgeType
+    source_name: str = Field(min_length=1)
+    # Relation names are normalized after validation. Unknown values reject
+    # only that relation, never otherwise valid extracted items.
+    relation: str = Field(min_length=1, max_length=64)
+    target_type: KnowledgeType
+    target_name: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ExtractionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ExtractionItem]
+    relations: list[ExtractionRelation] = Field(default_factory=list)

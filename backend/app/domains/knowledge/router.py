@@ -16,12 +16,15 @@ from app.core.deps import get_db
 from app.domains.knowledge.schemas import (
     EvidenceSpanListResponse,
     EvidenceSpanRead,
+    ExtractionRejectionListResponse,
+    ExtractionRejectionRead,
     KnowledgeItemListResponse,
     KnowledgeItemRead,
     KnowledgeRelationListResponse,
     KnowledgeRelationRead,
 )
 from app.domains.knowledge.service import (
+    ExtractionRunNotFoundError,
     KnowledgeItemNotFoundError,
     KnowledgeService,
 )
@@ -41,11 +44,53 @@ def _get_workspace_service(db: Session = Depends(get_db)) -> WorkspaceService:
 def _not_found(exc: Exception) -> HTTPException:
     if isinstance(exc, KnowledgeItemNotFoundError):
         code = "knowledge_item_not_found"
+    elif isinstance(exc, ExtractionRunNotFoundError):
+        code = "extraction_run_not_found"
     else:
         code = "workspace_not_found"
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"error": code, "message": str(exc)},
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/extraction-runs/{run_id}/rejections",
+    response_model=ExtractionRejectionListResponse,
+)
+def list_extraction_rejections(
+    workspace_id: str,
+    run_id: str,
+    kind: str | None = Query(None),
+    stage: str | None = Query(None),
+    reason_code: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> ExtractionRejectionListResponse:
+    try:
+        workspace_service.get(workspace_id)
+        run = service.get_extraction_run(run_id)
+    except (WorkspaceNotFoundError, ExtractionRunNotFoundError) as exc:
+        raise _not_found(exc) from exc
+    if run.workspace_id != workspace_id:
+        raise _not_found(ExtractionRunNotFoundError(run_id))
+
+    items, total = service.list_rejections(
+        workspace_id=workspace_id,
+        extraction_run_id=run_id,
+        kind_filter=kind,
+        stage_filter=stage,
+        reason_code_filter=reason_code,
+        limit=limit,
+        offset=offset,
+    )
+    return ExtractionRejectionListResponse(
+        items=[ExtractionRejectionRead.model_validate(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

@@ -150,7 +150,9 @@ def test_parse_exports_chunks_jsonl(
         assert "chunk_id" in chunk
         assert "workspace_id" in chunk
         assert "paper_id" in chunk
-        assert "artifact_id" in chunk
+        assert chunk["schema_version"] == "1.0.0"
+        assert "source_artifact_id" in chunk
+        assert chunk["source_artifact_kind"] == "parsed_text"
         assert "chunk_index" in chunk
         assert "text" in chunk
         assert "start_char" in chunk

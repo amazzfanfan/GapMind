@@ -12,7 +12,10 @@ from app.domains.workspace.models import Workspace  # noqa: F401
 # Phase 1b: Artifact, Paper, Task, Timeline, Knowledge
 from app.domains.artifact.models import Artifact  # noqa: F401
 from app.domains.knowledge.models import (  # noqa: F401
+    CanonicalEntity,
     EvidenceSpan,
+    ExtractionRejection,
+    ExtractionRun,
     KnowledgeItem,
     KnowledgeRelation,
 )

@@ -104,3 +104,4 @@ backend/.pytest-temp-run/
 # progress_and_roadmap.md: internal planning with known-limitations self-critique
 docs/code_guide.md
 docs/progress_and_roadmap.md
+/CLAUDE.md

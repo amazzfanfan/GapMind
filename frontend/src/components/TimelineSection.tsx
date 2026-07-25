@@ -31,6 +31,15 @@ function summarize(e: TimelineEvent): string {
   return map[e.event_type] ?? e.event_type;
 }
 
+function visiblePayload(e: TimelineEvent): Record<string, unknown> {
+  if (e.subject_type !== "task") return e.payload;
+  const safe = { ...e.payload };
+  delete safe.error;
+  delete safe.traceback;
+  delete safe.stack;
+  return safe;
+}
+
 export default function TimelineSection({ events, loading }: Props) {
   return (
     <Card title="Timeline">
@@ -40,8 +49,10 @@ export default function TimelineSection({ events, loading }: Props) {
         <List
           loading={loading}
           dataSource={events}
-          renderItem={(e) => (
-            <List.Item>
+          renderItem={(e) => {
+            const payload = visiblePayload(e);
+            return (
+              <List.Item>
               <List.Item.Meta
                 title={
                   <span>
@@ -55,19 +66,20 @@ export default function TimelineSection({ events, loading }: Props) {
                     <Text type="secondary">
                       {new Date(e.created_at).toLocaleString()}
                     </Text>
-                    {e.payload && Object.keys(e.payload).length > 0 && (
+                    {Object.keys(payload).length > 0 && (
                       <Paragraph
                         type="secondary"
                         style={{ margin: "4px 0 0", fontSize: 12 }}
                       >
-                        <code>{JSON.stringify(e.payload)}</code>
+                        <code>{JSON.stringify(payload)}</code>
                       </Paragraph>
                     )}
                   </span>
                 }
               />
-            </List.Item>
-          )}
+              </List.Item>
+            );
+          }}
         />
       )}
     </Card>

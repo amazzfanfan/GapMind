@@ -6,6 +6,30 @@
 > 目标用户：AI/CS 领域研究者，重点为硕博生与早期科研人员  
 > 初始研究领域：GNN，重点聚焦 Self-Interpretable GNN
 
+## 0. 比赛 MVP 冻结范围（2026-07-25）
+
+当前 P0 只包含以下闭环：
+
+```text
+论文导入与解析
+→ 论文级知识与证据抽取
+→ Workspace 内检索 + 外部文献新颖性核验
+→ Evidence-grounded Opportunity Proposal
+→ Human-in-the-Loop 决策
+→ 可编辑 Research Question / Hypothesis / Validation Plan
+```
+
+Workspace 是研究上下文和资产归属边界，但不是新颖性检索边界。Discover 必须主动检索
+外部文献；先使用元数据和摘要筛选候选，再对关键开放 PDF 做全文核验。仅在 Workspace
+已有论文中未发现相似工作，不足以声称领域存在研究空白。
+
+Execute、Analyze、Publish、Respond、GNN 排序和模型微调均不属于比赛 P0。微调可以并行
+研究，但不能阻塞核心闭环。
+
+核心对象语义、Opportunity 字段和 HITL 状态以
+[mvp_core_spec.md](mvp_core_spec.md) 为准；跨模块格式以
+[data_contracts_v1.md](data_contracts_v1.md) 为准。
+
 ---
 
 ## 1. 项目愿景与边界
@@ -128,11 +152,11 @@ AI / Machine Learning
 | 论文导入             | PDF、论文链接或元数据         | 解析、索引、知识抽取、图谱更新            | P0         |
 | Knowledge Base       | 已有论文与知识对象            | 搜索、筛选、关系浏览、证据定位            | P0         |
 | Research Opportunity | 用户选择一个候选机会          | 确认、编辑、生成计划                      | P0         |
-| Plan                 | 已确认 Opportunity            | 生成问题、假设、baseline checklist        | P1         |
-| Execute              | Repo、论文或已有实验产物      | Reproduction Checklist、实验记录          | P1         |
-| Analyze              | 实验日志、指标、图表          | 解释结果、发现异常、建议验证              | P2         |
-| Publish              | 已确认 Claim、Evidence、Draft | 大纲、段落、引用建议                      | P2         |
-| Respond              | Reviewer Comments、Draft      | 回复策略和修订计划                        | P3         |
+| Plan                 | 已确认 Opportunity            | 生成问题、假设和可编辑验证计划            | P0         |
+| Execute              | Repo、论文或已有实验产物      | Reproduction Checklist、实验记录          | 赛后       |
+| Analyze              | 实验日志、指标、图表          | 解释结果、发现异常、建议验证              | 赛后       |
+| Publish              | 已确认 Claim、Evidence、Draft | 大纲、段落、引用建议                      | 赛后       |
+| Respond              | Reviewer Comments、Draft      | 回复策略和修订计划                        | 赛后       |
 
 ------
 

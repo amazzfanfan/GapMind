@@ -45,7 +45,7 @@ def _not_found(exc: Exception) -> HTTPException:
 )
 def list_artifacts(
     workspace_id: str,
-    kind: str | None = Query(None, pattern=r"^(pdf|parsed_text|chunk_index|report)$"),
+    kind: str | None = Query(None, pattern=r"^(pdf|parsed_text|parsed_markdown|chunk_index|report)$"),
     artifact_service: ArtifactService = Depends(_get_artifact_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> list[ArtifactRead]:

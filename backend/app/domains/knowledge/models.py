@@ -11,14 +11,18 @@ pipeline in Phase 3, not by users directly.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
     JSON,
     Boolean,
+    DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,6 +58,112 @@ KNOWLEDGE_STATUSES = {
 CREATED_BY_VALUES = {"user", "agent", "system"}
 
 
+class CanonicalEntity(Base, UUIDPKMixin, TimestampMixin):
+    """A workspace-scoped identity shared by paper-specific mentions."""
+
+    __tablename__ = "canonical_entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "type",
+            "normalization_key",
+            name="uq_canonical_entity_identity",
+        ),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalization_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), default="extracted_candidate", nullable=False, index=True
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+
+
+class ExtractionRun(Base, UUIDPKMixin, TimestampMixin):
+    """One versioned extraction attempt for one immutable source artifact."""
+
+    __tablename__ = "extraction_runs"
+    __table_args__ = (
+        UniqueConstraint("task_id", name="uq_extraction_runs_task_id"),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    schema_version: Mapped[str] = mapped_column(
+        String(32), default="1.0.0", nullable=False
+    )
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), default="running", nullable=False, index=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ExtractionRejection(Base, UUIDPKMixin, TimestampMixin):
+    """One rejected LLM item/relation retained for quality audit."""
+
+    __tablename__ = "extraction_rejections"
+    __table_args__ = (
+        UniqueConstraint(
+            "extraction_run_id",
+            "fingerprint",
+            name="uq_extraction_rejection_run_fingerprint",
+        ),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    extraction_run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    batch_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rejection_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True
+    )
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason_detail: Mapped[str] = mapped_column(Text, nullable=False)
+    item_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    canonical_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    evidence_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+
+
 class KnowledgeItem(Base, UUIDPKMixin, TimestampMixin):
     """A single knowledge object in a workspace.
 
@@ -64,10 +174,31 @@ class KnowledgeItem(Base, UUIDPKMixin, TimestampMixin):
     """
 
     __tablename__ = "knowledge_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "extraction_run_id",
+            "item_key",
+            name="uq_knowledge_item_run_key",
+        ),
+    )
 
     workspace_id: Mapped[str] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    paper_id: Mapped[str | None] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    canonical_entity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("canonical_entities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    extraction_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    item_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
@@ -141,6 +272,8 @@ class EvidenceSpan(Base, UUIDPKMixin, TimestampMixin):
     artifact_id: Mapped[str | None] = mapped_column(
         ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
     )
+    artifact_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    artifact_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)

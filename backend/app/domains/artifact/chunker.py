@@ -45,7 +45,7 @@ class Chunk:
     chunk_id: str
     workspace_id: str
     paper_id: str
-    artifact_id: str
+    source_artifact_id: str
     chunk_index: int
     section: str | None
     subsection: str | None
@@ -58,19 +58,28 @@ class Chunk:
     chunk_version: str
     created_at: str  # ISO 8601
 
+    @property
+    def artifact_id(self) -> str:
+        """Deprecated v0.1 alias for source_artifact_id."""
+        return self.source_artifact_id
+
 
 def chunk_parsed_pdf(
     parsed: ParsedPdf,
     *,
     workspace_id: str,
     paper_id: str,
-    artifact_id: str,
     created_at: str,
+    source_artifact_id: str | None = None,
+    artifact_id: str | None = None,
     chunk_version: str = "v1",
 ) -> list[Chunk]:
     """Split a ParsedPdf into Chunks following Contract #1."""
     if not parsed.full_text.strip():
         return []
+    source_id = source_artifact_id or artifact_id
+    if not source_id:
+        raise ValueError("source_artifact_id is required")
 
     # Build section boundaries: list of (start_char, section_name, subsection).
     # The "end" of each section is the start of the next.
@@ -132,7 +141,7 @@ def chunk_parsed_pdf(
                         chunk_id=str(uuid.uuid4()),
                         workspace_id=workspace_id,
                         paper_id=paper_id,
-                        artifact_id=artifact_id,
+                        source_artifact_id=source_id,
                         chunk_index=chunk_index,
                         section=sec_name,
                         subsection=sec_sub,

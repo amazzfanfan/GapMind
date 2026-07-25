@@ -75,6 +75,204 @@ class ParsedPdf:
     page_char_ranges: list[tuple[int, int]] = field(default_factory=list)
     # Warnings (non-fatal issues encountered during parsing).
     warnings: list[str] = field(default_factory=list)
+    # Markdown output (generated on demand)
+    _markdown: str | None = field(default=None, repr=False)
+
+    def to_markdown(self) -> str:
+        """Convert parsed PDF to Markdown.
+
+        Sections become `##` / `###` headers. Page breaks (\f) become `---`.
+        First uses PyMuPDF heading detection (font-size based), then falls
+        back to regex patterns for numbered headings (e.g. "1. Introduction").
+        """
+        if self._markdown is not None:
+            return self._markdown
+
+        text = self.full_text
+        if not text:
+            self._markdown = ""
+            return ""
+
+        import re
+
+        # ---- Pass 1: insert ## / ### at PyMuPDF-detected sections ----
+        ops: list[tuple[int, str]] = []
+        for sm in sorted(self.sections, key=lambda s: -s.char_offset):
+            prefix = "### " if sm.subsection else "## "
+            heading = f"\n\n{prefix}{sm.section}\n\n"
+            ops.append((sm.char_offset, heading))
+
+        parts: list[str] = []
+        cursor = 0
+        for offset, heading in sorted(ops, key=lambda x: x[0]):
+            parts.append(text[cursor:offset])
+            parts.append(heading)
+            cursor = offset
+        parts.append(text[cursor:])
+        md_text = "".join(parts)
+
+        # ---- Pass 2: regex-based heading detection (fallback) ----
+        # Lines that look like numbered headings but weren't caught by
+        # PyMuPDF's font-size heuristics. Also handles the common case
+        # where PyMuPDF splits "1 Introduction" into two lines: "1" +\n "Introduction".
+        lines = md_text.split("\n")
+        result_lines: list[str] = []
+        skip_next = False
+        for i, line in enumerate(lines):
+            if skip_next:
+                skip_next = False
+                continue
+
+            stripped = line.strip()
+            if not stripped:
+                result_lines.append(line)
+                continue
+
+            # Skip lines already converted to ## or ### by pass 1.
+            if stripped.startswith("## ") or stripped.startswith("### "):
+                result_lines.append(line)
+                continue
+
+            # Check for cross-line heading: "1" on this line + "Introduction" on next.
+            heading_level = None
+            combined_text = stripped
+
+            if stripped.isdigit() and i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if next_line and not next_line.startswith("#"):
+                    combined = f"{stripped} {next_line}"
+                    level = _detect_heading_by_regex(combined)
+                    if level:
+                        heading_level = level
+                        combined_text = combined
+                        skip_next = True
+
+            # Single-line heading detection.
+            if heading_level is None:
+                heading_level = _detect_heading_by_regex(stripped)
+
+            if heading_level and _looks_like_heading_context(lines, i, heading_level):
+                prefix = "#" * heading_level
+                result_lines.append(f"\n\n{prefix} {combined_text}\n")
+            else:
+                result_lines.append(line)
+
+        md_text = "\n".join(result_lines)
+
+        # Replace form feeds with horizontal rules
+        md_text = md_text.replace("\f", "\n\n---\n\n")
+
+        # Clean up: collapse excessive blank lines
+        md_text = re.sub(r"\n{4,}", "\n\n\n", md_text)
+
+        self._markdown = md_text
+        return md_text
+
+
+# Known section keywords (lowercase) that we treat as heading candidates.
+_HEADING_KEYWORDS: set[str] = {
+    "abstract", "introduction", "related work", "related works",
+    "background", "preliminaries", "method", "methods", "methodology",
+    "approach", "model", "proposed method", "our approach",
+    "experiment", "experiments", "experimental results", "results",
+    "evaluation", "discussion", "conclusion", "conclusions",
+    "future work", "acknowledgments", "acknowledgements", "references",
+    "appendix",
+}
+
+
+def _detect_heading_by_regex(line: str) -> int | None:
+    """Return heading level (2 or 3) if `line` looks like a section heading.
+
+    Patterns matched (case-insensitive):
+      - "1. Introduction" or "1 Introduction"  → ##
+      - "3.2. Method Details" or "3.2 Method"  → ###
+      - "Abstract" (standalone known keyword)   → ##
+    Returns None if the line doesn't look like a heading.
+    """
+    stripped = line.strip()
+    lower = stripped.lower().rstrip(".")
+
+    # "Abstract" as a standalone line → ##
+    if lower == "abstract":
+        return 2
+
+    # Numbered: "3.2 Method" or "3.2. Method Details" → ###
+    m = re.match(r"\d+\.\d+\.?\s+(.+)", stripped)
+    if m:
+        title_orig = m.group(1).rstrip(".")
+        title_lower = title_orig.lower()
+        if any(w in title_lower for w in ("figure", "table", "example", "answer:", "step")):
+            return None
+        if any(title_lower.startswith(kw) for kw in _HEADING_KEYWORDS):
+            return 3
+        # Short uppercase title → subsection heading
+        if 3 <= len(title_orig) <= 60 and title_orig[0].isupper():
+            return 3
+
+    # Numbered: "1. Introduction" or "1 Introduction" → ##
+    m = re.match(r"(\d+)\.?\s+(.+)", stripped)
+    if m:
+        title_orig = m.group(2).rstrip(".")
+        title_lower = title_orig.lower()
+
+        # Reject figure/table/example captions and checklist answers
+        if any(w in title_lower for w in ("figure", "table", "example", "answer:", "step")):
+            return None
+
+        if any(title_lower.startswith(kw) for kw in _HEADING_KEYWORDS):
+            return 2
+        # Not a known keyword but still looks like a heading: short,
+        # starts with uppercase, preceded by a section number.
+        # Add extra guard: must be 3-60 chars, no punctuation-heavy patterns.
+        if (
+            3 <= len(title_orig) <= 60
+            and title_orig[0].isupper()
+            and not re.search(r"[.?!,:;]{2,}", title_orig)
+        ):
+            return 2
+
+    # Standalone known keyword (no number) → ##
+    if lower in _HEADING_KEYWORDS and lower != "abstract":
+        return 2
+
+    return None
+
+
+def _looks_like_heading_context(
+    lines: list[str], idx: int, heading_level: int | None = None
+) -> bool:
+    """Check if line at `idx` is in heading-like context."""
+    line = lines[idx].strip()
+    if len(line) > 150:
+        return False
+
+    lower = line.lower().rstrip(".")
+    is_known_keyword = lower in _HEADING_KEYWORDS
+    # A bare digit is the "number" half of a cross-line heading like "1\nIntroduction"
+    is_bare_digit = line.isdigit()
+
+    # Check previous line. Skip this check if the current line is a bare
+    # digit (it's the first half of a cross-line heading like "1\nIntroduction"
+    # where the "1" sits right after body text) OR if it's a known keyword
+    # (standalone "Introduction" right after body text is still a heading in
+    # many academic PDFs).
+    if idx > 0 and not is_known_keyword and not is_bare_digit:
+        prev = lines[idx - 1].strip()
+        if prev and prev != "---" and not prev.startswith("#"):
+            return False
+
+    # Next line should be body text (longer than this heading line).
+    for j in range(idx + 1, min(idx + 3, len(lines))):
+        nxt = lines[j].strip()
+        if nxt and not nxt.startswith("#") and nxt != "---":
+            # For bare digits, the heading text is the next line (short);
+            # check the line after that for body context.
+            if is_bare_digit:
+                return True  # already validated by _detect_heading_by_regex
+            return len(nxt) > 30
+
+    return False
 
 
 def parse_pdf(content: bytes) -> ParsedPdf:
