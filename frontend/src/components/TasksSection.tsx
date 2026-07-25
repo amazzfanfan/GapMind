@@ -1,6 +1,8 @@
-import { Button, Card, Empty, Space, Table, Tag, Tooltip, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
-import type { Task } from "../api/types/domain";
+import { useState } from "react";
+import { Alert, Button, Card, Empty, Modal, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { CopyOutlined, ReloadOutlined } from "@ant-design/icons";
+import type { ExtractionRejection, Task } from "../api/types/domain";
+import knowledgeApi from "../api/knowledge";
 import taskApi from "../api/task";
 
 const { Text } = Typography;
@@ -38,7 +40,69 @@ const STATUS_LABEL: Record<Task["status"], string> = {
   cancelled: "cancelled",
 };
 
+function taskErrorSummary(error: string): string {
+  const firstLine = error.split(/\r?\n/, 1)[0].trim();
+  return firstLine.length <= 180
+    ? firstLine
+    : "Task failed. Check backend logs for technical details.";
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function extractionRunId(task: Task): string | null {
+  return (
+    stringValue(task.result?.extraction_run_id) ??
+    stringValue(task.payload?.extraction_run_id)
+  );
+}
+
+function rejectedTotal(task: Task): number {
+  return numberValue(task.result?.rejected_total);
+}
+
+const REJECTION_PAGE_SIZE = 20;
+
 export default function TasksSection({ tasks, loading, onChanged }: Props) {
+  const [rejectionTask, setRejectionTask] = useState<Task | null>(null);
+  const [rejections, setRejections] = useState<ExtractionRejection[]>([]);
+  const [rejectionTotal, setRejectionTotal] = useState(0);
+  const [rejectionPage, setRejectionPage] = useState(1);
+  const [rejectionsLoading, setRejectionsLoading] = useState(false);
+  const [rejectionsError, setRejectionsError] = useState<string | null>(null);
+
+  const loadRejections = async (task: Task, page = 1) => {
+    const runId = extractionRunId(task);
+    if (!task.workspace_id || !runId) return;
+    setRejectionTask(task);
+    setRejectionPage(page);
+    setRejectionsLoading(true);
+    setRejectionsError(null);
+    try {
+      const response = await knowledgeApi.listExtractionRejections(
+        task.workspace_id,
+        runId,
+        {
+          limit: REJECTION_PAGE_SIZE,
+          offset: (page - 1) * REJECTION_PAGE_SIZE,
+        }
+      );
+      setRejections(response.items);
+      setRejectionTotal(response.total);
+    } catch {
+      setRejections([]);
+      setRejectionTotal(0);
+      setRejectionsError("Failed to load rejection details.");
+    } finally {
+      setRejectionsLoading(false);
+    }
+  };
+
   const handleCancel = async (taskId: string) => {
     try {
       await taskApi.cancel(taskId);
@@ -60,7 +124,8 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
   };
 
   return (
-    <Card
+    <>
+      <Card
       title={
         <Space>
           <span>Tasks</span>
@@ -108,14 +173,31 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
               ellipsis: true,
               render: (e: string | null) =>
                 e ? (
-                  <Tooltip title={e}>
+                  <Tooltip title={taskErrorSummary(e)}>
                     <Text type="danger" ellipsis>
-                      {e}
+                      {taskErrorSummary(e)}
                     </Text>
                   </Tooltip>
                 ) : (
                   "—"
                 ),
+            },
+            {
+              title: "Rejected",
+              key: "rejected",
+              width: 110,
+              render: (_: unknown, task) => {
+                const runId = extractionRunId(task);
+                const count = rejectedTotal(task);
+                if (!runId || (count === 0 && task.status !== "failed")) {
+                  return "—";
+                }
+                return (
+                  <Button size="small" onClick={() => loadRejections(task)}>
+                    {count > 0 ? `View (${count})` : "View"}
+                  </Button>
+                );
+              },
             },
             {
               title: "Created",
@@ -155,6 +237,88 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
           ]}
         />
       )}
-    </Card>
+      </Card>
+
+      <Modal
+        title="Extraction rejections"
+        open={rejectionTask !== null}
+        onCancel={() => setRejectionTask(null)}
+        footer={null}
+        width={960}
+        destroyOnClose
+      >
+        {rejectionsError && (
+          <Alert type="error" showIcon message={rejectionsError} style={{ marginBottom: 12 }} />
+        )}
+        <Table<ExtractionRejection>
+          rowKey="id"
+          dataSource={rejections}
+          loading={rejectionsLoading}
+          size="small"
+          pagination={{
+            current: rejectionPage,
+            pageSize: REJECTION_PAGE_SIZE,
+            total: rejectionTotal,
+            showSizeChanger: false,
+            onChange: (page) => {
+              if (rejectionTask) loadRejections(rejectionTask, page);
+            },
+          }}
+          columns={[
+            {
+              title: "Kind",
+              dataIndex: "rejection_kind",
+              width: 90,
+              render: (value: string) => <Tag>{value}</Tag>,
+            },
+            {
+              title: "Stage",
+              dataIndex: "stage",
+              width: 150,
+            },
+            {
+              title: "Object",
+              key: "object",
+              width: 180,
+              render: (_: unknown, item) =>
+                item.canonical_name || item.item_type || "Output",
+            },
+            {
+              title: "Reason",
+              key: "reason",
+              render: (_: unknown, item) => (
+                <Space direction="vertical" size={2}>
+                  <Text code>{item.reason_code}</Text>
+                  <Text type="secondary">{item.reason_detail}</Text>
+                  {item.evidence_preview && (
+                    <Text type="secondary" italic>
+                      {item.evidence_preview}
+                    </Text>
+                  )}
+                  <details>
+                    <summary>Full rejected JSON</summary>
+                    <Button
+                      size="small"
+                      icon={<CopyOutlined />}
+                      style={{ marginTop: 8 }}
+                      onClick={() =>
+                        navigator.clipboard.writeText(
+                          JSON.stringify(item.raw_payload, null, 2)
+                        )
+                      }
+                    >
+                      Copy JSON
+                    </Button>
+                    <pre style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                      {JSON.stringify(item.raw_payload, null, 2)}
+                    </pre>
+                  </details>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+    </>
   );
 }

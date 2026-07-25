@@ -16,6 +16,7 @@ export interface Paper {
   chunk_count: number;
   parsed_text_artifact_id: string | null;
   chunk_index_artifact_id: string | null;
+  parsed_markdown_artifact_id: string | null;
   is_deleted: boolean;
   created_at: string;
   updated_at: string;
@@ -118,6 +119,33 @@ export interface KnowledgeItem {
 
 export interface KnowledgeItemListResponse {
   items: KnowledgeItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ExtractionRejection {
+  id: string;
+  workspace_id: string;
+  extraction_run_id: string;
+  paper_id: string;
+  batch_index: number | null;
+  rejection_kind: "item" | "relation" | "output";
+  stage:
+    | "schema_validation"
+    | "evidence_resolution"
+    | "relation_resolution";
+  reason_code: string;
+  reason_detail: string;
+  item_type: string | null;
+  canonical_name: string | null;
+  raw_payload: Record<string, unknown>;
+  evidence_preview: string | null;
+  created_at: string;
+}
+
+export interface ExtractionRejectionListResponse {
+  items: ExtractionRejection[];
   total: number;
   limit: number;
   offset: number;
