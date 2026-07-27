@@ -1,0 +1,88 @@
+[
+  {
+    "id": "q01",
+    "type": "semantic_search",
+    "query": "graph neural network explainability methods",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Introduction", "Related Work"],
+    "notes": "Should find chunks discussing GNN explainability"
+  },
+  {
+    "id": "q02",
+    "type": "semantic_search",
+    "query": "attention mechanism for molecular property prediction",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Method", "Experiment"],
+    "notes": "Molecular GNN with attention"
+  },
+  {
+    "id": "q03",
+    "type": "semantic_search",
+    "query": "limitations of message passing neural networks",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Discussion", "Conclusion"],
+    "notes": "MPNN limitations / expressiveness"
+  },
+  {
+    "id": "q04",
+    "type": "semantic_search",
+    "query": "dataset benchmark for graph classification",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Experiment"],
+    "notes": "TUDataset, OGB benchmarks"
+  },
+  {
+    "id": "q05",
+    "type": "semantic_search",
+    "query": "over-smoothing problem in deep graph neural networks",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Introduction", "Method"],
+    "notes": "Over-smoothing mitigation"
+  },
+  {
+    "id": "q06",
+    "type": "counter_evidence",
+    "query": "Graph attention networks outperform GCN on all node classification tasks",
+    "workspace_id": "FILL_ME",
+    "expected_judgement": ["contradicts", "qualifies"],
+    "notes": "Should find evidence that GAT does NOT always outperform GCN"
+  },
+  {
+    "id": "q07",
+    "type": "counter_evidence",
+    "query": "Increasing GNN depth always improves performance",
+    "workspace_id": "FILL_ME",
+    "expected_judgement": ["contradicts"],
+    "notes": "Over-smoothing contradicts this"
+  },
+  {
+    "id": "q08",
+    "type": "counter_evidence",
+    "query": "Molecular fingerprints are sufficient for drug discovery without GNNs",
+    "workspace_id": "FILL_ME",
+    "expected_judgement": ["contradicts", "qualifies"],
+    "notes": "Papers showing GNNs beat fingerprints"
+  },
+  {
+    "id": "q09",
+    "type": "similar_work",
+    "query": "paper:FILL_PAPER_ID",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "notes": "Fill with a real paper_id after indexing"
+  },
+  {
+    "id": "q10",
+    "type": "semantic_search",
+    "query": "self-supervised pre-training for graph representation learning",
+    "workspace_id": "FILL_ME",
+    "expected_paper_ids": [],
+    "expected_sections": ["Method", "Related Work"],
+    "notes": "Graph SSL methods"
+  }
+]

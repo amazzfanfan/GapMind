@@ -1,0 +1,169 @@
+"""embed_chunks Celery task (Phase 3, Step ④).
+
+Reads a paper's chunks JSONL (Contract B), embeds via BGE-M3, and inserts
+vectors into Milvus. Triggered automatically after parse_pdf succeeds.
+
+State flow:
+    Task row: queued -> running -> succeeded / failed
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.logging import configure_logging, get_logger
+from app.db.session import SessionLocal
+from app.domains.paper.models import Paper
+from app.domains.retrieval.service import index_paper_chunks
+from app.domains.task.models import Task
+from app.domains.task.schemas import TaskCreate
+from app.domains.task.service import TaskService
+from app.domains.timeline.service import TimelineService
+from app.workers.celery_app import celery_app
+
+logger = get_logger(__name__)
+
+
+@celery_app.task(name="gapmind.embed_chunks", bind=True)
+def embed_chunks_task(self, task_id: str) -> dict:
+    """Embed paper chunks and index into Milvus.
+
+    Args:
+        task_id: The Task row ID. Payload must contain {"paper_id": "..."}.
+    """
+    configure_logging()
+    db: Session = SessionLocal()
+    try:
+        result = _run_embed(db, task_id)
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("error") or "embed_chunks failed")
+        return result
+    finally:
+        db.close()
+
+
+def _run_embed(db: Session, task_id: str) -> dict:
+    task_service = TaskService(db)
+
+    try:
+        task_service.transition(task_id, "running", progress=0.1)
+    except Exception as e:
+        logger.error("embed_chunks.transition_failed", task_id=task_id, error=str(e))
+        raise
+
+    task = db.get(Task, task_id)
+    if task is None:
+        return {"status": "failed", "error": f"task not found: {task_id}"}
+
+    paper_id = (task.payload or {}).get("paper_id")
+    if not paper_id:
+        return _fail(task_service, task_id, "task payload missing 'paper_id'")
+
+    paper = db.get(Paper, paper_id)
+    if paper is None or paper.is_deleted:
+        return _fail(task_service, task_id, f"paper not found: {paper_id}")
+
+    workspace_id = paper.workspace_id
+    task_service.update_progress(task_id, 0.2)
+
+    try:
+        result = index_paper_chunks(workspace_id, paper_id)
+    except Exception as e:
+        logger.error(
+            "embed_chunks.index_failed",
+            task_id=task_id,
+            paper_id=paper_id,
+            error=str(e),
+        )
+        return _fail(task_service, task_id, str(e))
+
+    if result.error:
+        return _fail(task_service, task_id, result.error)
+
+    task_service.transition(
+        task_id,
+        "succeeded",
+        progress=1.0,
+        result={
+            "indexed_count": result.indexed_count,
+            "skipped_count": result.skipped_count,
+            "total_chunks": result.total_chunks,
+            "duration_ms": round(result.duration_ms, 1),
+        },
+    )
+
+    # Record timeline event
+    TimelineService(db).record(
+        workspace_id=workspace_id,
+        event_type="paper.indexed",
+        subject_type="paper",
+        subject_id=paper_id,
+        payload={
+            "indexed_chunks": result.indexed_count,
+            "skipped_chunks": result.skipped_count,
+            "embedding_model": result.embedding_model,
+        },
+    )
+    db.commit()
+
+    logger.info(
+        "embed_chunks.succeeded",
+        paper_id=paper_id,
+        task_id=task_id,
+        indexed=result.indexed_count,
+        skipped=result.skipped_count,
+    )
+    return {
+        "status": "succeeded",
+        "indexed_count": result.indexed_count,
+        "skipped_count": result.skipped_count,
+        "total_chunks": result.total_chunks,
+    }
+
+
+def _fail(task_service: TaskService, task_id: str, error: str) -> dict:
+    task_service.transition(task_id, "failed", error=error, progress=1.0)
+    return {"status": "failed", "error": error}
+
+
+def spawn_embed_chunks(db: Session, paper_id: str, workspace_id: str) -> str:
+    """Create a Task row and dispatch embed_chunks.
+
+    Called after parse_pdf succeeds. Returns the task_id.
+    Idempotent: if an active embed_chunks task exists for this paper, returns it.
+    """
+    import app.workers.tasks.embed_chunks  # noqa: F401
+
+    # Check for existing active task
+    active_tasks = db.execute(
+        select(Task).where(
+            Task.workspace_id == workspace_id,
+            Task.task_type == "embed_chunks",
+            Task.status.in_(["queued", "running"]),
+            Task.is_deleted.is_(False),
+        )
+    ).scalars()
+    for active_task in active_tasks:
+        if (active_task.payload or {}).get("paper_id") == paper_id:
+            return active_task.id
+
+    task_service = TaskService(db)
+    task = task_service.create(
+        TaskCreate(
+            workspace_id=workspace_id,
+            task_type="embed_chunks",
+            payload={"paper_id": paper_id},
+        )
+    )
+    async_result = embed_chunks_task.delay(task.id)
+    task.celery_task_id = async_result.id
+    db.commit()
+
+    logger.info(
+        "embed_chunks.spawned",
+        paper_id=paper_id,
+        task_id=task.id,
+        celery_task_id=async_result.id,
+    )
+    return task.id
