@@ -240,6 +240,19 @@ def _do_parse(
             error=str(e),
         )
 
+    # Spawn Milvus embedding/indexing task (Step ④). Best-effort:
+    # if dispatch fails, chunks JSONL is still on disk for manual retry.
+    try:
+        from app.workers.tasks.embed_chunks import spawn_embed_chunks
+
+        spawn_embed_chunks(db, paper.id, paper.workspace_id)
+    except Exception as e:
+        logger.warning(
+            "parse_pdf.spawn_embed_failed",
+            paper_id=paper.id,
+            error=str(e),
+        )
+
     return {
         "status": "succeeded",
         "paper_id": paper.id,

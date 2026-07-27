@@ -11,6 +11,7 @@ from app.api.v1.health import router as health_router
 from app.domains.artifact.router import router as artifact_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.paper.router import router as paper_router
+from app.domains.retrieval.router import router as retrieval_router
 from app.domains.task.router import router as task_router
 from app.domains.timeline.router import router as timeline_router
 from app.domains.workspace.router import router as workspace_router
@@ -23,3 +24,4 @@ api_router.include_router(artifact_router)
 api_router.include_router(task_router)
 api_router.include_router(timeline_router)
 api_router.include_router(knowledge_router)
+api_router.include_router(retrieval_router)

@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_dimension: int = 1024
 
+    # ---- Reranker (SiliconFlow, BGE-reranker-v2-m3) ----
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+
     # ---- Semantic Scholar ----
     semantic_scholar_api_key: str = ""
     semantic_scholar_base_url: str = "https://api.semanticscholar.org/graph/v1"
