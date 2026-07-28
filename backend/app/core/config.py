@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # ---- Semantic Scholar ----
     semantic_scholar_api_key: str = ""
     semantic_scholar_base_url: str = "https://api.semanticscholar.org/graph/v1"
+    semantic_scholar_rate_interval: float = 1.1
+    semantic_scholar_retry_count: int = 2
+    semantic_scholar_retry_backoff: float = 1.5
+    semantic_scholar_search_cache_ttl: int = 900
 
     # ---- CORS ----
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

@@ -3,6 +3,7 @@ import { Layout, Menu, theme } from "antd";
 import {
   DashboardOutlined,
   ProjectOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 
@@ -10,6 +11,11 @@ const { Header, Sider, Content } = Layout;
 
 const menuItems = [
   { key: "/", icon: <DashboardOutlined />, label: <Link to="/">Dashboard</Link> },
+  {
+    key: "/search",
+    icon: <SearchOutlined />,
+    label: <Link to="/search">Search</Link>,
+  },
   {
     key: "/workspaces",
     icon: <ProjectOutlined />,

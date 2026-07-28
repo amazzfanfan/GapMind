@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import DashboardPage from "./pages/DashboardPage";
+import SearchPage from "./pages/SearchPage";
 import WorkspacesPage from "./pages/WorkspacesPage";
 import WorkspaceDetailPage from "./pages/WorkspaceDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
@@ -10,6 +11,7 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/workspaces" element={<WorkspacesPage />} />
         <Route path="/workspaces/:id" element={<WorkspaceDetailPage />} />
         <Route path="*" element={<NotFoundPage />} />

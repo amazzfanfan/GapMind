@@ -141,7 +141,35 @@ class SemanticScholarSearchResponse(BaseModel):
     data: list[SemanticScholarPaper] = Field(default_factory=list)
 
 
+class SemanticScholarSearchHistoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    query: str
+    filters: dict[str, Any] = Field(default_factory=dict)
+    sort: str
+    result_count: int = 0
+    created_at: datetime
+
+
+class SemanticScholarFavoriteCreate(BaseModel):
+    paper: SemanticScholarPaper
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SemanticScholarFavoriteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    semantic_scholar_paper_id: str
+    paper: SemanticScholarPaper
+    note: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class SemanticScholarImportRequest(BaseModel):
     """Import one search result into a selected Workspace as metadata."""
 
     semantic_scholar_paper_id: str = Field(..., min_length=1, max_length=255)
+    download_open_access_pdf: bool = True
