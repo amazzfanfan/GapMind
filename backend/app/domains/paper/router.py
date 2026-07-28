@@ -11,7 +11,9 @@ Endpoints:
 
 from __future__ import annotations
 
+import re
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import ValidationError
@@ -50,6 +52,9 @@ S2_SEARCH_FIELDS = (
     "openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,publicationTypes"
 )
 S2_IMPORT_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf"
+ARXIV_ID_PATTERN = re.compile(
+    r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[A-Za-z][A-Za-z-]*(?:\.[A-Za-z]{2})?/\d{7}(?:v\d+)?)$"
+)
 
 
 def _get_paper_service(db: Session = Depends(get_db)) -> PaperService:
@@ -96,6 +101,21 @@ def _semantic_scholar_http_error(exc: SemanticScholarError) -> HTTPException:
         status_code=response_status,
         detail={"error": "semantic_scholar_error", "message": str(exc)},
     )
+
+
+def _arxiv_pdf_url(external_ids: dict[str, object]) -> str | None:
+    """Build a safe arXiv PDF URL from Semantic Scholar external IDs."""
+    arxiv_id = _external_id_as_string(external_ids, "ArXiv", "ARXIV")
+    if not arxiv_id:
+        return None
+    arxiv_id = arxiv_id.strip()
+    if arxiv_id.lower().startswith("arxiv:"):
+        arxiv_id = arxiv_id.split(":", 1)[1].strip()
+    if arxiv_id.lower().endswith(".pdf"):
+        arxiv_id = arxiv_id[:-4]
+    if not ARXIV_ID_PATTERN.fullmatch(arxiv_id):
+        return None
+    return f"https://arxiv.org/pdf/{quote(arxiv_id, safe='/')}"
 
 
 @router.get(
@@ -306,11 +326,20 @@ def import_external_paper(
             if isinstance(open_access_pdf, dict)
             else None
         )
+        download_source = "semantic_scholar"
+        if not isinstance(pdf_url, str) or not pdf_url.strip():
+            pdf_url = _arxiv_pdf_url(external_ids)
+            download_source = "arxiv_fallback"
         if isinstance(pdf_url, str) and pdf_url.strip():
             try:
-                content = client.download_pdf(pdf_url.strip())
-                import re
-
+                try:
+                    content = client.download_pdf(pdf_url.strip())
+                except AttributeError as exc:
+                    # Keep metadata import graceful for lightweight test or
+                    # custom clients that do not implement PDF downloading.
+                    raise SemanticScholarError(
+                        "PDF downloader is unavailable", status_code=502
+                    ) from exc
                 filename = re.sub(r"[^A-Za-z0-9._-]+", "_", title.strip())[:120]
                 service.attach_pdf_to_existing(
                     workspace_id=workspace_id,
@@ -324,6 +353,7 @@ def import_external_paper(
                 logger.warning(
                     "semantic_scholar.open_access_download_failed",
                     paper_id=paper.id,
+                    source=download_source,
                     error=str(exc),
                 )
     return PaperRead.model_validate(paper)
