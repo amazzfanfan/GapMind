@@ -15,13 +15,17 @@ import {
   Typography,
 } from "antd";
 import {
+  ClockCircleOutlined,
   CloudDownloadOutlined,
   FilterOutlined,
   LinkOutlined,
   SearchOutlined,
+  StarFilled,
+  StarOutlined,
 } from "@ant-design/icons";
 import semanticScholarApi, {
   type SemanticScholarPaper,
+  type SemanticScholarSearchHistory,
   type SemanticScholarSort,
 } from "../api/semanticScholar";
 import workspaceApi from "../api/workspace";
@@ -146,6 +150,9 @@ export default function SemanticPaperSearch() {
   const [importWorkspaceId, setImportWorkspaceId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [importLoading, setImportLoading] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<SemanticScholarSearchHistory[]>([]);
+  const [favoritePapers, setFavoritePapers] = useState<SemanticScholarPaper[]>([]);
+  const [searchStateDirty, setSearchStateDirty] = useState(false);
 
   useEffect(() => {
     const snapshot = readSearchSnapshot();
@@ -212,6 +219,57 @@ export default function SemanticPaperSearch() {
     nextToken,
   ]);
 
+  useEffect(() => {
+    void Promise.all([semanticScholarApi.listHistory(), semanticScholarApi.listFavorites()])
+      .then(([history, favorites]) => {
+        setSearchHistory(history);
+        setFavoritePapers(favorites.map((favorite) => favorite.paper));
+      })
+      .catch(() => {
+        // Search remains usable when history/favorites are unavailable.
+      });
+  }, []);
+
+  const favoriteIds = new Set(favoritePapers.map((paper) => paper.paperId));
+
+  const applyHistory = (historyId: string) => {
+    const record = searchHistory.find((item) => item.id === historyId);
+    if (!record) return;
+    const filters = record.filters;
+    setQuery(record.query);
+    setYearFrom(typeof filters.year_from === "number" ? filters.year_from : null);
+    setYearTo(typeof filters.year_to === "number" ? filters.year_to : null);
+    setMinCitations(
+      typeof filters.min_citation_count === "number" ? filters.min_citation_count : null,
+    );
+    setOpenAccess(filters.open_access === true);
+    setFieldsOfStudy(Array.isArray(filters.fields_of_study) ? filters.fields_of_study as string[] : []);
+    setPublicationTypes(Array.isArray(filters.publication_types) ? filters.publication_types as string[] : []);
+    setVenue(typeof filters.venue === "string" ? filters.venue : "");
+    setSort(record.sort);
+    setPapers([]);
+    setTotal(0);
+    setNextOffset(null);
+    setNextToken(null);
+    setSearchStateDirty(true);
+  };
+
+  const toggleFavorite = async (paper: SemanticScholarPaper) => {
+    try {
+      if (favoriteIds.has(paper.paperId)) {
+        await semanticScholarApi.deleteFavorite(paper.paperId);
+        setFavoritePapers((current) => current.filter((item) => item.paperId !== paper.paperId));
+        message.success("Removed from favorites");
+      } else {
+        await semanticScholarApi.saveFavorite(paper);
+        setFavoritePapers((current) => [...current, paper]);
+        message.success("Added to favorites");
+      }
+    } catch (err) {
+      message.error(`Favorite update failed: ${errorMessage(err)}`);
+    }
+  };
+
   const runSearch = async (append: boolean) => {
     const activeQuery = (append ? searchedQuery : query).trim();
     if (!activeQuery) {
@@ -246,6 +304,12 @@ export default function SemanticPaperSearch() {
       setTotal(response.total);
       setNextOffset(response.next ?? null);
       setNextToken(response.token ?? null);
+      setSearchStateDirty(false);
+      if (!append) {
+        void semanticScholarApi.listHistory().then(setSearchHistory).catch(() => {
+          // Search results remain usable when history refresh is unavailable.
+        });
+      }
     } catch (err) {
       setError(errorMessage(err));
       if (!append) setPapers([]);
@@ -272,8 +336,12 @@ export default function SemanticPaperSearch() {
     }
     setImportLoading(true);
     try {
-      await semanticScholarApi.importToWorkspace(importWorkspaceId, importPaper.paperId);
-      message.success("Paper metadata imported into the workspace.");
+      const imported = await semanticScholarApi.importToWorkspace(importWorkspaceId, importPaper.paperId);
+      message.success(
+        imported.primary_artifact_id
+          ? "Paper metadata imported; open-access PDF processing was queued."
+          : "Paper metadata imported into the workspace.",
+      );
       setImportPaper(null);
     } catch (err) {
       message.error(`Import failed: ${errorMessage(err)}`);
@@ -288,6 +356,7 @@ export default function SemanticPaperSearch() {
     setTotal(0);
     setNextOffset(null);
     setNextToken(null);
+    setSearchStateDirty(true);
   };
 
   const hasMore = sort === "relevance" ? nextOffset !== null : nextToken !== null;
@@ -302,7 +371,10 @@ export default function SemanticPaperSearch() {
         <Input
           size="large"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setSearchStateDirty(true);
+          }}
           onPressEnter={() => runSearch(false)}
           placeholder="Search papers by topic, method, author, or keyword"
           prefix={<SearchOutlined />}
@@ -312,26 +384,72 @@ export default function SemanticPaperSearch() {
         </Button>
       </Space.Compact>
 
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Select
+          allowClear
+          style={{ minWidth: 240 }}
+          placeholder="Recent searches"
+          suffixIcon={<ClockCircleOutlined />}
+          options={searchHistory.map((item) => ({
+            value: item.id,
+            label: `${item.query} · ${item.result_count}`,
+          }))}
+          onChange={(value) => value && applyHistory(value)}
+        />
+        <Select
+          allowClear
+          style={{ minWidth: 240 }}
+          placeholder="Favorites"
+          suffixIcon={<StarFilled />}
+          options={favoritePapers.map((paper) => ({
+            value: paper.paperId,
+            label: paper.title || paper.paperId,
+          }))}
+          onChange={(value) => {
+            const paper = favoritePapers.find((item) => item.paperId === value);
+            if (paper) setDetailsPaper(paper);
+          }}
+        />
+      </Space>
+
+      {searchStateDirty && (
+        <Alert
+          type="info"
+          showIcon
+          message="Search conditions changed. Click Search to apply them."
+          style={{ marginBottom: 12 }}
+        />
+      )}
+
       <Space wrap size={[8, 8]} style={{ width: "100%" }}>
         <InputNumber
           min={1900}
           max={2100}
           placeholder="Year from"
           value={yearFrom}
-          onChange={(value) => setYearFrom(value)}
+          onChange={(value) => {
+            setYearFrom(value);
+            setSearchStateDirty(true);
+          }}
         />
         <InputNumber
           min={1900}
           max={2100}
           placeholder="Year to"
           value={yearTo}
-          onChange={(value) => setYearTo(value)}
+          onChange={(value) => {
+            setYearTo(value);
+            setSearchStateDirty(true);
+          }}
         />
         <InputNumber
           min={0}
           placeholder="Min citations"
           value={minCitations}
-          onChange={(value) => setMinCitations(value)}
+          onChange={(value) => {
+            setMinCitations(value);
+            setSearchStateDirty(true);
+          }}
         />
         <Select
           mode="multiple"
@@ -340,7 +458,10 @@ export default function SemanticPaperSearch() {
           placeholder="Fields of study"
           options={FIELD_OPTIONS}
           value={fieldsOfStudy}
-          onChange={setFieldsOfStudy}
+          onChange={(value) => {
+            setFieldsOfStudy(value);
+            setSearchStateDirty(true);
+          }}
         />
         <Select
           mode="multiple"
@@ -349,13 +470,19 @@ export default function SemanticPaperSearch() {
           placeholder="Publication types"
           options={PUBLICATION_TYPE_OPTIONS}
           value={publicationTypes}
-          onChange={setPublicationTypes}
+          onChange={(value) => {
+            setPublicationTypes(value);
+            setSearchStateDirty(true);
+          }}
         />
         <Input
           style={{ width: 180 }}
           placeholder="Venue"
           value={venue}
-          onChange={(event) => setVenue(event.target.value)}
+          onChange={(event) => {
+            setVenue(event.target.value);
+            setSearchStateDirty(true);
+          }}
         />
         <Select
           style={{ width: 170 }}
@@ -365,7 +492,10 @@ export default function SemanticPaperSearch() {
           suffixIcon={<FilterOutlined />}
         />
         <Button
-          onClick={() => setOpenAccess((value) => !value)}
+          onClick={() => {
+            setOpenAccess((value) => !value);
+            setSearchStateDirty(true);
+          }}
           type={openAccess ? "primary" : "default"}
         >
           Open access only
@@ -443,6 +573,12 @@ export default function SemanticPaperSearch() {
                   <Button size="small" onClick={() => setDetailsPaper(paper)}>
                     Details
                   </Button>
+                  <Button
+                    size="small"
+                    icon={favoriteIds.has(paper.paperId) ? <StarFilled /> : <StarOutlined />}
+                    onClick={() => void toggleFavorite(paper)}
+                    title={favoriteIds.has(paper.paperId) ? "Remove favorite" : "Add favorite"}
+                  />
                   <Button size="small" icon={<CloudDownloadOutlined />} onClick={() => openImportModal(paper)}>
                     Import
                   </Button>

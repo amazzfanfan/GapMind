@@ -25,7 +25,10 @@ from app.domains.paper.schemas import (
     PaperListResponse,
     PaperRead,
     PaperUpdate,
+    SemanticScholarFavoriteCreate,
+    SemanticScholarFavoriteRead,
     SemanticScholarImportRequest,
+    SemanticScholarSearchHistoryRead,
     SemanticScholarSearchResponse,
 )
 from app.domains.paper.service import (
@@ -33,6 +36,7 @@ from app.domains.paper.service import (
     PaperNotFoundError,
     PaperService,
 )
+from app.domains.paper.search_service import PaperSearchService
 from app.domains.workspace.service import WorkspaceNotFoundError, WorkspaceService
 from app.gateway.semantic_scholar import SemanticScholarClient, SemanticScholarError
 
@@ -45,7 +49,7 @@ S2_SEARCH_FIELDS = (
     "venue,url,citationCount,referenceCount,influentialCitationCount,isOpenAccess,"
     "openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,publicationTypes"
 )
-S2_IMPORT_FIELDS = "paperId,externalIds,title,abstract,year,authors"
+S2_IMPORT_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf"
 
 
 def _get_paper_service(db: Session = Depends(get_db)) -> PaperService:
@@ -118,6 +122,7 @@ def search_external_papers(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     token: str | None = Query(None, max_length=500),
+    db: Session = Depends(get_db),
     client: SemanticScholarClient = Depends(_get_semantic_scholar_client),
 ) -> SemanticScholarSearchResponse:
     """Search Semantic Scholar without exposing the upstream API key."""
@@ -149,7 +154,72 @@ def search_external_papers(
     except SemanticScholarError as exc:
         raise _semantic_scholar_http_error(exc) from exc
 
+    try:
+        PaperSearchService(db).record_history(
+            query=query.strip(),
+            filters={
+                "year_from": year_from,
+                "year_to": year_to,
+                "min_citation_count": min_citation_count,
+                "open_access": open_access,
+                "fields_of_study": fields_of_study.split(",") if fields_of_study else [],
+                "publication_types": publication_types.split(",") if publication_types else [],
+                "venue": venue,
+            },
+            sort=sort,
+            result_count=int(raw.get("total") or len(raw.get("data") or [])),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("semantic_scholar.history_record_failed", error=str(exc))
+
     return SemanticScholarSearchResponse.model_validate(raw)
+
+
+@router.get("/papers/search/history", response_model=list[SemanticScholarSearchHistoryRead])
+def list_search_history(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[SemanticScholarSearchHistoryRead]:
+    rows = PaperSearchService(db).list_history(limit=limit, offset=offset)
+    return [SemanticScholarSearchHistoryRead.model_validate(row) for row in rows]
+
+
+@router.delete("/papers/search/history/{history_id}")
+def delete_search_history(history_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    if not PaperSearchService(db).delete_history(history_id):
+        raise HTTPException(status_code=404, detail={"error": "search_history_not_found"})
+    return {"deleted": True}
+
+
+@router.get("/papers/favorites", response_model=list[SemanticScholarFavoriteRead])
+def list_search_favorites(
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[SemanticScholarFavoriteRead]:
+    rows = PaperSearchService(db).list_favorites(limit=limit, offset=offset)
+    return [SemanticScholarFavoriteRead.model_validate(row) for row in rows]
+
+
+@router.post("/papers/favorites", response_model=SemanticScholarFavoriteRead)
+def save_search_favorite(
+    payload: SemanticScholarFavoriteCreate,
+    db: Session = Depends(get_db),
+) -> SemanticScholarFavoriteRead:
+    row = PaperSearchService(db).upsert_favorite(
+        paper=payload.paper.model_dump(by_alias=True),
+        note=payload.note,
+    )
+    return SemanticScholarFavoriteRead.model_validate(row)
+
+
+@router.delete("/papers/favorites/{paper_id}")
+def delete_search_favorite(paper_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    if not PaperSearchService(db).delete_favorite(paper_id):
+        raise HTTPException(status_code=404, detail={"error": "favorite_not_found"})
+    return {"deleted": True}
 
 
 @router.post(
@@ -166,8 +236,8 @@ def import_external_paper(
 ) -> PaperRead:
     """Import Semantic Scholar metadata into a workspace.
 
-    This first version intentionally imports metadata only. The user can
-    attach a PDF through the existing upload-pdf endpoint afterward.
+    Import metadata and, when requested, download the advertised open-access
+    PDF. PDF processing continues through the existing Celery pipeline.
     """
     try:
         workspace_service.get(workspace_id)
@@ -179,7 +249,11 @@ def import_external_paper(
         workspace_id=workspace_id,
         external_paper_id=external_id,
     )
-    if existing is not None:
+    # Keep imports idempotent when a PDF already exists. If only metadata was
+    # imported previously, continue below so the user can retry OA download.
+    if existing is not None and (
+        existing.primary_artifact_id is not None or not payload.download_open_access_pdf
+    ):
         return PaperRead.model_validate(existing)
 
     try:
@@ -209,19 +283,49 @@ def import_external_paper(
     doi = _external_id_as_string(external_ids, "DOI")
     arxiv_id = _external_id_as_string(external_ids, "ArXiv", "ARXIV")
     year = raw.get("year") if isinstance(raw.get("year"), int) else None
-    paper = service.create_from_metadata(
-        workspace_id=workspace_id,
-        payload=PaperCreate(
-            title=title.strip(),
-            authors=authors,
-            year=year,
-            abstract=raw.get("abstract") if isinstance(raw.get("abstract"), str) else None,
-            doi=doi,
-            arxiv_id=arxiv_id,
-        ),
-        source="semantic_scholar",
-        external_paper_id=external_id,
-    )
+    if existing is None:
+        paper = service.create_from_metadata(
+            workspace_id=workspace_id,
+            payload=PaperCreate(
+                title=title.strip(),
+                authors=authors,
+                year=year,
+                abstract=raw.get("abstract") if isinstance(raw.get("abstract"), str) else None,
+                doi=doi,
+                arxiv_id=arxiv_id,
+            ),
+            source="semantic_scholar",
+            external_paper_id=external_id,
+        )
+    else:
+        paper = existing
+    if payload.download_open_access_pdf:
+        open_access_pdf = raw.get("openAccessPdf")
+        pdf_url = (
+            open_access_pdf.get("url")
+            if isinstance(open_access_pdf, dict)
+            else None
+        )
+        if isinstance(pdf_url, str) and pdf_url.strip():
+            try:
+                content = client.download_pdf(pdf_url.strip())
+                import re
+
+                filename = re.sub(r"[^A-Za-z0-9._-]+", "_", title.strip())[:120]
+                service.attach_pdf_to_existing(
+                    workspace_id=workspace_id,
+                    paper_id=paper.id,
+                    filename=f"{filename or external_id}.pdf",
+                    content=content,
+                    mime_type="application/pdf",
+                )
+                paper = service.get(paper.id)
+            except SemanticScholarError as exc:
+                logger.warning(
+                    "semantic_scholar.open_access_download_failed",
+                    paper_id=paper.id,
+                    error=str(exc),
+                )
     return PaperRead.model_validate(paper)
 
 

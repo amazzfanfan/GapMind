@@ -43,8 +43,7 @@ celery_app.conf.update(
     imports=[
         "app.workers.tasks.parse_pdf",
         "app.workers.tasks.extract_knowledge",
-        # Phase 3+ tasks will be listed here:
-        # "app.workers.tasks.embed_chunks",
+        "app.workers.tasks.embed_chunks",
     ],
 )
 
