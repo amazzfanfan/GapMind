@@ -81,6 +81,61 @@ export interface SemanticScholarFavorite {
   updated_at: string;
 }
 
+export function normalizeSemanticScholarPaper(
+  value: Partial<SemanticScholarPaper> | null | undefined
+): SemanticScholarPaper {
+  const paper = value ?? {};
+  const authors = Array.isArray(paper.authors)
+    ? paper.authors
+        .filter((author): author is SemanticScholarAuthor => Boolean(author))
+        .map((author) => ({
+          authorId: typeof author.authorId === "string" ? author.authorId : null,
+          name: typeof author.name === "string" ? author.name : null,
+        }))
+    : [];
+
+  return {
+    paperId: typeof paper.paperId === "string" ? paper.paperId : "",
+    corpusId: typeof paper.corpusId === "number" ? paper.corpusId : null,
+    externalIds:
+      paper.externalIds && typeof paper.externalIds === "object"
+        ? paper.externalIds
+        : null,
+    url: typeof paper.url === "string" ? paper.url : null,
+    title: typeof paper.title === "string" ? paper.title : null,
+    abstract: typeof paper.abstract === "string" ? paper.abstract : null,
+    year: typeof paper.year === "number" ? paper.year : null,
+    publicationDate:
+      typeof paper.publicationDate === "string" ? paper.publicationDate : null,
+    authors,
+    venue: typeof paper.venue === "string" ? paper.venue : null,
+    citationCount:
+      typeof paper.citationCount === "number" ? paper.citationCount : null,
+    referenceCount:
+      typeof paper.referenceCount === "number" ? paper.referenceCount : null,
+    influentialCitationCount:
+      typeof paper.influentialCitationCount === "number"
+        ? paper.influentialCitationCount
+        : null,
+    isOpenAccess:
+      typeof paper.isOpenAccess === "boolean" ? paper.isOpenAccess : null,
+    openAccessPdf:
+      paper.openAccessPdf && typeof paper.openAccessPdf === "object"
+        ? paper.openAccessPdf
+        : null,
+    fieldsOfStudy: Array.isArray(paper.fieldsOfStudy)
+      ? paper.fieldsOfStudy
+      : null,
+    s2FieldsOfStudy: Array.isArray(paper.s2FieldsOfStudy)
+      ? paper.s2FieldsOfStudy
+      : null,
+    publicationTypes: Array.isArray(paper.publicationTypes)
+      ? paper.publicationTypes
+      : null,
+    tldr: paper.tldr && typeof paper.tldr === "object" ? paper.tldr : null,
+  };
+}
+
 export const semanticScholarApi = {
   async search(
     params: SemanticScholarSearchParams
@@ -88,7 +143,18 @@ export const semanticScholarApi = {
     const resp = await apiClient.get<SemanticScholarSearchResponse>("/papers/search", {
       params,
     });
-    return resp.data;
+    const payload = resp.data;
+    return {
+      total: typeof payload.total === "number" ? payload.total : 0,
+      offset: typeof payload.offset === "number" ? payload.offset : 0,
+      next: typeof payload.next === "number" ? payload.next : null,
+      token: typeof payload.token === "string" ? payload.token : null,
+      data: Array.isArray(payload.data)
+        ? payload.data
+            .map(normalizeSemanticScholarPaper)
+            .filter((paper) => paper.paperId)
+        : [],
+    };
   },
 
   async importToWorkspace(
@@ -113,12 +179,20 @@ export const semanticScholarApi = {
 
   async listFavorites(): Promise<SemanticScholarFavorite[]> {
     const resp = await apiClient.get<SemanticScholarFavorite[]>("/papers/favorites");
-    return resp.data;
+    return Array.isArray(resp.data)
+      ? resp.data.map((favorite) => ({
+          ...favorite,
+          paper: normalizeSemanticScholarPaper(favorite.paper),
+        }))
+      : [];
   },
 
   async saveFavorite(paper: SemanticScholarPaper): Promise<SemanticScholarFavorite> {
     const resp = await apiClient.post<SemanticScholarFavorite>("/papers/favorites", { paper });
-    return resp.data;
+    return {
+      ...resp.data,
+      paper: normalizeSemanticScholarPaper(resp.data.paper),
+    };
   },
 
   async deleteFavorite(paperId: string): Promise<void> {

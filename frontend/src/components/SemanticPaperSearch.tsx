@@ -24,6 +24,7 @@ import {
   StarOutlined,
 } from "@ant-design/icons";
 import semanticScholarApi, {
+  normalizeSemanticScholarPaper,
   type SemanticScholarPaper,
   type SemanticScholarSearchHistory,
   type SemanticScholarSort,
@@ -101,7 +102,40 @@ function readSearchSnapshot(): SearchSnapshot | null {
       sessionStorage.removeItem(SEARCH_CACHE_KEY);
       return null;
     }
-    return snapshot;
+    const sort = SORT_OPTIONS.some((option) => option.value === snapshot.sort)
+      ? snapshot.sort
+      : "relevance";
+    return {
+      savedAt: snapshot.savedAt,
+      query: typeof snapshot.query === "string" ? snapshot.query : "",
+      searchedQuery:
+        typeof snapshot.searchedQuery === "string"
+          ? snapshot.searchedQuery
+          : "",
+      yearFrom: typeof snapshot.yearFrom === "number" ? snapshot.yearFrom : null,
+      yearTo: typeof snapshot.yearTo === "number" ? snapshot.yearTo : null,
+      minCitations:
+        typeof snapshot.minCitations === "number"
+          ? snapshot.minCitations
+          : null,
+      openAccess: snapshot.openAccess === true,
+      fieldsOfStudy: Array.isArray(snapshot.fieldsOfStudy)
+        ? snapshot.fieldsOfStudy
+        : [],
+      publicationTypes: Array.isArray(snapshot.publicationTypes)
+        ? snapshot.publicationTypes
+        : [],
+      venue: typeof snapshot.venue === "string" ? snapshot.venue : "",
+      sort,
+      papers: snapshot.papers
+        .map(normalizeSemanticScholarPaper)
+        .filter((paper) => paper.paperId),
+      total: typeof snapshot.total === "number" ? snapshot.total : 0,
+      nextOffset:
+        typeof snapshot.nextOffset === "number" ? snapshot.nextOffset : null,
+      nextToken:
+        typeof snapshot.nextToken === "string" ? snapshot.nextToken : null,
+    };
   } catch {
     return null;
   }
@@ -117,7 +151,9 @@ function errorMessage(err: unknown): string {
 }
 
 function authorsLabel(paper: SemanticScholarPaper): string {
-  const names = paper.authors.map((author) => author.name).filter(Boolean) as string[];
+  const names = (paper.authors ?? [])
+    .map((author) => author?.name)
+    .filter(Boolean) as string[];
   if (names.length <= 3) return names.join(", ") || "Unknown authors";
   return `${names.slice(0, 3).join(", ")} +${names.length - 3}`;
 }
@@ -290,8 +326,8 @@ export default function SemanticPaperSearch() {
         year_to: yearTo ?? undefined,
         min_citation_count: minCitations ?? undefined,
         open_access: openAccess || undefined,
-        fields_of_study: fieldsOfStudy.length ? fieldsOfStudy.join(",") : undefined,
-        publication_types: publicationTypes.length ? publicationTypes.join(",") : undefined,
+        fields_of_study: fieldsOfStudy?.length ? fieldsOfStudy.join(",") : undefined,
+        publication_types: publicationTypes?.length ? publicationTypes.join(",") : undefined,
         venue: venue.trim() || undefined,
         sort,
         limit: 20,
