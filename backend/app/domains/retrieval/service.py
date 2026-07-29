@@ -17,7 +17,6 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.domains.retrieval import milvus_client
 from app.domains.retrieval.schemas import (
@@ -100,7 +99,11 @@ def index_paper_chunks(
 
     # 4. Build Milvus records
     records: list[dict[str, Any]] = []
-    for chunk, vector in zip(to_index, embedding_result.embeddings):
+    for chunk, vector in zip(
+        to_index,
+        embedding_result.embeddings,
+        strict=False,
+    ):
         records.append({
             "chunk_id": chunk.chunk_id,
             "workspace_id": chunk.workspace_id,
@@ -142,7 +145,7 @@ def _load_chunks_jsonl(workspace_id: str, paper_id: str) -> list[ChunkRecord]:
         return []
 
     chunks: list[ChunkRecord] = []
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -398,9 +401,14 @@ def find_counter_evidence(
 
         # Determine status: degraded if judge failed
         status = "succeeded"
-        if use_judge and any(i.judgement == "unknown" and i.judgement_confidence == 0.0 for i in items):
-            # Some judgements failed, but we still have results
-            status = "degraded" if all(i.judgement == "unknown" for i in items) else "succeeded"
+        if use_judge and any(
+            item.judgement == "unknown"
+            and item.judgement_confidence == 0.0
+            for item in items
+        ):
+            # A zero-confidence unknown is the gateway's failure sentinel.
+            # A legitimate unknown judgement should carry non-zero confidence.
+            status = "degraded"
 
         return RetrievalResponse(
             request_id=request_id,
@@ -466,16 +474,21 @@ def _judge_items(
 ) -> list[RetrievalResultItem]:
     """Apply LLM judgement to reranked items (counter_evidence only)."""
     judge = get_judgement_gateway()
-    passages = [item.text for item in items]
+    batch_size = 8
+    for batch_start in range(0, len(items), batch_size):
+        batch = items[batch_start : batch_start + batch_size]
+        judgement_result = judge.judge_batch(
+            claim,
+            [item.text for item in batch],
+            max_passages=len(batch),
+        )
 
-    judgement_result = judge.judge_batch(claim, passages)
-
-    # Apply judgement to items
-    for hit in judgement_result.hits:
-        if hit.index < len(items):
-            items[hit.index].judgement = hit.judgement
-            items[hit.index].judgement_confidence = hit.confidence
-            items[hit.index].retrieval_stage = "llm_judged"
+        for hit in judgement_result.hits:
+            item_index = batch_start + hit.index
+            if batch_start <= item_index < batch_start + len(batch):
+                items[item_index].judgement = hit.judgement
+                items[item_index].judgement_confidence = hit.confidence
+                items[item_index].retrieval_stage = "llm_judged"
 
     return items
 

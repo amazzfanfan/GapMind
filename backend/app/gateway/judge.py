@@ -136,6 +136,7 @@ class JudgementGateway:
         )
 
         try:
+            max_tokens = max(1024, len(passages) * 256)
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -143,10 +144,17 @@ class JudgementGateway:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.0,
-                max_tokens=512,
+                max_tokens=max_tokens,
             )
 
-            content = resp.choices[0].message.content or "[]"
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            if not content.strip():
+                raise ValueError(
+                    "Judge returned empty content "
+                    f"(finish_reason={choice.finish_reason}, "
+                    f"max_tokens={max_tokens})"
+                )
             latency = (time.perf_counter() - start) * 1000
 
             hits = self._parse_response(content, len(passages))
@@ -155,6 +163,7 @@ class JudgementGateway:
                 "judge.response",
                 model=self.model,
                 hit_count=len(hits),
+                finish_reason=choice.finish_reason,
                 latency_ms=round(latency, 1),
             )
 
