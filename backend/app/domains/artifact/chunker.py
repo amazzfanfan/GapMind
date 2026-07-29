@@ -24,7 +24,6 @@ from dataclasses import dataclass
 
 from app.domains.artifact.pdf_parser import ParsedPdf, get_page_for_char_offset
 
-
 # Tunable parameters
 TARGET_TOKENS = 512
 MIN_TOKENS = 100
@@ -109,23 +108,34 @@ def chunk_parsed_pdf(
         paragraphs = _split_paragraphs(section_text)
 
         # Step 2: merge small paragraphs up to TARGET_CHARS.
-        merged_paras = _merge_paragraphs(paragraphs)
+        merged_paras = _merge_paragraphs(paragraphs, section_text)
 
         # Step 3: for each merged paragraph, split further if too long.
         for para_text, para_offset_in_section in merged_paras:
             pieces = _split_long_text(para_text)
 
             # Step 4: add overlap between consecutive pieces.
-            pieces_with_overlap = _add_overlap(pieces)
+            pieces_with_overlap = _add_overlap(pieces, para_text)
 
             for piece_text, piece_start_in_para in pieces_with_overlap:
                 if not piece_text.strip():
                     continue
                 # Compute absolute char offsets
                 abs_start = sec_start + para_offset_in_section + piece_start_in_para
-                abs_end = abs_start + len(piece_text)
-                # Clamp to document bounds.
-                abs_end = min(abs_end, len(parsed.full_text))
+                abs_end = min(
+                    abs_start + len(piece_text),
+                    len(parsed.full_text),
+                )
+                # Never persist reconstructed whitespace. Trim by moving the
+                # offsets, then take the exact immutable parsed_text slice.
+                source_piece = parsed.full_text[abs_start:abs_end]
+                left_trim = len(source_piece) - len(source_piece.lstrip())
+                right_trim = len(source_piece) - len(source_piece.rstrip())
+                abs_start += left_trim
+                abs_end -= right_trim
+                if abs_end <= abs_start:
+                    continue
+                source_piece = parsed.full_text[abs_start:abs_end]
 
                 page_start = get_page_for_char_offset(parsed, abs_start)
                 page_end = get_page_for_char_offset(parsed, abs_end - 1) if abs_end > abs_start else page_start
@@ -134,7 +144,7 @@ def chunk_parsed_pdf(
                 if page_start == 0:
                     page_start = page_end
 
-                tokens_est = _estimate_tokens(piece_text)
+                tokens_est = _estimate_tokens(source_piece)
 
                 chunks.append(
                     Chunk(
@@ -145,7 +155,7 @@ def chunk_parsed_pdf(
                         chunk_index=chunk_index,
                         section=sec_name,
                         subsection=sec_sub,
-                        text=piece_text.strip(),
+                        text=source_piece,
                         start_char=abs_start,
                         end_char=abs_end,
                         page_start=page_start,
@@ -159,7 +169,7 @@ def chunk_parsed_pdf(
 
     # Final pass: merge tiny trailing chunks into the previous one if both
     # belong to the same section. This avoids 50-token orphans.
-    chunks = _merge_tiny_tail_chunks(chunks)
+    chunks = _merge_tiny_tail_chunks(chunks, parsed.full_text)
 
     # Re-index chunk_index after any merging.
     for i, c in enumerate(chunks):
@@ -196,6 +206,7 @@ def _split_paragraphs(text: str) -> list[tuple[str, int]]:
 
 def _merge_paragraphs(
     paras: list[tuple[str, int]],
+    source_text: str,
 ) -> list[tuple[str, int]]:
     """Merge consecutive paragraphs until we reach TARGET_CHARS."""
     if not paras:
@@ -203,20 +214,23 @@ def _merge_paragraphs(
     merged: list[tuple[str, int]] = []
     buf_text = ""
     buf_offset = 0
+    buf_end = 0
 
     for text, offset in paras:
         if not buf_text:
             buf_text = text
             buf_offset = offset
-        elif len(buf_text) + len(text) + 2 <= TARGET_CHARS:
-            # Join with double newline to preserve paragraph boundary.
-            buf_text = buf_text + "\n\n" + text
+            buf_end = offset + len(text)
+        elif offset + len(text) - buf_offset <= TARGET_CHARS:
+            buf_end = offset + len(text)
+            buf_text = source_text[buf_offset:buf_end]
         else:
-            merged.append((buf_text, buf_offset))
+            merged.append((source_text[buf_offset:buf_end], buf_offset))
             buf_text = text
             buf_offset = offset
+            buf_end = offset + len(text)
     if buf_text:
-        merged.append((buf_text, buf_offset))
+        merged.append((source_text[buf_offset:buf_end], buf_offset))
     return merged
 
 
@@ -228,79 +242,63 @@ def _split_long_text(text: str) -> list[tuple[str, int]]:
     if len(text) <= MAX_CHARS:
         return [(text, 0)]
 
-    # Split into sentences using a simple regex.
-    # This is intentionally simple - we don't need perfect sentence
-    # boundaries, just reasonable split points.
-    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
-
     pieces: list[tuple[str, int]] = []
-    buf_text = ""
-    buf_offset = 0
-    cursor = 0
-
-    for sentence in sentences:
-        if not buf_text:
-            buf_text = sentence
-            buf_offset = cursor
-        elif len(buf_text) + len(sentence) + 1 <= TARGET_CHARS:
-            buf_text = buf_text + " " + sentence
+    sentence_boundaries = [
+        match.end()
+        for match in re.finditer(r"(?<=[.!?])\s+(?=[A-Z])", text)
+    ]
+    start = 0
+    while start < len(text):
+        remaining = len(text) - start
+        if remaining <= MAX_CHARS:
+            end = len(text)
         else:
-            pieces.append((buf_text, buf_offset))
-            cursor = buf_offset + len(buf_text) + 1
-            buf_text = sentence
-            buf_offset = cursor
-        cursor += len(sentence) + 1  # +1 for the separator we consumed
-
-    if buf_text:
-        pieces.append((buf_text, buf_offset))
-
-    # If any piece is still > MAX_CHARS (very long sentence), hard-split by chars.
-    final: list[tuple[str, int]] = []
-    for text_piece, off in pieces:
-        if len(text_piece) <= MAX_CHARS:
-            final.append((text_piece, off))
-        else:
-            # Hard split at word boundaries near MAX_CHARS.
-            i = 0
-            while i < len(text_piece):
-                end = min(i + MAX_CHARS, len(text_piece))
-                # Walk back to a space to avoid cutting mid-word.
-                if end < len(text_piece):
-                    space_at = text_piece.rfind(" ", i, end)
-                    if space_at > i + MIN_CHARS:
-                        end = space_at
-                final.append((text_piece[i:end], off + i))
-                i = end
-                # Skip the space.
-                if i < len(text_piece) and text_piece[i] == " ":
-                    i += 1
-    return final
+            minimum = start + MIN_CHARS
+            target = start + TARGET_CHARS
+            maximum = min(start + MAX_CHARS, len(text))
+            candidates = [
+                boundary
+                for boundary in sentence_boundaries
+                if minimum <= boundary <= maximum
+            ]
+            if candidates:
+                end = min(candidates, key=lambda value: abs(value - target))
+            else:
+                whitespace = max(
+                    text.rfind(" ", minimum, maximum),
+                    text.rfind("\n", minimum, maximum),
+                )
+                end = whitespace + 1 if whitespace >= minimum else maximum
+        pieces.append((text[start:end], start))
+        start = end
+    return pieces
 
 
-def _add_overlap(pieces: list[tuple[str, int]]) -> list[tuple[str, int]]:
+def _add_overlap(
+    pieces: list[tuple[str, int]],
+    source_text: str,
+) -> list[tuple[str, int]]:
     """Add overlap to each piece (except the first) by prepending the tail of the previous piece."""
     if len(pieces) <= 1:
         return pieces
     result: list[tuple[str, int]] = [pieces[0]]
     for i in range(1, len(pieces)):
-        prev_text, _ = pieces[i - 1]
         cur_text, cur_offset = pieces[i]
-        # Take up to OVERLAP_CHARS from the end of prev_text, walking back
-        # to a word boundary for cleanliness.
-        overlap_text = prev_text[-OVERLAP_CHARS:]
-        space_idx = overlap_text.find(" ")
-        if space_idx > 0:
-            overlap_text = overlap_text[space_idx + 1 :]
-        # Adjust offset to point to the start of the overlap text.
-        adjusted_offset = cur_offset - len(overlap_text) - 1  # -1 for the space
-        if adjusted_offset < 0:
-            adjusted_offset = 0
-            overlap_text = prev_text  # fallback, but this shouldn't happen
-        result.append((overlap_text + " " + cur_text, adjusted_offset))
+        adjusted_offset = max(0, cur_offset - OVERLAP_CHARS)
+        current_end = cur_offset + len(cur_text)
+        result.append(
+            (
+                source_text[adjusted_offset:current_end],
+                adjusted_offset,
+            )
+        )
     return result
 
 
-def _merge_tiny_tail_chunks(chunks: list[Chunk]) -> list[Chunk]:
+def _merge_tiny_tail_chunks(
+    chunks: list[Chunk],
+    source_text: str,
+) -> list[Chunk]:
     """If the last chunk in a section is < MIN_TOKENS, merge into previous."""
     if len(chunks) < 2:
         return chunks
@@ -312,8 +310,9 @@ def _merge_tiny_tail_chunks(chunks: list[Chunk]) -> list[Chunk]:
             and c.section == prev.section
             and prev.tokens_estimate + c.tokens_estimate < MAX_TOKENS
         ):
-            # Merge: extend prev's text and end_char.
-            prev.text = prev.text + "\n\n" + c.text
+            # Merge using the exact source slice, including the original
+            # whitespace between both chunks.
+            prev.text = source_text[prev.start_char:c.end_char]
             prev.end_char = c.end_char
             prev.page_end = c.page_end
             prev.tokens_estimate = _estimate_tokens(prev.text)
