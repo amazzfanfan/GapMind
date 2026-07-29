@@ -18,6 +18,7 @@ redis==5.0.8
 # Vector DB
 pymilvus>=2.4.6
 setuptools<70  # pymilvus deps need pkg_resources (removed in setuptools 70+)
+marshmallow<4  # environs 9.5.0 reads marshmallow.__version_info__
 
 # HTTP / LLM clients
 httpx==0.27.2

@@ -11,7 +11,7 @@ import fitz
 import pytest
 
 from app.domains.artifact.chunker import chunk_parsed_pdf
-from app.domains.artifact.pdf_parser import parse_pdf
+from app.domains.artifact.pdf_parser import ParsedPdf, parse_pdf
 
 
 def _make_pdf(pages: list[str], *, with_headings: bool = False) -> bytes:
@@ -219,6 +219,27 @@ def test_chunker_chunks_preserve_text_content() -> None:
     # The union of chunk texts should cover the original key phrase.
     combined = " ".join(c.text for c in chunks)
     assert "quick brown fox" in combined
+    for chunk in chunks:
+        assert chunk.text == parsed.full_text[chunk.start_char:chunk.end_char]
+
+
+def test_chunker_preserves_exact_slices_across_whitespace_and_overlap() -> None:
+    text = (
+        "Introduction\n"
+        + "First paragraph has wrapped text.\n" * 80
+        + "\n\n"
+        + "Second paragraph starts after a blank line. " * 100
+    )
+    parsed = ParsedPdf(
+        full_text=text,
+        page_count=1,
+        page_char_ranges=[(0, len(text))],
+    )
+    chunks = _chunk_from(parsed)
+
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert chunk.text == parsed.full_text[chunk.start_char:chunk.end_char]
 
 
 def test_chunker_page_numbers_are_valid() -> None:
