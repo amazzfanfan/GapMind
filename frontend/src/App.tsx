@@ -14,6 +14,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const DiscoverPage = lazy(() => import("./pages/DiscoverPage"));
+const ChatPage = lazy(() => import("./pages/ChatPage"));
 
 function LazyPage({ children, label }: { children: ReactNode; label: string }) {
   return <Suspense fallback={<div className="gm-loading">正在加载{label}…</div>}>{children}</Suspense>;
@@ -25,6 +26,8 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/chat" element={<LazyPage label="AI 对话"><ChatPage /></LazyPage>} />
+        <Route path="/chat/:conversationId" element={<LazyPage label="AI 对话"><ChatPage /></LazyPage>} />
         <Route path="/workspaces" element={<WorkspacesPage />} />
         <Route path="/workspaces/:id" element={<WorkspaceLayout />}>
           <Route index element={<Navigate to="overview" replace />} />

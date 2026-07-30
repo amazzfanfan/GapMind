@@ -3,6 +3,7 @@ import { Button, Layout, Menu, Space, Tag, Tooltip, theme } from "antd";
 import {
   AppstoreOutlined,
   DashboardOutlined,
+  MessageOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ProjectOutlined,
@@ -19,6 +20,7 @@ const globalNavigation = [
   { key: "/", icon: <DashboardOutlined />, label: "首页" },
   { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
   { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
+  { key: "/chat", icon: <MessageOutlined />, label: "AI 对话" },
 ];
 
 export default function AppLayout() {

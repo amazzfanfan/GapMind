@@ -5,6 +5,7 @@ describe("navigation helpers", () => {
   it("keeps global navigation selected for nested routes", () => {
     expect(selectedGlobalKey("/workspaces/ws-1/discover/runs/run-1")).toBe("/workspaces");
     expect(selectedGlobalKey("/search?query=gnn")).toBe("/search");
+    expect(selectedGlobalKey("/chat/conversation-1")).toBe("/chat");
     expect(selectedGlobalKey("/")).toBe("/");
   });
 

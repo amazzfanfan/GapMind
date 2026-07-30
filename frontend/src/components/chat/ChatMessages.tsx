@@ -1,0 +1,29 @@
+import { useState } from "react";
+import { Button, Empty, Space, Spin, Tooltip, Typography } from "antd";
+import { CheckOutlined, CopyOutlined, ReloadOutlined } from "@ant-design/icons";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { ChatMessage } from "../../api/chat";
+
+interface Props { messages: ChatMessage[]; onRetry: (message: ChatMessage) => void; retryingId?: string; }
+
+export default function ChatMessages({ messages, onRetry, retryingId }: Props) {
+  if (messages.length === 0) return <Empty className="gm-chat-empty-messages" image={Empty.PRESENTED_IMAGE_SIMPLE} description="开始一段新的研究对话" />;
+  return <div className="gm-chat-messages">{messages.map((message) => <ChatMessageItem key={message.id} message={message} onRetry={onRetry} retrying={retryingId === message.id} />)}</div>;
+}
+
+function ChatMessageItem({ message, onRetry, retrying }: { message: ChatMessage; onRetry: (message: ChatMessage) => void; retrying: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard?.writeText(message.content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  const isUser = message.role === "user";
+  return <article className={`gm-chat-message ${isUser ? "is-user" : "is-assistant"}`}>
+    <div className="gm-chat-message-body">
+      {message.status === "generating" ? <Space><Spin size="small" /><Typography.Text type="secondary">正在思考…</Typography.Text></Space> : message.status === "failed" ? <div><Typography.Text type="danger">回答失败，请重试。</Typography.Text><div><Button type="link" size="small" icon={<ReloadOutlined />} loading={retrying} onClick={() => onRetry(message)}>重新尝试</Button></div></div> : isUser ? <Typography.Paragraph className="gm-chat-plain-text">{message.content}</Typography.Paragraph> : <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>}
+    </div>
+    {message.status === "completed" && <div className="gm-chat-message-actions"><Tooltip title={copied ? "已复制" : "复制"}><Button type="text" size="small" aria-label="复制消息" icon={copied ? <CheckOutlined /> : <CopyOutlined />} onClick={() => void copy()} /></Tooltip></div>}
+  </article>;
+}

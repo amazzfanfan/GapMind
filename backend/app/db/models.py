@@ -36,5 +36,6 @@ from app.domains.discover.models import (  # noqa: F401
     ResearchOpportunity,
     ResearchPlan,
 )
+from app.domains.chat.models import ChatConversation, ChatMessage  # noqa: F401
 
 from app.db.base import Base  # noqa: F401
