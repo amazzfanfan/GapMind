@@ -24,7 +24,7 @@ import { BulbOutlined, CloseCircleOutlined, PlusOutlined, ReloadOutlined } from 
 import { useParams, useSearchParams } from "react-router-dom";
 import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
 import { OpportunityEvidenceViewer } from "../components/EvidenceViewer";
-import { DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, TERMINAL_RUN_STATUSES } from "./discoverState";
+import { currentRunStage, currentRunStatus, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, TERMINAL_RUN_STATUSES } from "./discoverState";
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -67,7 +67,7 @@ function verificationActionDisabled(status: string): boolean {
 }
 
 export default function DiscoverPage() {
-  const { id: workspaceId } = useParams<{ id: string }>();
+  const { id: workspaceId, runId, opportunityId } = useParams<{ id: string; runId?: string; opportunityId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
@@ -85,7 +85,8 @@ export default function DiscoverPage() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const selectedRunId = searchParams.get("run");
+  const selectedRunId = searchParams.get("run") ?? runId ?? null;
+  const selectedOpportunityId = searchParams.get("opportunity") ?? opportunityId ?? null;
   const selectedRun = useMemo(() => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null, [runs, selectedRunId]);
 
   const mergeDetail = useCallback((detail: Awaited<ReturnType<typeof discoverApi.getRun>>) => {
@@ -124,7 +125,7 @@ export default function DiscoverPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const currentStatus = runDetail?.id === selectedRun?.id ? runDetail.status : selectedRun?.status;
+  const currentStatus = currentRunStatus(runDetail, selectedRun);
   useEffect(() => {
     const interval = pollingInterval(currentStatus);
     if (!interval) return undefined;
@@ -178,6 +179,10 @@ export default function DiscoverPage() {
     try { setSelectedOpportunity(await discoverApi.getOpportunity(workspaceId, opportunityId)); }
     catch (error) { message.error(`Failed to load opportunity: ${errorMessage(error)}`); }
   };
+
+  useEffect(() => {
+    if (selectedOpportunityId) void openOpportunity(selectedOpportunityId);
+  }, [selectedOpportunityId, workspaceId]);
 
   const openDecision = (action: "confirm" | "reject" | "defer") => {
     setDecisionAction(action);
@@ -235,7 +240,7 @@ export default function DiscoverPage() {
   };
 
   if (!workspaceId) return <Empty description="Workspace not found" />;
-  const stage = runDetail?.id === selectedRun?.id ? runDetail.stage : selectedRun?.stage;
+  const stage = currentRunStage(runDetail, selectedRun);
   const stagePosition = stageIndex(stage);
   const selectedOpportunities = opportunities.filter((item) => !selectedRun || item.discover_run_id === selectedRun.id);
 

@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Alert, Button, Card, Empty, Modal, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, App, Button, Card, Empty, Modal, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { CopyOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { ExtractionRejection, Task } from "../api/types/domain";
 import knowledgeApi from "../api/knowledge";
 import taskApi from "../api/task";
+import StatusBadge, { taskTypeLabel } from "./common/StatusBadge";
+import TechnicalDetails from "./common/TechnicalDetails";
 
 const { Text } = Typography;
 
@@ -12,33 +14,6 @@ interface Props {
   loading: boolean;
   onChanged: () => void;
 }
-
-const STATUS_COLOR: Record<Task["status"], string> = {
-  queued: "default",
-  running: "processing",
-  waiting_for_user: "warning",
-  succeeded: "success",
-  failed: "error",
-  // cancel_requested is treated as terminal in the UI - MVP worker doesn't
-  // monitor cancel signals, so this state never transitions to "cancelled".
-  // Display it as cancelled (grey) to match user expectation. The raw status
-  // is still in the DB for audit. See progress_and_roadmap.md for the
-  // follow-up: implement real worker cancel monitoring in Phase 4.
-  cancel_requested: "default",
-  cancelled: "default",
-};
-
-// Map raw status to display label. cancel_requested is shown as "cancelled"
-// since from the user's perspective the task is no longer active.
-const STATUS_LABEL: Record<Task["status"], string> = {
-  queued: "queued",
-  running: "running",
-  waiting_for_user: "waiting",
-  succeeded: "succeeded",
-  failed: "failed",
-  cancel_requested: "cancelled",
-  cancelled: "cancelled",
-};
 
 function taskErrorSummary(error: string): string {
   const firstLine = error.split(/\r?\n/, 1)[0].trim();
@@ -69,6 +44,7 @@ function rejectedTotal(task: Task): number {
 const REJECTION_PAGE_SIZE = 20;
 
 export default function TasksSection({ tasks, loading, onChanged }: Props) {
+  const { message } = App.useApp();
   const [rejectionTask, setRejectionTask] = useState<Task | null>(null);
   const [rejections, setRejections] = useState<ExtractionRejection[]>([]);
   const [rejectionTotal, setRejectionTotal] = useState(0);
@@ -109,7 +85,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
       onChanged();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: { message?: string } } } }).response?.data?.detail;
-      window.alert(detail?.message || (err as Error).message);
+      message.error(detail?.message || (err as Error).message);
     }
   };
 
@@ -119,7 +95,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
       onChanged();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: { message?: string } } } }).response?.data?.detail;
-      window.alert(detail?.message || (err as Error).message);
+      message.error(detail?.message || (err as Error).message);
     }
   };
 
@@ -128,15 +104,15 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
       <Card
       title={
         <Space>
-          <span>Tasks</span>
-          <Tooltip title="Refresh">
+          <span>后台任务</span>
+          <Tooltip title="刷新">
             <Button size="small" icon={<ReloadOutlined />} onClick={onChanged} loading={loading} />
           </Tooltip>
         </Space>
       }
     >
       {tasks.length === 0 && !loading ? (
-        <Empty description="No tasks yet. Tasks are created automatically when you upload papers (Phase 2) or run discovery (Phase 5)." />
+        <Empty description="还没有后台任务。导入论文或启动 Discover 后，处理记录会显示在这里。" />
       ) : (
         <Table<Task>
           rowKey="id"
@@ -145,45 +121,39 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
           pagination={{ pageSize: 10, showSizeChanger: false }}
           columns={[
             {
-              title: "Type",
+              title: "处理内容",
               dataIndex: "task_type",
               key: "task_type",
-              render: (v: string) => <Text code>{v}</Text>,
+              render: (v: string) => <Text>{taskTypeLabel(v)}</Text>,
             },
             {
-              title: "Status",
+              title: "状态",
               dataIndex: "status",
               key: "status",
               width: 140,
-              render: (s: Task["status"]) => (
-                <Tag color={STATUS_COLOR[s]}>{STATUS_LABEL[s]}</Tag>
-              ),
+              render: (s: Task["status"]) => <StatusBadge status={s} />,
             },
             {
-              title: "Progress",
+              title: "进度",
               dataIndex: "progress",
               key: "progress",
               width: 100,
               render: (p: number) => `${Math.round(p * 100)}%`,
             },
             {
-              title: "Error",
+              title: "处理反馈",
               dataIndex: "error",
               key: "error",
               ellipsis: true,
               render: (e: string | null) =>
                 e ? (
-                  <Tooltip title={taskErrorSummary(e)}>
-                    <Text type="danger" ellipsis>
-                      {taskErrorSummary(e)}
-                    </Text>
-                  </Tooltip>
+                  <Space direction="vertical" size={0}><Text type="danger">处理失败</Text><TechnicalDetails>{taskErrorSummary(e)}</TechnicalDetails></Space>
                 ) : (
                   "—"
                 ),
             },
             {
-              title: "Rejected",
+              title: "被拒绝项",
               key: "rejected",
               width: 110,
               render: (_: unknown, task) => {
@@ -194,13 +164,13 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
                 }
                 return (
                   <Button size="small" onClick={() => loadRejections(task)}>
-                    {count > 0 ? `View (${count})` : "View"}
+                    {count > 0 ? `查看（${count}）` : "查看"}
                   </Button>
                 );
               },
             },
             {
-              title: "Created",
+              title: "更新时间",
               dataIndex: "created_at",
               key: "created_at",
               width: 160,
@@ -220,14 +190,14 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
                 if (t.status === "queued" || t.status === "running" || t.status === "waiting_for_user") {
                   return (
                     <Button size="small" onClick={() => handleCancel(t.id)}>
-                      Cancel
+                      取消处理
                     </Button>
                   );
                 }
                 if (t.status === "failed") {
                   return (
                     <Button size="small" onClick={() => handleRetry(t.id)}>
-                      Retry
+                      重试
                     </Button>
                   );
                 }
@@ -240,7 +210,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
       </Card>
 
       <Modal
-        title="Extraction rejections"
+        title="知识提取未采纳内容"
         open={rejectionTask !== null}
         onCancel={() => setRejectionTask(null)}
         footer={null}
@@ -266,13 +236,13 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
           }}
           columns={[
             {
-              title: "Kind",
+              title: "类型",
               dataIndex: "rejection_kind",
               width: 90,
               render: (value: string) => <Tag>{value}</Tag>,
             },
             {
-              title: "Stage",
+              title: "阶段",
               dataIndex: "stage",
               width: 150,
             },
@@ -281,10 +251,10 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
               key: "object",
               width: 180,
               render: (_: unknown, item) =>
-                item.canonical_name || item.item_type || "Output",
+                item.canonical_name || item.item_type || "输出",
             },
             {
-              title: "Reason",
+              title: "原因",
               key: "reason",
               render: (_: unknown, item) => (
                 <Space direction="vertical" size={2}>
@@ -296,7 +266,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
                     </Text>
                   )}
                   <details>
-                    <summary>Full rejected JSON</summary>
+                    <summary>技术详情</summary>
                     <Button
                       size="small"
                       icon={<CopyOutlined />}
@@ -307,7 +277,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
                         )
                       }
                     >
-                      Copy JSON
+                      复制 JSON
                     </Button>
                     <pre style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>
                       {JSON.stringify(item.raw_payload, null, 2)}

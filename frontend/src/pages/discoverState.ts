@@ -23,6 +23,22 @@ export function pollingInterval(status: string | null | undefined): number | nul
   return 2000;
 }
 
+export function currentRunStatus(
+  runDetail: { id: string; status: string } | null,
+  selectedRun: { id: string; status: string } | null,
+): string | null {
+  if (runDetail && selectedRun && runDetail.id === selectedRun.id) return runDetail.status;
+  return selectedRun?.status ?? null;
+}
+
+export function currentRunStage(
+  runDetail: { id: string; stage: string } | null,
+  selectedRun: { id: string; stage: string } | null,
+): string | null {
+  if (runDetail && selectedRun && runDetail.id === selectedRun.id) return runDetail.stage;
+  return selectedRun?.stage ?? null;
+}
+
 export function selectedOpportunityCount(
   opportunities: Array<{ discover_run_id?: string | null }>,
   runId: string | null,

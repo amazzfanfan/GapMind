@@ -1,14 +1,23 @@
-import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { lazy, Suspense, type ReactNode } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
+import WorkspaceLayout from "./components/layout/WorkspaceLayout";
 import DashboardPage from "./pages/DashboardPage";
 import SearchPage from "./pages/SearchPage";
 import WorkspacesPage from "./pages/WorkspacesPage";
-import WorkspaceDetailPage from "./pages/WorkspaceDetailPage";
+import WorkspaceOverviewPage from "./pages/WorkspaceOverviewPage";
+import WorkspacePapersPage from "./pages/WorkspacePapersPage";
+import WorkspaceActivityPage from "./pages/WorkspaceActivityPage";
+import WorkspaceSettingsPage from "./pages/WorkspaceSettingsPage";
+import ResearchPlansPage from "./pages/ResearchPlansPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const DiscoverPage = lazy(() => import("./pages/DiscoverPage"));
+
+function LazyPage({ children, label }: { children: ReactNode; label: string }) {
+  return <Suspense fallback={<div className="gm-loading">正在加载{label}…</div>}>{children}</Suspense>;
+}
 
 export default function App() {
   return (
@@ -17,19 +26,19 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/workspaces" element={<WorkspacesPage />} />
-        <Route path="/workspaces/:id" element={<WorkspaceDetailPage />} />
-        <Route
-          path="/workspaces/:id/knowledge"
-          element={<Suspense fallback={<div style={{ padding: 48 }}>Loading knowledge…</div>}><KnowledgePage /></Suspense>}
-        />
-        <Route
-          path="/workspaces/:id/discover"
-          element={<Suspense fallback={<div style={{ padding: 48 }}>Loading Discover…</div>}><DiscoverPage /></Suspense>}
-        />
-        <Route
-          path="/workspaces/:id/knowledge/graph"
-          element={<Suspense fallback={<div style={{ padding: 48 }}>Loading knowledge graph…</div>}><KnowledgePage initialTab="graph" /></Suspense>}
-        />
+        <Route path="/workspaces/:id" element={<WorkspaceLayout />}>
+          <Route index element={<Navigate to="overview" replace />} />
+          <Route path="overview" element={<WorkspaceOverviewPage />} />
+          <Route path="papers" element={<WorkspacePapersPage />} />
+          <Route path="knowledge" element={<LazyPage label="知识"><KnowledgePage /></LazyPage>} />
+          <Route path="knowledge/graph" element={<LazyPage label="知识图谱"><KnowledgePage initialTab="graph" /></LazyPage>} />
+          <Route path="discover" element={<LazyPage label="Discover"><DiscoverPage /></LazyPage>} />
+          <Route path="discover/runs/:runId" element={<LazyPage label="Discover 运行"><DiscoverPage /></LazyPage>} />
+          <Route path="discover/opportunities/:opportunityId" element={<LazyPage label="研究机会"><DiscoverPage /></LazyPage>} />
+          <Route path="plans" element={<ResearchPlansPage />} />
+          <Route path="activity" element={<WorkspaceActivityPage />} />
+          <Route path="settings" element={<WorkspaceSettingsPage />} />
+        </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

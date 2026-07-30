@@ -82,7 +82,7 @@ export default function WorkspacesPage() {
       message.success(`Workspace "${ws.name}" created`);
       setCreateOpen(false);
       form.resetFields();
-      navigate(`/workspaces/${ws.id}`);
+      navigate(`/workspaces/${ws.id}/overview`);
     } catch (err) {
       message.error(`Failed to create workspace: ${(err as Error).message}`);
     } finally {
@@ -192,7 +192,7 @@ export default function WorkspacesPage() {
                 dataIndex: "name",
                 key: "name",
                 render: (name: string, ws) => (
-                  <Link to={`/workspaces/${ws.id}`}>{name}</Link>
+                  <Link to={`/workspaces/${ws.id}/overview`}>{name}</Link>
                 ),
               },
               {

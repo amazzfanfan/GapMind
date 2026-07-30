@@ -1,76 +1,113 @@
-import { Outlet, useLocation } from "react-router-dom";
-import { Layout, Menu, theme } from "antd";
+import { useEffect, useState } from "react";
+import { Button, Layout, Menu, Space, Tag, Tooltip, theme } from "antd";
 import {
+  AppstoreOutlined,
   DashboardOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   ProjectOutlined,
   SearchOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Link } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useAppStore } from "../store/appStore";
+import { selectedGlobalKey } from "./layout/navigation";
 
 const { Header, Sider, Content } = Layout;
 
-const menuItems = [
-  { key: "/", icon: <DashboardOutlined />, label: <Link to="/">Dashboard</Link> },
-  {
-    key: "/search",
-    icon: <SearchOutlined />,
-    label: <Link to="/search">Search</Link>,
-  },
-  {
-    key: "/workspaces",
-    icon: <ProjectOutlined />,
-    label: <Link to="/workspaces">Workspaces</Link>,
-  },
+const globalNavigation = [
+  { key: "/", icon: <DashboardOutlined />, label: "首页" },
+  { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
+  { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
 ];
 
 export default function AppLayout() {
   const location = useLocation();
-  const {
-    token: { colorBgContainer },
-  } = theme.useToken();
+  const navigate = useNavigate();
+  const { token } = theme.useToken();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobile, setMobile] = useState(false);
+  const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
+  const currentWorkspaceName = useAppStore((state) => state.currentWorkspaceName);
 
-  const selectedKey =
-    menuItems.find((m) => m.key === location.pathname)?.key ?? "/";
+  useEffect(() => {
+    if (!mobile) setCollapsed(false);
+  }, [mobile]);
+
+  const items = globalNavigation.map((item) => ({
+    ...item,
+    onClick: () => {
+      navigate(item.key);
+      if (mobile) setCollapsed(true);
+    },
+  }));
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider width={220} style={{ background: colorBgContainer }}>
-        <div
-          style={{
-            height: 56,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 700,
-            fontSize: 18,
-            borderBottom: "1px solid #f0f0f0",
-          }}
-        >
-          GapMind
+    <Layout className="gm-app-layout">
+      <Sider
+        width={232}
+        breakpoint="lg"
+        collapsedWidth={0}
+        collapsed={collapsed}
+        trigger={null}
+        onBreakpoint={setMobile}
+        className="gm-sider"
+        style={{ background: token.colorBgContainer }}
+      >
+        <div className="gm-brand">
+          <div className="gm-brand-mark"><AppstoreOutlined /></div>
+          <div>
+            <strong>GapMind</strong>
+            <span>Research workspace</span>
+          </div>
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
+          selectedKeys={[selectedGlobalKey(location.pathname)]}
+          items={items}
           style={{ borderRight: 0 }}
         />
+        <div className="gm-sider-footer">
+          <Tag color="blue">证据驱动研究</Tag>
+          <TypographyFooter />
+        </div>
       </Sider>
       <Layout>
-        <Header
-          style={{
-            background: colorBgContainer,
-            padding: "0 24px",
-            borderBottom: "1px solid #f0f0f0",
-            fontSize: 14,
-            color: "#666",
-          }}
-        >
-          Evidence-grounded AI Research Workspace
+        <Header className="gm-topbar" style={{ background: token.colorBgContainer }}>
+          <Space size="middle">
+            {mobile && (
+              <Button
+                type="text"
+                aria-label={collapsed ? "打开导航" : "关闭导航"}
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setCollapsed((value) => !value)}
+              />
+            )}
+            <span className="gm-topbar-title">围绕课题推进研究</span>
+          </Space>
+          <Space size="small" wrap>
+            <Tooltip title={currentWorkspaceName || "进入课题空间后查看处理任务"}>
+              <Button
+                type="text"
+                icon={<ThunderboltOutlined />}
+                onClick={() => navigate(currentWorkspaceId ? `/workspaces/${currentWorkspaceId}/activity` : "/workspaces")}
+              >
+                处理中心
+              </Button>
+            </Tooltip>
+            <Button type="text" icon={<ProjectOutlined />} onClick={() => navigate("/workspaces")}>
+              切换课题
+            </Button>
+          </Space>
         </Header>
-        <Content style={{ padding: 24, overflow: "auto" }}>
+        <Content className="gm-content">
           <Outlet />
         </Content>
       </Layout>
     </Layout>
   );
+}
+
+function TypographyFooter() {
+  return <span className="gm-sider-caption">从文献到可验证的研究机会</span>;
 }

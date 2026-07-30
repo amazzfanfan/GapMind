@@ -1,15 +1,10 @@
-import { Typography } from "antd";
 import SemanticPaperSearch from "../components/SemanticPaperSearch";
-
-const { Title, Paragraph } = Typography;
+import PageHeader from "../components/common/PageHeader";
 
 export default function SearchPage() {
   return (
     <div>
-      <Title level={3}>Paper Search</Title>
-      <Paragraph type="secondary">
-        Search Semantic Scholar, review papers, and import open-access research into a workspace.
-      </Paragraph>
+      <PageHeader eyebrow="跨课题检索" title="论文检索" description="在 Semantic Scholar 中搜索论文。全局导入时请选择目标课题；进入具体课题后可直接绑定当前课题。" />
       <SemanticPaperSearch />
     </div>
   );
