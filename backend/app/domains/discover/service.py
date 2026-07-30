@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 from urllib.parse import quote
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -352,7 +352,15 @@ class DiscoverService:
         self._checkpoint(run)
         self._stage(run, "similar_work", 0.34, {"items": len(similar.items), "status": similar.status})
         counter = self._workspace_counter(run, claim, claim_text, config)
-        self._stage(run, "counter_evidence", 0.42, {"counter_evidence": len(counter.items), "status": counter.status})
+        self._stage(
+            run,
+            "counter_evidence",
+            0.42,
+            {
+                **self._counter_summary(counter),
+                "status": counter.status,
+            },
+        )
 
         external = self._external_verify(run, claim_text)
         self._stage(run, "external_search", 0.58, {"external_candidates": external})
@@ -418,16 +426,36 @@ class DiscoverService:
             external_fulltext,
             candidates,
         )
-        run.status = "succeeded"
-        run.stage = "saved"
-        run.progress = 1.0
-        run.verification_status = "complete" if any(gate["verified"] for gate in final_gates) else "incomplete"
-        run.finished_at = datetime.now(timezone.utc)
-        run.stage_summaries = {
-            **(run.stage_summaries or {}),
-            "saved": {"opportunities": len(created), "gates": final_gates},
-        }
+        self._checkpoint(run)
+        finished_at = datetime.now(timezone.utc)
+        verification_status = "complete" if any(gate["verified"] for gate in final_gates) else "incomplete"
+        saved_summary = {"opportunities": len(created), "gates": final_gates}
+        # A cancellation can arrive while synthesis or persistence is running.
+        # Use a conditional UPDATE so a stale worker can never overwrite the
+        # user's cancelled state with succeeded.
+        result = self.db.execute(
+            update(DiscoverRun)
+            .where(DiscoverRun.id == run.id, DiscoverRun.status != "cancelled")
+            .values(
+                status="succeeded",
+                stage="saved",
+                progress=1.0,
+                verification_status=verification_status,
+                finished_at=finished_at,
+                stage_summaries={
+                    **(run.stage_summaries or {}),
+                    "saved": saved_summary,
+                },
+            )
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            cancelled = self.db.get(DiscoverRun, run.id)
+            if cancelled is not None and cancelled.status == "cancelled":
+                return self._cancelled_result(cancelled)
+            raise DiscoverRunCancelled(run.id)
         self.db.commit()
+        self.db.refresh(run)
         if run.task_id:
             try:
                 task_service.transition(run.task_id, "succeeded", progress=1.0, result={"run_id": run.id, "opportunity_ids": [item.id for item in created]})
@@ -456,7 +484,7 @@ class DiscoverService:
     def _stage(self, run: DiscoverRun, stage: str, progress: float, summary: dict[str, Any] | None = None) -> None:
         self.db.refresh(run)
         if self._cancelled(run):
-            return
+            raise DiscoverRunCancelled(run.id)
         run.stage = stage
         run.progress = progress
         run.stage_summaries = {**(run.stage_summaries or {}), stage: summary or {"status": "succeeded"}}
@@ -644,6 +672,44 @@ class DiscoverService:
     ) -> RetrievalResponse:
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
         response = semantic_search(run.workspace_id, text, config.top_k * 3, use_reranker=config.use_reranker)
+        return self._filter_supporting_response(run, response, excluded)
+
+    def _candidate_supporting(
+        self,
+        run: DiscoverRun,
+        claim: KnowledgeItem | None,
+        candidate: dict[str, Any],
+        config: DiscoverConfig,
+    ) -> RetrievalResponse:
+        """Retrieve evidence for the concrete synthesized opportunity.
+
+        The initial topic retrieval is only a context builder. Final Gate
+        evidence must be re-retrieved against the candidate's problem and
+        hypothesis so broad topic matches cannot be promoted to support.
+        """
+        query = " ".join(
+            str(candidate.get(key) or "")
+            for key in (
+                "problem_statement",
+                "candidate_hypothesis",
+                "why_existing_work_is_insufficient",
+            )
+        ).strip()
+        excluded = {claim.paper_id} if claim and claim.paper_id else set()
+        response = semantic_search(
+            run.workspace_id,
+            query[:3000] or (run.input_topic or ""),
+            config.top_k * 3,
+            use_reranker=config.use_reranker,
+        )
+        return self._filter_supporting_response(run, response, excluded)
+
+    def _filter_supporting_response(
+        self,
+        run: DiscoverRun,
+        response: RetrievalResponse,
+        excluded: set[str],
+    ) -> RetrievalResponse:
         if response.status == "failed":
             return response.model_copy(update={"purpose": "supporting_evidence"})
         imported_ids = {
@@ -663,7 +729,12 @@ class DiscoverService:
             if not item.paper_id or item.paper_id in excluded or item.paper_id in seen_papers:
                 continue
             span = self._find_evidence_span(item)
-            if item.evidence_level != "full_text" or span is None or span.relation != "supports":
+            if (
+                item.evidence_level != "full_text"
+                or span is None
+                or span.relation != "supports"
+                or not self._has_valid_evidence_anchor(span, item.text)
+            ):
                 continue
             item.judgement = "supports"
             item.judgement_confidence = max(item.judgement_confidence, span.confidence)
@@ -683,6 +754,26 @@ class DiscoverService:
                 },
             }
         )
+
+    @staticmethod
+    def _counter_summary(response: RetrievalResponse) -> dict[str, Any]:
+        judgements = [item.judgement for item in response.items]
+        found = [value for value in judgements if value in {"contradicts", "qualifies"}]
+        if response.status == "failed":
+            outcome = "retrieval_failed"
+        elif response.status == "degraded":
+            outcome = "judge_degraded_or_failed"
+        elif found:
+            outcome = "found"
+        else:
+            outcome = "searched_no_counter_evidence"
+        return {
+            "outcome": outcome,
+            "found": len(found),
+            "contradicts": judgements.count("contradicts"),
+            "qualifies": judgements.count("qualifies"),
+            "items": len(response.items),
+        }
 
     def _external_fulltext(self, run: DiscoverRun, supporting: RetrievalResponse) -> RetrievalResponse:
         items = [item for item in supporting.items if item.source_scope == "external"]
@@ -710,7 +801,11 @@ class DiscoverService:
             if item.paper_id in seen_papers or item.evidence_level != "full_text":
                 continue
             span = self._find_evidence_span(item)
-            if span is None or span.relation != "supports" or not span.artifact_id:
+            if (
+                span is None
+                or span.relation != "supports"
+                or not self._has_valid_evidence_anchor(span, item.text)
+            ):
                 continue
             if item.judgement != "supports":
                 continue
@@ -719,10 +814,13 @@ class DiscoverService:
 
         external_summary = (run.stage_summaries or {}).get("external_search") or {}
         external_executed = external_summary.get("status") in {"succeeded", "succeeded_empty"}
-        counter_checked = counter.status in {"succeeded", "degraded"}
+        supporting_checked = supporting.status == "succeeded"
+        counter_checked = counter.status == "succeeded"
         reasons: list[str] = []
         if len(seen_papers) < 2:
             reasons.append("requires two independent full-text supporting papers")
+        if not supporting_checked:
+            reasons.append(f"supporting evidence retrieval status is {supporting.status}")
         if not counter_checked:
             reasons.append(f"counter evidence status is {counter.status}")
         if not external_executed:
@@ -735,6 +833,7 @@ class DiscoverService:
             "verified": verified,
             "independent_full_text_papers": len(seen_papers),
             "supporting_evidence_count": len(valid),
+            "supporting_status": supporting.status,
             "counter_checked": counter_checked,
             "counter_status": counter.status,
             "external_search_executed": external_executed,
@@ -751,8 +850,7 @@ class DiscoverService:
             str(candidate.get(key) or "")
             for key in ("problem_statement", "candidate_hypothesis", "why_existing_work_is_insufficient")
         )
-        relevant = [item for item in items if self._text_relevant(fields, item.text)]
-        return relevant or items
+        return [item for item in items if self._text_relevant(fields, item.text)]
 
     @staticmethod
     def _text_relevant(candidate_text: str, evidence_text: str) -> bool:
@@ -773,6 +871,26 @@ class DiscoverService:
         covered = sum(any(self._text_relevant(field, item.text) for item in items) for field in fields)
         papers = len({item.paper_id for item in items if item.paper_id})
         return round(min(1.0, (covered / len(fields)) * 0.7 + min(papers / 2, 1.0) * 0.3), 3)
+
+    def _has_valid_evidence_anchor(self, span: EvidenceSpan, evidence_text: str | None = None) -> bool:
+        if not span.artifact_id or span.start_char is None or span.end_char is None:
+            return False
+        if span.end_char <= span.start_char:
+            return False
+        artifact = self.db.get(Artifact, span.artifact_id)
+        if artifact is None or artifact.is_deleted:
+            return False
+        if not evidence_text or not span.text:
+            return True
+        normalize = lambda value: " ".join(value.lower().split())
+        span_text = normalize(span.text)
+        item_text = normalize(evidence_text)
+        if span_text in item_text or item_text in span_text:
+            return True
+        span_tokens = set(re.findall(r"[a-zA-Z0-9]{4,}", span_text))
+        item_tokens = set(re.findall(r"[a-zA-Z0-9]{4,}", item_text))
+        overlap = len(span_tokens & item_tokens)
+        return overlap >= 3 and overlap / max(1, len(span_tokens)) >= 0.5
 
     # ---------------------------------------------------------- synthesis
     def _synthesize_candidates(
@@ -889,20 +1007,23 @@ class DiscoverService:
         final_gates: list[dict[str, Any]] = []
         external_rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalars())
         for index, candidate in enumerate(candidates):
-            candidate_support = self._supporting_for_candidate(candidate, supporting.items)
-            candidate_supporting = supporting.model_copy(update={"items": candidate_support, "total": len(candidate_support)})
+            # Re-run supporting retrieval for each concrete proposal. The
+            # pre-synthesis topic retrieval remains context only.
+            config = DiscoverConfig.model_validate(run.config or {})
+            candidate_supporting = self._candidate_supporting(run, claim, candidate, config)
             gate = self._evidence_gate(run, candidate=candidate, supporting=candidate_supporting, counter=counter)
             candidate["evidence_coverage"] = gate["evidence_coverage"]
             candidate["verification_status"] = "verified" if gate["verified"] else "verification_incomplete"
             if not gate["verified"]:
                 candidate["confidence"] = min(float(candidate.get("confidence", 0.0)), 0.49)
             final_gates.append(gate)
+            candidate_external_fulltext = self._external_fulltext(run, candidate_supporting)
             opportunity = ResearchOpportunity(
                 id=str(uuid4()), workspace_id=run.workspace_id, claim_item_id=claim.id if claim else None, discover_run_id=run.id,
                 title=candidate["title"], summary=candidate["problem_statement"], rationale=candidate["why_existing_work_is_insufficient"],
                 suggested_directions=list((candidate.get("candidate_validation_plan") or {}).get("steps", []))[:8], confidence=candidate["confidence"],
                 status="candidate" if gate["verified"] else "needs_more_evidence",
-                source_payload={"claim_text": claim_text, "gate": gate, "candidate_index": index, "synthesis_provider": candidate["provider"], "supporting_evidence": candidate_supporting.model_dump(mode="json"), "external_full_text": external_fulltext.model_dump(mode="json"), "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json")},
+                source_payload={"claim_text": claim_text, "gate": gate, "candidate_index": index, "synthesis_provider": candidate["provider"], "supporting_evidence": candidate_supporting.model_dump(mode="json"), "external_full_text": candidate_external_fulltext.model_dump(mode="json"), "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json")},
                 is_deleted=False,
             )
             self.db.add(opportunity)

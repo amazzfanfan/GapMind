@@ -34,8 +34,22 @@ def run_discover_task(self, run_id: str) -> dict:
                 except Exception:
                     pass
         return {"run_id": run_id, "status": "cancelled"}
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        # Do not leave a durable run in `running` when a worker exception is
+        # not one of the explicitly handled, degraded pipeline outcomes.
+        # The run remains retryable through its existing user-facing retry
+        # path, while the original exception is still re-raised for Celery.
+        run = db.get(DiscoverRun, run_id)
+        if run is not None and run.status not in {"succeeded", "cancelled", "failed"}:
+            try:
+                DiscoverService(db)._fail_run(
+                    run,
+                    "discover_worker_failed",
+                    str(exc)[:4000],
+                )
+            except Exception:
+                db.rollback()
         raise
     finally:
         db.close()

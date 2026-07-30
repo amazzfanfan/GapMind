@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   App,
   Button,
   Card,
@@ -64,6 +65,17 @@ function verificationActionLabel(status: string): string {
 
 function verificationActionDisabled(status: string): boolean {
   return ["selected", "imported_pending_parse", "verified"].includes(status);
+}
+
+function gateDetails(sourcePayload: Record<string, unknown>): { verified: boolean; missing: string[]; reason?: string } | null {
+  const value = sourcePayload.gate;
+  if (!value || typeof value !== "object") return null;
+  const gate = value as { verified?: unknown; missing?: unknown; reason?: unknown };
+  return {
+    verified: gate.verified === true,
+    missing: Array.isArray(gate.missing) ? gate.missing.filter((item): item is string => typeof item === "string") : [],
+    reason: typeof gate.reason === "string" ? gate.reason : undefined,
+  };
 }
 
 export default function DiscoverPage() {
@@ -305,11 +317,13 @@ function AlertText({ text }: { text: string }) {
 
 function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onConvert }: { workspaceId: string; detail: OpportunityDetail; loading: boolean; onAction: (action: "confirm" | "reject" | "defer") => void; onEdit: () => void; onConvert: () => void }) {
   const version = detail.current_version;
+  const gate = gateDetails(detail.opportunity.source_payload);
   const supporting = detail.evidence.filter((item) => item.relation === "supports");
   const similar = detail.evidence.filter((item) => item.relation === "similar");
   const counter = detail.evidence.filter((item) => ["contradicts", "qualifies", "overlaps", "unknown"].includes(item.relation));
   return <Space direction="vertical" style={{ width: "100%" }}>
     <Space wrap><Tag color={statusColor(detail.opportunity.status)}>{detail.opportunity.status}</Tag><Tag>{version?.verification_status || "unverified"}</Tag><Tag>Coverage {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>Agent confidence {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
+    {detail.opportunity.status === "needs_more_evidence" && <Alert type="warning" showIcon message="This opportunity cannot be confirmed yet" description={gate?.missing.length ? <List size="small" dataSource={gate.missing} renderItem={(item) => <List.Item>{item}</List.Item>} /> : gate?.reason || "The final Evidence Gate has not been satisfied."} />}
     <Divider orientation="left">Overview</Divider><Paragraph>{version?.problem_statement || detail.opportunity.summary}</Paragraph>
     <Descriptions column={1} size="small"><Descriptions.Item label="Scope">{version?.research_scope || "—"}</Descriptions.Item><Descriptions.Item label="Why existing work is insufficient">{version?.why_existing_work_is_insufficient || detail.opportunity.rationale}</Descriptions.Item><Descriptions.Item label="Research question">{version?.candidate_research_question || "—"}</Descriptions.Item><Descriptions.Item label="Hypothesis">{version?.candidate_hypothesis || "—"}</Descriptions.Item></Descriptions>
     <EvidenceGroup workspaceId={workspaceId} title={`Supporting evidence (${supporting.length})`} items={supporting} empty="No span-backed supporting evidence" />

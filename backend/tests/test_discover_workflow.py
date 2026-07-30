@@ -2,9 +2,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch
 
+import pytest
+
 from app.domains.artifact.models import Artifact
 from app.domains.discover.models import DiscoverExternalCandidate, DiscoverRun
-from app.domains.discover.service import DiscoverService, resume_discover_runs_for_paper
+from app.domains.discover.service import DiscoverRunCancelled, DiscoverService, resume_discover_runs_for_paper
 from app.domains.knowledge.models import EvidenceSpan, KnowledgeItem
 from app.domains.paper.models import Paper
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
@@ -113,6 +115,63 @@ def test_two_span_backed_supports_papers_pass_gate(db_session) -> None:
     assert gate["verified"] is True
     assert gate["independent_full_text_papers"] == 2
     assert gate["evidence_coverage"] >= 0.6
+
+
+def test_candidate_relevance_does_not_fall_back_to_broad_topic_results(db_session) -> None:
+    service = DiscoverService(db_session)
+    items = [
+        _supporting_item(str(uuid4()), str(uuid4()), "unrelated optimization benchmark", "c1"),
+    ]
+    candidate = {
+        "problem_statement": "graph shift robustness",
+        "candidate_hypothesis": "robustness improves under distribution shift",
+        "why_existing_work_is_insufficient": "the boundary condition is unknown",
+    }
+    assert service._supporting_for_candidate(candidate, items) == []
+
+
+def test_counter_evidence_outcomes_remain_distinguishable(db_session) -> None:
+    service = DiscoverService(db_session)
+    empty = RetrievalResponse(workspace_id="w", purpose="counter_evidence", status="succeeded")
+    degraded = RetrievalResponse(workspace_id="w", purpose="counter_evidence", status="degraded")
+    failed = RetrievalResponse(workspace_id="w", purpose="counter_evidence", status="failed")
+    assert service._counter_summary(empty)["outcome"] == "searched_no_counter_evidence"
+    assert service._counter_summary(degraded)["outcome"] == "judge_degraded_or_failed"
+    assert service._counter_summary(failed)["outcome"] == "retrieval_failed"
+
+
+def test_degraded_counter_evidence_cannot_pass_final_gate(db_session) -> None:
+    workspace_id = str(uuid4())
+    workspace = Workspace(id=workspace_id, name="Gate workspace", is_archived=False)
+    db_session.add(workspace)
+    db_session.flush()
+    retrieval = []
+    for index in range(2):
+        paper_id = str(uuid4())
+        artifact_id = str(uuid4())
+        paper = Paper(id=paper_id, workspace_id=workspace_id, title=f"Paper {index}", authors=[], source="manual", is_deleted=False)
+        artifact = Artifact(id=artifact_id, workspace_id=workspace_id, kind="parsed_markdown", file_path=f"paper-{index}.md", size_bytes=1, is_deleted=False)
+        item = KnowledgeItem(id=str(uuid4()), workspace_id=workspace_id, paper_id=paper_id, type="claim", canonical_name="claim", content={}, source_provenance={}, created_by="agent", is_deleted=False)
+        db_session.add_all([paper, artifact, item])
+        db_session.flush()
+        db_session.add(EvidenceSpan(id=str(uuid4()), workspace_id=workspace_id, knowledge_item_id=item.id, paper_id=paper_id, artifact_id=artifact_id, relation="supports", text="robust graph learning behavior under shift", start_char=0, end_char=44, confidence=0.9))
+        retrieval.append(_supporting_item(paper_id, artifact_id, "robust graph learning behavior under shift", f"chunk-{index}"))
+    db_session.commit()
+    service = DiscoverService(db_session)
+    counter = RetrievalResponse(workspace_id=workspace_id, purpose="counter_evidence", status="degraded")
+    gate = service._evidence_gate(_run(workspace_id), candidate=_candidate(), supporting=_supporting_response(retrieval), counter=counter)
+    assert gate["verified"] is False
+    assert "counter evidence status is degraded" in gate["missing"]
+
+
+def test_stage_stops_when_run_was_cancelled(db_session) -> None:
+    workspace_id = str(uuid4())
+    workspace = Workspace(id=workspace_id, name="Cancelled workspace", is_archived=False)
+    run = DiscoverRun(id=str(uuid4()), workspace_id=workspace_id, input_topic="topic", input_payload={}, scope={}, config={}, status="cancelled", stage="cancelled", progress=0.4, verification_status="incomplete", stage_summaries={})
+    db_session.add_all([workspace, run])
+    db_session.commit()
+    with pytest.raises(DiscoverRunCancelled):
+        DiscoverService(db_session)._stage(run, "synthesis", 0.8)
 
 
 def test_fulltext_pipeline_resumes_waiting_run_once_and_marks_candidate_verified(db_session) -> None:
