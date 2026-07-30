@@ -907,6 +907,18 @@ def _write_extraction(
             )
         )
         span_ids.add(span.id)
+        if canonical_entity_id:
+            ks.upsert_paper_mention(
+                workspace_id=paper.workspace_id,
+                paper_id=paper.id,
+                canonical_entity_id=canonical_entity_id,
+                knowledge_item_id=ki.id,
+                mention_text=evidence_text,
+                artifact_id=paper.parsed_markdown_artifact_id,
+                start_char=sp["start_char"],
+                end_char=sp["end_char"],
+                confidence=item["confidence"],
+            )
 
     # Create relations
     relation_ids: set[str] = set()

@@ -9,6 +9,7 @@ context of a Paper (or later, a Task result).
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
@@ -79,3 +80,31 @@ def get_artifact(
     if a.workspace_id != workspace_id:
         raise _not_found(ArtifactNotFoundError(artifact_id))
     return ArtifactRead.model_validate(a)
+
+
+@router.get("/workspaces/{workspace_id}/artifacts/{artifact_id}/download")
+def download_artifact(
+    workspace_id: str,
+    artifact_id: str,
+    artifact_service: ArtifactService = Depends(_get_artifact_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> FileResponse:
+    """Download an artifact, including parsed_markdown source files."""
+    try:
+        workspace_service.get(workspace_id)
+        artifact = artifact_service.get(artifact_id)
+    except (WorkspaceNotFoundError, ArtifactNotFoundError) as exc:
+        raise _not_found(exc) from exc
+    if artifact.workspace_id != workspace_id:
+        raise _not_found(ArtifactNotFoundError(artifact_id))
+    path = artifact_service.resolve_abs_path(artifact)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "artifact_file_missing", "message": "Artifact file is missing on disk"},
+        )
+    return FileResponse(
+        path,
+        media_type=artifact.mime_type or "application/octet-stream",
+        filename=artifact.original_filename or path.name,
+    )

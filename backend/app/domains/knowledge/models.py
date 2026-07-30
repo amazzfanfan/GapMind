@@ -86,6 +86,54 @@ class CanonicalEntity(Base, UUIDPKMixin, TimestampMixin):
     )
 
 
+class PaperMention(Base, UUIDPKMixin, TimestampMixin):
+    """A paper-local mention that resolves to a canonical entity.
+
+    Mentions preserve the evidence location used to link a paper to the
+    workspace-level entity. They are intentionally separate from
+    ``KnowledgeItem`` so one paper can mention the same entity many times.
+    """
+
+    __tablename__ = "paper_mentions"
+    __table_args__ = (
+        UniqueConstraint(
+            "paper_id",
+            "canonical_entity_id",
+            "start_char",
+            "end_char",
+            name="uq_paper_mention_span",
+        ),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    paper_id: Mapped[str] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    canonical_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_entities.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    knowledge_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    mention_text: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
+    )
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), default="extracted_candidate", nullable=False, index=True
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+
+
 class ExtractionRun(Base, UUIDPKMixin, TimestampMixin):
     """One versioned extraction attempt for one immutable source artifact."""
 
@@ -213,6 +261,11 @@ class KnowledgeItem(Base, UUIDPKMixin, TimestampMixin):
         String(32), default="extracted_candidate", nullable=False, index=True
     )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, index=True
     )

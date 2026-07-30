@@ -18,6 +18,7 @@ from app.domains.knowledge.models import (  # noqa: F401
     ExtractionRun,
     KnowledgeItem,
     KnowledgeRelation,
+    PaperMention,
 )
 from app.domains.paper.models import Paper  # noqa: F401
 from app.domains.paper.search_models import (  # noqa: F401
@@ -26,5 +27,14 @@ from app.domains.paper.search_models import (  # noqa: F401
 )
 from app.domains.task.models import Task  # noqa: F401
 from app.domains.timeline.models import TimelineEvent  # noqa: F401
+from app.domains.discover.models import (  # noqa: F401
+    DiscoverExternalCandidate,
+    DiscoverRun,
+    HumanDecision,
+    OpportunityEvidence,
+    OpportunityVersion,
+    ResearchOpportunity,
+    ResearchPlan,
+)
 
 from app.db.base import Base  # noqa: F401

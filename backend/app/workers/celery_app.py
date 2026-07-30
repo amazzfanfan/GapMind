@@ -32,6 +32,7 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
+    broker_connection_retry_on_startup=True,
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
@@ -44,6 +45,7 @@ celery_app.conf.update(
         "app.workers.tasks.parse_pdf",
         "app.workers.tasks.extract_knowledge",
         "app.workers.tasks.embed_chunks",
+        "app.workers.tasks.run_discover",
     ],
 )
 

@@ -90,6 +90,7 @@ volumes/
 
 # ---- Misc tool caches ----
 .cache/
+.npm-cache/
 
 # ---- Temporary files ----
 # User-side temp dirs for test PDFs, scratch data, etc.

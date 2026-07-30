@@ -18,7 +18,7 @@ from app.domains.paper.models import Paper
 from app.domains.retrieval.service import index_paper_chunks
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
-from app.domains.task.service import TaskService
+from app.domains.task.service import TaskNotFoundError, TaskService
 from app.domains.timeline.service import TimelineService
 from app.workers.celery_app import celery_app
 
@@ -35,7 +35,20 @@ def embed_chunks_task(self, task_id: str) -> dict:
     configure_logging()
     db: Session = SessionLocal()
     try:
-        result = _run_embed(db, task_id)
+        try:
+            result = _run_embed(db, task_id)
+        except TaskNotFoundError:
+            # The broker may contain a stale message after the corresponding
+            # database task has been removed or the database has been reset.
+            logger.warning(
+                "embed_chunks.orphaned_task",
+                task_id=task_id,
+            )
+            return {
+                "status": "discarded",
+                "error": f"task not found: {task_id}",
+            }
+
         if result.get("status") == "failed":
             raise RuntimeError(result.get("error") or "embed_chunks failed")
         return result

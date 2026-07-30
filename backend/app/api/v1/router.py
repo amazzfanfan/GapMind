@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from app.api.v1.health import router as health_router
 from app.domains.artifact.router import router as artifact_router
 from app.domains.knowledge.router import router as knowledge_router
+from app.domains.discover.router import router as discover_router
 from app.domains.paper.router import router as paper_router
 from app.domains.retrieval.router import router as retrieval_router
 from app.domains.task.router import router as task_router
@@ -25,3 +26,4 @@ api_router.include_router(task_router)
 api_router.include_router(timeline_router)
 api_router.include_router(knowledge_router)
 api_router.include_router(retrieval_router)
+api_router.include_router(discover_router)
