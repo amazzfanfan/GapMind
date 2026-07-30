@@ -200,6 +200,19 @@ class OpportunityEvidenceRead(BaseModel):
     updated_at: datetime
 
 
+class OpportunityEvidenceContext(BaseModel):
+    evidence: OpportunityEvidenceRead
+    available: bool
+    paper_id: str | None = None
+    artifact_id: str | None = None
+    artifact_kind: str | None = None
+    filename: str | None = None
+    content: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    message: str | None = None
+
+
 class HumanDecisionRead(BaseModel):
     model_config = {"from_attributes": True}
 

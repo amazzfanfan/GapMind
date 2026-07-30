@@ -140,6 +140,19 @@ export interface OpportunityEvidence {
   updated_at: string;
 }
 
+export interface OpportunityEvidenceContext {
+  evidence: OpportunityEvidence;
+  available: boolean;
+  paper_id: string | null;
+  artifact_id: string | null;
+  artifact_kind: string | null;
+  filename: string | null;
+  content: string | null;
+  start_char: number | null;
+  end_char: number | null;
+  message: string | null;
+}
+
 export interface HumanDecision {
   id: string;
   opportunity_id: string;
@@ -193,7 +206,7 @@ export const discoverApi = {
   async createRun(workspaceId: string, payload: {
     input: { topic?: string; claim_item_id?: string; paper_ids?: string[]; keywords?: string[]; constraints?: string };
     scope?: { year_from?: number; year_to?: number; open_access_preferred?: boolean };
-    config?: { max_opportunities?: number; top_k?: number; include_counter_evidence?: boolean };
+    config?: { max_opportunities?: number; top_k?: number; include_counter_evidence?: boolean; use_reranker?: boolean; use_judge?: boolean };
   }): Promise<{ run_id: string; task_id: string | null; status: string }> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/runs`, payload)).data;
   },
@@ -214,6 +227,9 @@ export const discoverApi = {
   },
   async getOpportunity(workspaceId: string, opportunityId: string): Promise<OpportunityDetail> {
     return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}`)).data;
+  },
+  async getEvidenceContext(workspaceId: string, evidenceId: string): Promise<OpportunityEvidenceContext> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/discover/evidence/${evidenceId}/context`)).data;
   },
   async confirm(workspaceId: string, opportunityId: string, versionId?: string, note?: string): Promise<ResearchOpportunity> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}/confirm`, { version_id: versionId, note })).data;

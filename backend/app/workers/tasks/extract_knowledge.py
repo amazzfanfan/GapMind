@@ -234,12 +234,19 @@ def _run_extract(db: Session, task_id: str) -> dict:
             "extraction_run_id": run.id,
             **_rejection_counts(db, run.id),
         }
-        return _fail(
+        failure = _fail(
             task_service,
             task_id,
             str(exc),
             result=failure_result,
         )
+        try:
+            from app.domains.discover.service import resume_discover_runs_for_paper
+
+            resume_discover_runs_for_paper(db, paper_id, paper.workspace_id)
+        except Exception as notify_error:
+            logger.warning("extract_knowledge.discover_notify_failed", paper_id=paper_id, error=str(notify_error))
+        return failure
 
     result = {
         "knowledge_items": items_count,
@@ -249,6 +256,13 @@ def _run_extract(db: Session, task_id: str) -> dict:
     }
     result.update(_rejection_counts(db, run.id))
     task_service.transition(task_id, "succeeded", progress=1.0, result=result)
+
+    try:
+        from app.domains.discover.service import resume_discover_runs_for_paper
+
+        resume_discover_runs_for_paper(db, paper.id, paper.workspace_id)
+    except Exception as exc:
+        logger.warning("extract_knowledge.discover_notify_failed", paper_id=paper.id, error=str(exc))
 
     TimelineService(db).record(
         workspace_id=paper.workspace_id,

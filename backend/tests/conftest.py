@@ -86,8 +86,12 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
             "app.workers.tasks.extract_knowledge.spawn_extract_knowledge",
             return_value="test-extraction-task",
         ):
-            with TestClient(app) as c:
-                yield c
+            with patch(
+                "app.workers.tasks.embed_chunks.spawn_embed_chunks",
+                return_value="test-embed-task",
+            ):
+                with TestClient(app) as c:
+                    yield c
 
     app.dependency_overrides.clear()
 

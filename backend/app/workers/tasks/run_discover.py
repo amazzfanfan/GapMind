@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from app.db.session import SessionLocal
-from app.domains.discover.service import DiscoverService
+from app.domains.discover.models import DiscoverRun
+from app.domains.discover.service import DiscoverRunCancelled, DiscoverService
+from app.domains.task.service import TaskService
 from app.workers.celery_app import celery_app
 
 
@@ -19,6 +21,19 @@ def run_discover_task(self, run_id: str) -> dict:
     db = SessionLocal()
     try:
         return DiscoverService(db).execute_run(run_id)
+    except DiscoverRunCancelled:
+        db.rollback()
+        run = db.get(DiscoverRun, run_id)
+        if run is not None:
+            run.status = "cancelled"
+            run.stage = "cancelled"
+            db.commit()
+            if run.task_id:
+                try:
+                    TaskService(db).transition(run.task_id, "cancelled", progress=run.progress)
+                except Exception:
+                    pass
+        return {"run_id": run_id, "status": "cancelled"}
     except Exception:
         db.rollback()
         raise
