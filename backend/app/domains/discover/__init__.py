@@ -1,0 +1,1 @@
+"""Research opportunity discovery domain."""

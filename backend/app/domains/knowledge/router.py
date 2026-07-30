@@ -16,10 +16,15 @@ from app.core.deps import get_db
 from app.domains.knowledge.schemas import (
     EvidenceSpanListResponse,
     EvidenceSpanRead,
+    EvidenceContextRead,
     ExtractionRejectionListResponse,
     ExtractionRejectionRead,
+    KnowledgeGraphEdgeRead,
+    KnowledgeGraphNodeRead,
+    KnowledgeGraphResponse,
     KnowledgeItemListResponse,
     KnowledgeItemRead,
+    KnowledgeItemReview,
     KnowledgeRelationListResponse,
     KnowledgeRelationRead,
 )
@@ -103,6 +108,9 @@ def list_knowledge(
     workspace_id: str,
     type: str | None = Query(None),  # noqa: A002  (shadowing builtin is fine in query)
     status: str | None = Query(None, alias="status"),
+    paper_id: str | None = Query(None),
+    q: str | None = Query(None, max_length=255),
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     service: KnowledgeService = Depends(_get_knowledge_service),
@@ -116,6 +124,9 @@ def list_knowledge(
         workspace_id=workspace_id,
         type_filter=type,
         status_filter=status,
+        paper_id=paper_id,
+        query_text=q,
+        min_confidence=min_confidence,
         limit=limit,
         offset=offset,
     )
@@ -163,6 +174,89 @@ def list_relations(
 
 
 @router.get(
+    "/workspaces/{workspace_id}/knowledge/graph",
+    response_model=KnowledgeGraphResponse,
+    response_model_exclude_unset=True,
+)
+def get_knowledge_graph(
+    workspace_id: str,
+    type: str | None = Query(None),  # noqa: A002
+    paper_id: str | None = Query(None),
+    q: str | None = Query(None, max_length=255),
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    relation_type: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> KnowledgeGraphResponse:
+    """Return a self-contained, workspace-scoped graph projection."""
+    try:
+        workspace_service.get(workspace_id)
+    except WorkspaceNotFoundError as e:
+        raise _not_found(e) from e
+
+    nodes, edges, total_nodes, total_edges, truncated = service.graph_projection(
+        workspace_id=workspace_id,
+        type_filter=type,
+        paper_id=paper_id,
+        query_text=q,
+        min_confidence=min_confidence,
+        relation_type=relation_type,
+        limit=limit,
+        offset=offset,
+    )
+    return KnowledgeGraphResponse(
+        workspace_id=workspace_id,
+        nodes=nodes,
+        edges=edges,
+        total_nodes=total_nodes,
+        total_edges=total_edges,
+        truncated=truncated,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/knowledge/graph/neighbors/{node_id}",
+    response_model=KnowledgeGraphResponse,
+    response_model_exclude_unset=True,
+)
+def get_knowledge_graph_neighbors(
+    workspace_id: str,
+    node_id: str,
+    depth: int = Query(1, ge=1, le=2),
+    limit: int = Query(100, ge=1, le=200),
+    relation_type: str | None = Query(None),
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> KnowledgeGraphResponse:
+    try:
+        workspace_service.get(workspace_id)
+        nodes, edges = service.graph_neighbors(
+            workspace_id=workspace_id,
+            node_id=node_id,
+            depth=depth,
+            limit=limit,
+            relation_type=relation_type,
+        )
+    except WorkspaceNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except KnowledgeItemNotFoundError as exc:
+        raise _not_found(exc) from exc
+    return KnowledgeGraphResponse(
+        workspace_id=workspace_id,
+        nodes=nodes,
+        edges=edges,
+        total_nodes=len(nodes),
+        total_edges=len(edges),
+        limit=limit,
+        offset=0,
+    )
+
+
+@router.get(
     "/workspaces/{workspace_id}/knowledge/{item_id}",
     response_model=KnowledgeItemRead,
     response_model_exclude_unset=True,
@@ -183,6 +277,35 @@ def get_knowledge_item(
         raise _not_found(e) from e
     if item.workspace_id != workspace_id:
         raise _not_found(KnowledgeItemNotFoundError(item_id))
+    return KnowledgeItemRead.model_validate(item)
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/knowledge/{item_id}/review",
+    response_model=KnowledgeItemRead,
+    response_model_exclude_unset=True,
+)
+def review_knowledge_item(
+    workspace_id: str,
+    item_id: str,
+    payload: KnowledgeItemReview,
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> KnowledgeItemRead:
+    try:
+        workspace_service.get(workspace_id)
+        item = service.review_item(
+            workspace_id=workspace_id, item_id=item_id, payload=payload
+        )
+    except WorkspaceNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except KnowledgeItemNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_review", "message": str(exc)},
+        ) from exc
     return KnowledgeItemRead.model_validate(item)
 
 
@@ -211,4 +334,71 @@ def list_evidence(
     return EvidenceSpanListResponse(
         items=[EvidenceSpanRead.model_validate(s) for s in spans],
         total=len(spans),
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/knowledge/{item_id}/evidence/context",
+    response_model=EvidenceContextRead,
+)
+def get_evidence_context(
+    workspace_id: str,
+    item_id: str,
+    db: Session = Depends(get_db),
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> EvidenceContextRead:
+    from app.domains.artifact.models import Artifact
+    from app.domains.artifact.service import ArtifactService
+    from app.domains.paper.models import Paper
+
+    try:
+        workspace_service.get(workspace_id)
+        item = service.get_item(item_id)
+    except (WorkspaceNotFoundError, KnowledgeItemNotFoundError) as exc:
+        raise _not_found(exc) from exc
+    if item.workspace_id != workspace_id:
+        raise _not_found(KnowledgeItemNotFoundError(item_id))
+
+    spans = service.list_evidence_for_item(item_id)
+    artifact_id = next((span.artifact_id for span in spans if span.artifact_id), None)
+    paper_id = next((span.paper_id for span in spans if span.paper_id), None) or item.paper_id
+    if artifact_id is None and paper_id:
+        paper = db.get(Paper, paper_id)
+        artifact_id = paper.parsed_markdown_artifact_id if paper else None
+    if not artifact_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "evidence_source_not_found",
+                "message": "No parsed markdown artifact is linked to this item",
+            },
+        )
+    artifact = db.get(Artifact, artifact_id)
+    if artifact is None or artifact.is_deleted or artifact.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "evidence_source_not_found", "message": "Evidence artifact not found"},
+        )
+    path = ArtifactService(db).resolve_abs_path(artifact)
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "evidence_source_missing", "message": "Evidence artifact is missing on disk"},
+        )
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "evidence_source_read_failed", "message": str(exc)},
+        ) from exc
+    return EvidenceContextRead(
+        workspace_id=workspace_id,
+        paper_id=paper_id or "",
+        artifact_id=artifact.id,
+        artifact_kind=artifact.kind,
+        filename=artifact.original_filename,
+        content=content,
+        spans=[EvidenceSpanRead.model_validate(span) for span in spans],
     )

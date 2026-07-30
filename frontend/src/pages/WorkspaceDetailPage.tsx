@@ -12,7 +12,13 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { ArrowLeftOutlined, EditOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  ApartmentOutlined,
+  ArrowLeftOutlined,
+  BulbOutlined,
+  EditOutlined,
+  ReloadOutlined,
+} from "@ant-design/icons";
 import { Link, useParams } from "react-router-dom";
 import workspaceApi from "../api/workspace";
 import paperApi from "../api/paper";
@@ -214,6 +220,12 @@ export default function WorkspaceDetailPage() {
         >
           Edit
         </Button>
+        <Link to={`/workspaces/${workspace.id}/knowledge`}>
+          <Button icon={<ApartmentOutlined />}>Knowledge</Button>
+        </Link>
+        <Link to={`/workspaces/${workspace.id}/discover`}>
+          <Button icon={<BulbOutlined />}>Discover</Button>
+        </Link>
         <Button icon={<ReloadOutlined />} onClick={loadAll}>
           Refresh
         </Button>

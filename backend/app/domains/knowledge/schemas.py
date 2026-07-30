@@ -48,6 +48,9 @@ class KnowledgeItemRead(BaseModel):
     confidence: float
     status: KnowledgeStatus
     version: int
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    review_note: str | None = None
     is_deleted: bool = False
     created_at: datetime
     updated_at: datetime
@@ -86,6 +89,49 @@ class KnowledgeRelationListResponse(BaseModel):
     offset: int
 
 
+class KnowledgeGraphNodeRead(BaseModel):
+    """A knowledge item projected as a graph node."""
+
+    id: str
+    label: str
+    type: str
+    workspace_id: str
+    paper_id: str | None = None
+    canonical_entity_id: str | None = None
+    confidence: float
+    status: str
+    content: dict[str, Any] = Field(default_factory=dict)
+    node_kind: str = "knowledge"
+    paper_title: str | None = None
+    entity_type: str | None = None
+    mention_text: str | None = None
+    knowledge_item_id: str | None = None
+
+
+class KnowledgeGraphEdgeRead(BaseModel):
+    """A relation projected as a graph edge."""
+
+    id: str
+    source: str
+    target: str
+    relation_type: str
+    confidence: float
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeGraphResponse(BaseModel):
+    """Workspace-scoped graph projection for the Knowledge UI."""
+
+    workspace_id: str
+    nodes: list[KnowledgeGraphNodeRead] = Field(default_factory=list)
+    edges: list[KnowledgeGraphEdgeRead] = Field(default_factory=list)
+    total_nodes: int = 0
+    total_edges: int = 0
+    truncated: bool = False
+    limit: int = 0
+    offset: int = 0
+
+
 class EvidenceSpanRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -111,6 +157,18 @@ class EvidenceSpanListResponse(BaseModel):
 
     items: list[EvidenceSpanRead]
     total: int
+
+
+class EvidenceContextRead(BaseModel):
+    """Parsed-markdown source plus the spans to highlight in the UI."""
+
+    workspace_id: str
+    paper_id: str
+    artifact_id: str
+    artifact_kind: str
+    filename: str | None = None
+    content: str
+    spans: list[EvidenceSpanRead] = Field(default_factory=list)
 
 
 class ExtractionRejectionRead(BaseModel):
@@ -174,6 +232,34 @@ class KnowledgeItemCreate(BaseModel):
     created_by: CreatedBy = "agent"
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     status: KnowledgeStatus = "extracted_candidate"
+
+
+class KnowledgeItemReview(BaseModel):
+    """Human-in-the-loop review action for one Knowledge Item."""
+
+    action: Literal["confirm", "edit", "reject"]
+    canonical_name: str | None = Field(default=None, min_length=1, max_length=512)
+    content: dict[str, Any] | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    note: str | None = Field(default=None, max_length=4000)
+
+
+class PaperMentionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    paper_id: str
+    canonical_entity_id: str
+    knowledge_item_id: str | None = None
+    mention_text: str
+    artifact_id: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
+    confidence: float
+    status: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class KnowledgeRelationCreate(BaseModel):

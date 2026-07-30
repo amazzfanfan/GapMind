@@ -247,6 +247,7 @@ def find_similar_work(
     top_k: int = 10,
     *,
     use_reranker: bool = True,
+    exclude_paper_ids: set[str] | None = None,
 ) -> RetrievalResponse:
     """Find chunks from other papers that are similar to the given paper.
 
@@ -290,7 +291,7 @@ def find_similar_work(
             for hit in hits:
                 hit_paper_id = hit.get("paper_id", "")
                 hit_chunk_id = hit.get("chunk_id", "")
-                if hit_paper_id == paper_id:
+                if hit_paper_id == paper_id or hit_paper_id in (exclude_paper_ids or set()):
                     continue
                 if hit_chunk_id in seen_chunk_ids:
                     continue
@@ -329,6 +330,7 @@ def find_similar_work(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
+            filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or {paper_id})},
         )
     except Exception as e:
         latency = (time.perf_counter() - start_time) * 1000
@@ -351,6 +353,7 @@ def find_counter_evidence(
     *,
     use_reranker: bool = True,
     use_judge: bool = True,
+    exclude_paper_ids: set[str] | None = None,
 ) -> RetrievalResponse:
     """Find chunks that may contradict or qualify a given claim.
 
@@ -371,6 +374,8 @@ def find_counter_evidence(
             workspace_id,
             top_k=recall_k,
         )
+        if exclude_paper_ids:
+            hits = [hit for hit in hits if hit.get("paper_id") not in exclude_paper_ids]
 
         if not hits:
             latency = (time.perf_counter() - start_time) * 1000
@@ -383,6 +388,7 @@ def find_counter_evidence(
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
+                filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or set())},
             )
 
         # Stage 2: Rerank
@@ -419,6 +425,7 @@ def find_counter_evidence(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
+            filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or set())},
         )
     except Exception as e:
         latency = (time.perf_counter() - start_time) * 1000
