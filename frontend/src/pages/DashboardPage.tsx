@@ -1,90 +1,92 @@
-import { useEffect, useState } from "react";
-import { Button, Card, Col, Row, Space, Statistic, Typography } from "antd";
-import { Link } from "react-router-dom";
-import { PlusOutlined } from "@ant-design/icons";
-import { healthCheck, type HealthResponse } from "../api/health";
+import { useCallback, useEffect, useState } from "react";
+import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "antd";
+import { FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
+import { Link, useNavigate } from "react-router-dom";
 import workspaceApi from "../api/workspace";
+import paperApi from "../api/paper";
+import taskApi from "../api/task";
+import knowledgeApi from "../api/knowledge";
+import { discoverApi, type DiscoverRun, type ResearchOpportunity } from "../api/discover";
+import type { Workspace } from "../api/types/workspace";
+import type { Task } from "../api/types/domain";
+import PageHeader from "../components/common/PageHeader";
+import EmptyGuide from "../components/common/EmptyGuide";
+import StatusBadge from "../components/common/StatusBadge";
 
-const { Title, Paragraph } = Typography;
+interface WorkspaceSummary {
+  workspace: Workspace;
+  papers: number | null;
+  pendingTasks: Task[] | null;
+  reviewKnowledge: number | null;
+  waitingRuns: DiscoverRun[] | null;
+  opportunities: ResearchOpportunity[] | null;
+}
 
 export default function DashboardPage() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [workspaceCount, setWorkspaceCount] = useState<number>(0);
+  const navigate = useNavigate();
+  const [summaries, setSummaries] = useState<WorkspaceSummary[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const data = await healthCheck();
-        if (!cancelled) setHealth(data);
-      } catch {
-        if (!cancelled) setHealth(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    const timer = setInterval(run, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const workspaces = (await workspaceApi.list({ limit: 8 })).items;
+      const next = await Promise.all(workspaces.map(async (workspace) => {
+        const [papers, tasks, knowledge, runs, opportunities] = await Promise.allSettled([
+          paperApi.list(workspace.id, { limit: 1 }),
+          taskApi.list(workspace.id, { limit: 100 }),
+          knowledgeApi.listItems(workspace.id, { limit: 200 }),
+          discoverApi.listRuns(workspace.id),
+          discoverApi.listOpportunities(workspace.id),
+        ]);
+        const taskItems = tasks.status === "fulfilled" ? tasks.value.items : null;
+        const runItems = runs.status === "fulfilled" ? runs.value.items : null;
+        return {
+          workspace,
+          papers: papers.status === "fulfilled" ? papers.value.total : null,
+          pendingTasks: taskItems?.filter((task) => ["queued", "running", "waiting_for_user", "failed"].includes(task.status)) ?? taskItems,
+          reviewKnowledge: knowledge.status === "fulfilled" ? knowledge.value.items.filter((item) => ["candidate", "needs_review", "proposed"].includes(item.status)).length : null,
+          waitingRuns: runItems?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? runItems,
+          opportunities: opportunities.status === "fulfilled" ? opportunities.value.items.filter((item) => !["confirmed", "edited_confirmed", "rejected"].includes(item.status)) : null,
+        } satisfies WorkspaceSummary;
+      }));
+      setSummaries(next);
+    } catch {
+      setSummaries([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => {
-    workspaceApi
-      .list({ limit: 1 })
-      .then((resp) => setWorkspaceCount(resp.total))
-      .catch(() => setWorkspaceCount(0));
-  }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  const status = health?.status ?? "—";
-  const env = health?.env ?? "—";
+  const actions = summaries.flatMap((summary) => [
+    ...(summary.pendingTasks ?? []).map((task) => ({ key: `task-${task.id}`, workspace: summary.workspace, title: task.status === "failed" ? "后台任务处理失败" : "后台任务正在处理", status: task.status, href: `/workspaces/${summary.workspace.id}/activity` })),
+    ...(summary.waitingRuns ?? []).map((run) => ({ key: `run-${run.id}`, workspace: summary.workspace, title: "Discover 等待继续", status: run.status, href: `/workspaces/${summary.workspace.id}/discover?run=${run.id}` })),
+    ...(summary.opportunities ?? []).map((opportunity) => ({ key: `opportunity-${opportunity.id}`, workspace: summary.workspace, title: opportunity.title, status: opportunity.status, href: `/workspaces/${summary.workspace.id}/discover?opportunity=${opportunity.id}` })),
+  ]).slice(0, 8);
 
   return (
     <div>
-      <Title level={3}>Dashboard</Title>
-      <Paragraph type="secondary">
-        Welcome to GapMind. Manage your research workspaces and track opportunity
-        discovery progress.
-      </Paragraph>
+      <PageHeader
+        eyebrow="GapMind"
+        title="继续你的研究"
+        description="从课题、文献和证据出发，把下一步行动变得清晰。"
+        extra={<><Link to="/workspaces"><Button type="primary" icon={<PlusOutlined />}>新建课题</Button></Link><Link to="/search"><Button icon={<FileSearchOutlined />}>全局检索</Button></Link></>}
+      />
 
-      <Row gutter={16} style={{ marginTop: 16 }}>
-        <Col span={6}>
-          <Card>
-            <Statistic title="Workspaces" value={workspaceCount} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="Papers" value={0} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="Knowledge Items" value={0} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="Backend" value={status} loading={loading} />
-          </Card>
-        </Col>
-      </Row>
-
-      <Card style={{ marginTop: 16 }}>
-        <Paragraph>
-          <strong>Backend status:</strong> {status} ({env})
-        </Paragraph>
-        <Space>
-          <Link to="/workspaces">
-            <Button type="primary" icon={<PlusOutlined />}>
-              Go to Workspaces
-            </Button>
-          </Link>
-        </Space>
-      </Card>
+      {summaries.length === 0 && !loading ? (
+        <Card><EmptyGuide description="还没有建立课题。先创建一个课题，再开始收集文献和证据。" actionText="创建第一个课题" actionIcon={<PlusOutlined />} onAction={() => navigate("/workspaces")} /></Card>
+      ) : (
+        <>
+          {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
+          <Typography.Title level={4}>最近课题</Typography.Title>
+          <Row gutter={[16, 16]}>
+            {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.papers === null ? "文献：暂不可用" : `文献 ${summary.papers} 篇`}</Tag><Tag>{summary.reviewKnowledge === null ? "知识：暂不可用" : `待审核知识 ${summary.reviewKnowledge}`}</Tag><Tag color={summary.opportunities?.length ? "orange" : "default"}>{summary.opportunities === null ? "机会：暂不可用" : `待处理机会 ${summary.opportunities.length}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}
+          </Row>
+        </>
+      )}
+      {loading && <Alert type="info" showIcon message="正在加载最近课题和待处理事项…" style={{ marginTop: 16 }} />}
     </div>
   );
 }

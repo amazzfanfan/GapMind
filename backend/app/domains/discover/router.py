@@ -19,6 +19,7 @@ from app.domains.discover.schemas import (
     ExternalSelectionRequest,
     OpportunityDetail,
     OpportunityEvidenceRead,
+    OpportunityEvidenceContext,
     OpportunityListResponse,
     OpportunityVersionRead,
     PlanCreateResponse,
@@ -174,6 +175,32 @@ def list_versions(workspace_id: str, opportunity_id: str, service: DiscoverServi
         return [OpportunityVersionRead.model_validate(item) for item in service.versions(workspace_id, opportunity_id)]
     except OpportunityNotFoundError as exc:
         raise _not_found(exc) from exc
+
+
+@router.get("/evidence/{evidence_id}/context", response_model=OpportunityEvidenceContext)
+def get_evidence_context(
+    workspace_id: str,
+    evidence_id: str,
+    service: DiscoverService = Depends(_service),
+    db: Session = Depends(get_db),
+) -> OpportunityEvidenceContext:
+    _workspace(db, workspace_id)
+    try:
+        data = service.opportunity_evidence_context(workspace_id, evidence_id)
+    except OpportunityNotFoundError as exc:
+        raise _not_found(exc) from exc
+    return OpportunityEvidenceContext(
+        evidence=OpportunityEvidenceRead.model_validate(data["evidence"]),
+        available=data["available"],
+        paper_id=data["paper_id"],
+        artifact_id=data["artifact_id"],
+        artifact_kind=data["artifact_kind"],
+        filename=data["filename"],
+        content=data["content"],
+        start_char=data["start_char"],
+        end_char=data["end_char"],
+        message=data["message"],
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/confirm", response_model=ResearchOpportunityRead)

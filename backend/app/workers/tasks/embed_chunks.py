@@ -89,10 +89,14 @@ def _run_embed(db: Session, task_id: str) -> dict:
             paper_id=paper_id,
             error=str(e),
         )
-        return _fail(task_service, task_id, str(e))
+        result = _fail(task_service, task_id, str(e))
+        _notify_discover(db, paper_id, workspace_id)
+        return result
 
     if result.error:
-        return _fail(task_service, task_id, result.error)
+        failure = _fail(task_service, task_id, result.error)
+        _notify_discover(db, paper_id, workspace_id)
+        return failure
 
     task_service.transition(
         task_id,
@@ -119,6 +123,7 @@ def _run_embed(db: Session, task_id: str) -> dict:
         },
     )
     db.commit()
+    _notify_discover(db, paper_id, workspace_id)
 
     logger.info(
         "embed_chunks.succeeded",
@@ -138,6 +143,15 @@ def _run_embed(db: Session, task_id: str) -> dict:
 def _fail(task_service: TaskService, task_id: str, error: str) -> dict:
     task_service.transition(task_id, "failed", error=error, progress=1.0)
     return {"status": "failed", "error": error}
+
+
+def _notify_discover(db: Session, paper_id: str, workspace_id: str) -> None:
+    try:
+        from app.domains.discover.service import resume_discover_runs_for_paper
+
+        resume_discover_runs_for_paper(db, paper_id, workspace_id)
+    except Exception as exc:
+        logger.warning("embed_chunks.discover_notify_failed", paper_id=paper_id, error=str(exc))
 
 
 def spawn_embed_chunks(db: Session, paper_id: str, workspace_id: str) -> str:

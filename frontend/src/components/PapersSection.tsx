@@ -24,6 +24,7 @@ import {
 import type { UploadRequestOption } from "rc-upload/lib/interface";
 import paperApi from "../api/paper";
 import type { Paper, PaperUpdate } from "../api/types/domain";
+import StatusBadge from "./common/StatusBadge";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -227,37 +228,38 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
 
   return (
     <Card
-      title="Papers"
+      title="文献"
       extra={
         <Space>
           <Upload {...uploadProps}>
             <Button icon={<InboxOutlined />} loading={submitting}>
-              Upload PDF
+              上传 PDF
             </Button>
           </Upload>
           <Button icon={<PlusOutlined />} onClick={() => setManualOpen(true)}>
-            Add Manually
+            手动添加
           </Button>
         </Space>
       }
     >
       {papers.length === 0 && !loading ? (
-        <Empty description="No papers yet. Upload a PDF or add one manually." />
+        <Empty description="还没有文献。可以搜索导入、上传 PDF 或手动添加。" />
       ) : (
         <Table<Paper>
           rowKey="id"
           dataSource={papers}
           loading={loading}
           pagination={{ pageSize: 10, showSizeChanger: false }}
+          scroll={{ x: 820 }}
           columns={[
             {
-              title: "Title",
+              title: "标题",
               dataIndex: "title",
               key: "title",
               render: (v: string) => <Text strong>{v}</Text>,
             },
             {
-              title: "Authors",
+              title: "作者",
               dataIndex: "authors",
               key: "authors",
               render: (a: string[]) =>
@@ -267,59 +269,41 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
                     {a.length > 3 ? `; +${a.length - 3} more` : ""}
                   </Text>
                 ) : (
-                  <Text type="secondary" italic>empty</Text>
+                  <Text type="secondary" italic>未填写</Text>
                 ),
             },
             {
-              title: "Year",
+              title: "年份",
               dataIndex: "year",
               key: "year",
               width: 80,
               render: (y: number | null) => y ?? <Text type="secondary">—</Text>,
             },
             {
-              title: "PDF",
+              title: "全文",
               key: "pdf",
               width: 80,
               render: (_: unknown, p) =>
-                p.primary_artifact_id ? <Tag color="green">yes</Tag> : <Tag>no</Tag>,
+                p.primary_artifact_id ? <Tag color="green">已上传</Tag> : <Tag>缺失</Tag>,
             },
             {
-              title: "Parse",
+              title: "解析",
               key: "parse",
               width: 110,
               render: (_: unknown, p) => {
                 const status = p.parse_status as string;
-                const colorMap: Record<string, string> = {
-                  not_applicable: "default",
-                  pending: "default",
-                  parsing: "processing",
-                  parsed: "success",
-                  failed: "error",
-                };
-                const labelMap: Record<string, string> = {
-                  not_applicable: "—",
-                  pending: "pending",
-                  parsing: "parsing",
-                  parsed: `parsed (${p.chunk_count})`,
-                  failed: "failed",
-                };
-                return (
-                  <Tag color={colorMap[status] ?? "default"}>
-                    {labelMap[status] ?? status}
-                  </Tag>
-                );
+                return <Space size={4}><StatusBadge status={status} />{status === "parsed" && <Text type="secondary">{p.chunk_count} 块</Text>}</Space>;
               },
             },
             {
-              title: "Source",
+              title: "来源",
               dataIndex: "source",
               key: "source",
               width: 100,
               render: (s: string) => <Tag>{s}</Tag>,
             },
             {
-              title: "Actions",
+              title: "操作",
               key: "actions",
               width: 160,
               render: (_: unknown, p) => (
@@ -328,14 +312,14 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
                     size="small"
                     icon={<EditOutlined />}
                     onClick={() => openEdit(p)}
-                    title="Edit metadata"
+                      title="编辑信息"
                   />
                   {!p.primary_artifact_id && (
                     <Button
                       size="small"
                       icon={<PaperClipOutlined />}
                       onClick={() => handleAttachPdf(p)}
-                      title="Attach PDF"
+                      title="上传 PDF"
                       loading={submitting}
                     />
                   )}
@@ -344,7 +328,7 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
                     danger
                     icon={<DeleteOutlined />}
                     onClick={() => handleDelete(p)}
-                    title="Delete"
+                      title="删除"
                   />
                 </Space>
               ),
@@ -355,7 +339,7 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
 
       {/* Manual create modal */}
       <Modal
-        title="Add Paper Manually"
+        title="手动添加文献"
         open={manualOpen}
         onCancel={() => {
           setManualOpen(false);
@@ -396,7 +380,7 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
 
       {/* Edit modal */}
       <Modal
-        title="Edit Paper"
+        title="编辑文献"
         open={editOpen}
         onCancel={() => {
           setEditOpen(false);

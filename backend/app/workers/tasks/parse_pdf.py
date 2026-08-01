@@ -97,6 +97,12 @@ def _run_parse_pdf(db: Session, task_id: str) -> dict:
         if paper is not None:
             paper.parse_status = "failed"
             db.commit()
+            try:
+                from app.domains.discover.service import resume_discover_runs_for_paper
+
+                resume_discover_runs_for_paper(db, paper.id, paper.workspace_id)
+            except Exception as notify_error:
+                logger.warning("parse_pdf.discover_notify_failed", paper_id=paper_id, error=str(notify_error))
         # Transition task to failed
         try:
             task_service.transition(task_id, "failed", error=str(e), progress=1.0)
@@ -252,6 +258,13 @@ def _do_parse(
             paper_id=paper.id,
             error=str(e),
         )
+
+    try:
+        from app.domains.discover.service import resume_discover_runs_for_paper
+
+        resume_discover_runs_for_paper(db, paper.id, paper.workspace_id)
+    except Exception as e:
+        logger.warning("parse_pdf.discover_notify_failed", paper_id=paper.id, error=str(e))
 
     return {
         "status": "succeeded",

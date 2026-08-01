@@ -4,6 +4,7 @@ import { DownloadOutlined, FileSearchOutlined } from "@ant-design/icons";
 import apiClient from "../api/client";
 import knowledgeApi from "../api/knowledge";
 import type { EvidenceContext, EvidenceSpan } from "../api/types/knowledge";
+import { discoverApi, type OpportunityEvidence } from "../api/discover";
 
 const { Text } = Typography;
 
@@ -76,4 +77,72 @@ export default function EvidenceViewer({
       </>}
     </Drawer>
   </>;
+}
+
+export function OpportunityEvidenceViewer({
+  workspaceId,
+  evidence,
+}: {
+  workspaceId: string;
+  evidence: OpportunityEvidence;
+}) {
+  const { message } = App.useApp();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [context, setContext] = useState<Awaited<ReturnType<typeof discoverApi.getEvidenceContext>> | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    discoverApi
+      .getEvidenceContext(workspaceId, evidence.id)
+      .then(setContext)
+      .catch((error) => message.error(`Failed to load evidence source: ${(error as Error).message}`))
+      .finally(() => setLoading(false));
+  }, [evidence.id, message, open, workspaceId]);
+
+  const segments = useMemo(() => {
+    if (!context?.available || !context.content) return [];
+    const span: EvidenceSpan = {
+      id: evidence.evidence_span_id ?? evidence.id,
+      workspace_id: workspaceId,
+      knowledge_item_id: "",
+      paper_id: context.paper_id ?? "",
+      artifact_id: context.artifact_id,
+      artifact_kind: context.artifact_kind,
+      artifact_version: null,
+      chunk_index: null,
+      start_char: context.start_char,
+      end_char: context.end_char,
+      text: evidence.display_excerpt,
+      relation: evidence.relation,
+      confidence: evidence.judgement_confidence,
+      created_at: "",
+      updated_at: "",
+    };
+    return buildSegments(context.content, [span]);
+  }, [context, evidence, workspaceId]);
+
+  return (
+    <>
+      <Button size="small" icon={<FileSearchOutlined />} onClick={() => setOpen(true)}>
+        Open evidence
+      </Button>
+      <Drawer title="Opportunity evidence" open={open} width="min(760px, 100vw)" onClose={() => setOpen(false)}>
+        {loading ? <div style={{ textAlign: "center", padding: 48 }}><Spin /></div> : !context ? <Empty description="No evidence loaded" /> : !context.available ? (
+          <Alert type="warning" showIcon message="Metadata-only evidence" description={context.message ?? "No local full-text anchor is available."} />
+        ) : (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+              <Text type="secondary">{context.filename ?? "parsed_markdown"} · {context.start_char ?? "—"}–{context.end_char ?? "—"}</Text>
+              <Tag color="green">full_text · {evidence.relation}</Tag>
+            </div>
+            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "#fafafa", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
+              {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
+            </pre>
+          </>
+        )}
+      </Drawer>
+    </>
+  );
 }

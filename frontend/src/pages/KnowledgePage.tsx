@@ -1,10 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { App, Button, Card, Spin, Tabs, Typography } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import workspaceApi from "../api/workspace";
-import type { Workspace } from "../api/types/workspace";
+import { lazy, Suspense } from "react";
+import { Tabs, Typography } from "antd";
+import { useNavigate } from "react-router-dom";
 import KnowledgeWorkbench from "../components/KnowledgeWorkbench";
+import { useWorkspaceLayout } from "../components/layout/WorkspaceLayout";
 
 const KnowledgeGraph = lazy(() => import("../components/KnowledgeGraph"));
 
@@ -15,47 +13,15 @@ export default function KnowledgePage({
 }: {
   initialTab?: "workbench" | "graph";
 }) {
-  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { message } = App.useApp();
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!id) return;
-    workspaceApi
-      .get(id)
-      .then(setWorkspace)
-      .catch((error) => message.error(`Failed to load workspace: ${(error as Error).message}`))
-      .finally(() => setLoading(false));
-  }, [id, message]);
-
-  if (loading) {
-    return <div style={{ padding: 48, textAlign: "center" }}><Spin /></div>;
-  }
-
-  if (!id || !workspace) {
-    return (
-      <Card>
-        <Title level={4}>Workspace not found</Title>
-        <Link to="/workspaces">Back to workspaces</Link>
-      </Card>
-    );
-  }
+  const { workspace } = useWorkspaceLayout();
 
   const activeKey = initialTab;
   return (
     <div>
-      <Button
-        icon={<ArrowLeftOutlined />}
-        onClick={() => navigate(`/workspaces/${workspace.id}`)}
-        style={{ marginBottom: 16 }}
-      >
-        Back to workspace
-      </Button>
-      <Title level={3} style={{ marginBottom: 4 }}>{workspace.name} · Knowledge</Title>
+      <Title level={3} style={{ marginBottom: 4 }}>知识工作台</Title>
       <Paragraph type="secondary">
-        Review AI-extracted knowledge, trace it back to evidence, and explore relationships within this Workspace.
+        审核 AI 从论文中提取的知识，回到证据原文，并探索课题内的关系。
       </Paragraph>
 
       <Tabs
@@ -70,12 +36,12 @@ export default function KnowledgePage({
         items={[
           {
             key: "workbench",
-            label: "Workbench",
+            label: "审核工作台",
             children: <KnowledgeWorkbench workspaceId={workspace.id} />,
           },
           {
             key: "graph",
-            label: "Knowledge Graph",
+            label: "知识图谱",
             children: (
               <Suspense fallback={<div style={{ padding: 48, textAlign: "center" }}>Loading graph…</div>}>
                 <KnowledgeGraph workspaceId={workspace.id} />

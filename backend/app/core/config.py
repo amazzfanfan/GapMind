@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
 
+    # ---- Chat ----
+    chat_history_message_limit: int = 20
+    chat_history_char_limit: int = 60000
+    chat_max_input_chars: int = 12000
+
     # ---- Embedding (SiliconFlow, BGE-m3) ----
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"

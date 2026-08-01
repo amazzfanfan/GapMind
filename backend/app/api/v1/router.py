@@ -16,6 +16,7 @@ from app.domains.retrieval.router import router as retrieval_router
 from app.domains.task.router import router as task_router
 from app.domains.timeline.router import router as timeline_router
 from app.domains.workspace.router import router as workspace_router
+from app.domains.chat.router import router as chat_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
@@ -27,3 +28,4 @@ api_router.include_router(timeline_router)
 api_router.include_router(knowledge_router)
 api_router.include_router(retrieval_router)
 api_router.include_router(discover_router)
+api_router.include_router(chat_router)

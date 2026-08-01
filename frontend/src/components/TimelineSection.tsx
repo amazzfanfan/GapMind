@@ -17,16 +17,16 @@ const ACTOR_COLOR: Record<string, string> = {
 function summarize(e: TimelineEvent): string {
   // Human-friendly label for common event types; falls back to event_type.
   const map: Record<string, string> = {
-    "paper.created": "Paper created",
-    "paper.uploaded": "Paper uploaded",
-    "paper.updated": "Paper updated",
-    "paper.deleted": "Paper deleted",
-    "task.created": "Task created",
-    "task.running": "Task started",
-    "task.succeeded": "Task succeeded",
-    "task.failed": "Task failed",
-    "task.cancelled": "Task cancelled",
-    "task.queued": "Task queued",
+    "paper.created": "添加了文献",
+    "paper.uploaded": "上传了文献",
+    "paper.updated": "更新了文献",
+    "paper.deleted": "删除了文献",
+    "task.created": "创建了后台处理",
+    "task.running": "后台处理开始",
+    "task.succeeded": "后台处理完成",
+    "task.failed": "后台处理失败",
+    "task.cancelled": "后台处理已取消",
+    "task.queued": "后台处理已排队",
   };
   return map[e.event_type] ?? e.event_type;
 }
@@ -42,9 +42,9 @@ function visiblePayload(e: TimelineEvent): Record<string, unknown> {
 
 export default function TimelineSection({ events, loading }: Props) {
   return (
-    <Card title="Timeline">
+    <Card title="课题动态">
       {events.length === 0 && !loading ? (
-        <Empty description="No timeline events yet. They appear automatically as you work." />
+        <Empty description="还没有课题动态，开始添加文献或运行 Discover 后会自动记录。" />
       ) : (
         <List
           loading={loading}

@@ -162,7 +162,7 @@ function paperYear(paper: SemanticScholarPaper): string {
   return paper.publicationDate?.slice(0, 4) || String(paper.year ?? "—");
 }
 
-export default function SemanticPaperSearch() {
+export default function SemanticPaperSearch({ workspaceId }: { workspaceId?: string } = {}) {
   const { message } = App.useApp();
   const [hydrated, setHydrated] = useState(false);
   const [query, setQuery] = useState("");
@@ -356,7 +356,8 @@ export default function SemanticPaperSearch() {
 
   const openImportModal = async (paper: SemanticScholarPaper) => {
     setImportPaper(paper);
-    setImportWorkspaceId(undefined);
+    setImportWorkspaceId(workspaceId);
+    if (workspaceId) return;
     try {
       const response = await workspaceApi.list({ limit: 200 });
       setWorkspaces(response.items);
@@ -366,13 +367,14 @@ export default function SemanticPaperSearch() {
   };
 
   const handleImport = async () => {
-    if (!importPaper || !importWorkspaceId) {
-      message.warning("Select a workspace first.");
+    const targetWorkspaceId = workspaceId || importWorkspaceId;
+    if (!importPaper || !targetWorkspaceId) {
+      message.warning("请先选择目标课题。");
       return;
     }
     setImportLoading(true);
     try {
-      const imported = await semanticScholarApi.importToWorkspace(importWorkspaceId, importPaper.paperId);
+      const imported = await semanticScholarApi.importToWorkspace(targetWorkspaceId, importPaper.paperId);
       message.success(
         imported.primary_artifact_id
           ? "Paper metadata imported; open-access PDF processing was queued."
@@ -677,28 +679,17 @@ export default function SemanticPaperSearch() {
       </Modal>
 
       <Modal
-        title="Import paper into Workspace"
+          title={workspaceId ? "导入到当前课题" : "导入论文到课题"}
         open={importPaper !== null}
         onCancel={() => setImportPaper(null)}
         onOk={handleImport}
         confirmLoading={importLoading}
-        okText="Import metadata"
+          okText="导入论文"
       >
-        <Paragraph>
-          This imports the title, authors, abstract, year, DOI, and arXiv ID. You can attach a PDF later.
-        </Paragraph>
-        <Select
-          showSearch
-          style={{ width: "100%" }}
-          placeholder="Select a workspace"
-          optionFilterProp="label"
-          value={importWorkspaceId}
-          onChange={setImportWorkspaceId}
-          options={workspaces.map((workspace) => ({
-            value: workspace.id,
-            label: workspace.name,
-          }))}
-        />
+          <Paragraph>
+            {workspaceId ? "论文会直接添加到当前课题，随后按已有流程尝试下载、解析和建立全文索引。" : "这会导入标题、作者、摘要、年份、DOI 和 arXiv ID；请先选择目标课题。"}
+          </Paragraph>
+          {workspaceId ? <Tag color="blue">当前课题已绑定</Tag> : <Select showSearch style={{ width: "100%" }} placeholder="选择目标课题" optionFilterProp="label" value={importWorkspaceId} onChange={setImportWorkspaceId} options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))} />}
       </Modal>
     </Card>
   );
