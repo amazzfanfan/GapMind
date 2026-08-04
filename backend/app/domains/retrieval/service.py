@@ -34,6 +34,43 @@ logger = get_logger(__name__)
 # Chunks JSONL root: backend/data/chunks/{workspace_id}/{paper_id}.jsonl
 DATA_ROOT = Path(__file__).resolve().parents[3] / "data" / "chunks"
 
+# Similar Work aggregation: at most this many chunks per paper inside the top-K.
+# The pipeline over-fetches from Milvus, so this is a cap on the *post-aggregation*
+# candidate pool, not on the raw Milvus recall — recall quality is preserved.
+SIMILAR_WORK_MAX_CHUNKS_PER_PAPER = 2
+
+# Counter Evidence aggregation: a tighter cap. Counter evidence per claim is
+# usually concentrated in a handful of papers; capping prevents one paper's
+# multiple contradicting chunks from crowding out the rare genuinely
+# qualifying hit from a different paper.
+COUNTER_EVIDENCE_MAX_CHUNKS_PER_PAPER = 3
+
+# Role priority for sorting Counter Evidence results. Lower number = higher
+# priority. Counter-evidence search's value is in contradicts / qualifies;
+# overlaps and supports are admitted only to be explicit about absence.
+COUNTER_ROLE_PRIORITY: dict[str, int] = {
+    "contradicts": 0,
+    "qualifies": 1,
+    "supports": 2,
+    "overlaps": 2,
+    "unknown": 3,
+}
+
+# Sections whose presence is rarely the answer to "is this paper similar work".
+# These typically cite the related work rather than describe it — keeping them
+# in the candidate pool causes a small set of high-citation papers to dominate
+# the Top-K purely through reference density.
+LOW_VALUE_SECTIONS: frozenset[str] = frozenset({
+    "references",
+    "bibliography",
+    "acknowledgments",
+    "acknowledgements",
+    "appendix",
+    "author contributions",
+    "supplementary",
+    "supplementary material",
+})
+
 
 # ==================================================================
 # Step ④: Index paper chunks into Milvus
@@ -175,11 +212,14 @@ def semantic_search(
     top_k: int = 10,
     *,
     section: str | None = None,
+    exclude_paper_ids: set[str] | None = None,
     use_reranker: bool = True,
 ) -> RetrievalResponse:
     """General semantic search within a workspace.
 
     Pipeline: vector recall → (optional) rerank → return.
+    ``exclude_paper_ids`` is pushed into the Milvus filter (see
+    ``milvus_client.search``) and surfaced on ``filters_applied``.
     """
     start_time = time.perf_counter()
     request_id = str(uuid4())
@@ -194,6 +234,7 @@ def semantic_search(
             workspace_id,
             top_k=recall_k,
             section=section,
+            exclude_paper_ids=exclude_paper_ids,
         )
 
         if not hits:
@@ -207,6 +248,10 @@ def semantic_search(
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
+                filters_applied={
+                    "section": section,
+                    "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+                },
             )
 
         # Stage 2: Rerank
@@ -225,7 +270,10 @@ def semantic_search(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
-            filters_applied={"section": section} if section else {},
+            filters_applied={
+                "section": section,
+                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+            },
         )
     except Exception as e:
         latency = (time.perf_counter() - start_time) * 1000
@@ -278,7 +326,12 @@ def find_similar_work(
         # Embed all query chunks
         embed_result = gateway.embed_texts(query_texts)
 
-        # Search for each, collect hits excluding same paper
+        # Exclusion set: the source paper is ALWAYS excluded (it's "similar
+        # work" by definition), plus any caller-supplied papers.
+        excluded = set(exclude_paper_ids or set()) | {paper_id}
+
+        # Search for each, collecting hits. Exclusion is pushed down into the
+        # Milvus filter so excluded papers never enter the recall pool.
         seen_chunk_ids: set[str] = set()
         all_hits: list[dict[str, Any]] = []
 
@@ -286,13 +339,16 @@ def find_similar_work(
             hits = milvus_client.search(
                 vector,
                 workspace_id,
-                top_k=top_k * 2,  # over-fetch to account for same-paper filtering
+                top_k=top_k * 4,  # over-fetch: low-value section drops + per-paper cap leave gaps
+                exclude_paper_ids=excluded,
             )
             for hit in hits:
-                hit_paper_id = hit.get("paper_id", "")
-                hit_chunk_id = hit.get("chunk_id", "")
-                if hit_paper_id == paper_id or hit_paper_id in (exclude_paper_ids or set()):
+                # Defensive drop: Milvus's filter should already exclude
+                # ``excluded``, but a buggy / partial-implementation should
+                # never leak the source paper into "similar work" results.
+                if hit.get("paper_id") in excluded:
                     continue
+                hit_chunk_id = hit.get("chunk_id", "")
                 if hit_chunk_id in seen_chunk_ids:
                     continue
                 seen_chunk_ids.add(hit_chunk_id)
@@ -309,16 +365,35 @@ def find_similar_work(
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
+                filters_applied={"excluded_paper_ids": sorted(excluded)},
             )
 
-        # Rerank using the first representative chunk as query text
-        if use_reranker and len(all_hits) > 1:
+        # Step 1: drop low-value sections (References / Acknowledgments etc.)
+        # These rarely contain genuinely "similar work" — they just cite it.
+        filtered_hits = [h for h in all_hits if not _is_low_value_section(h.get("section"))]
+        if not filtered_hits:
+            # All candidates were low-value; fall back to whatever we have.
+            filtered_hits = all_hits
+
+        # Step 2: paper-level aggregation + per-paper chunk cap.
+        # Group by paper, take the top MAX_CHUNKS_PER_PAPER chunks from each,
+        # then re-merge into a single candidate pool ordered by score.
+        by_paper: dict[str, list[dict[str, Any]]] = {}
+        for hit in filtered_hits:
+            pid = hit.get("paper_id") or ""
+            by_paper.setdefault(pid, []).append(hit)
+        candidates: list[dict[str, Any]] = []
+        for pid, hits in by_paper.items():
+            hits.sort(key=lambda h: h.get("score", 0.0), reverse=True)
+            candidates.extend(hits[:SIMILAR_WORK_MAX_CHUNKS_PER_PAPER])
+
+        # Step 3: rerank the diversified candidate pool (or sort by score if reranker disabled).
+        if use_reranker and len(candidates) > 1:
             rerank_query = query_texts[0][:500]
-            items = _rerank_hits(rerank_query, all_hits, top_k)
+            items = _rerank_hits(rerank_query, candidates, top_k)
         else:
-            # Sort by vector score descending
-            all_hits.sort(key=lambda h: h.get("score", 0.0), reverse=True)
-            items = [_hit_to_result_item(hit) for hit in all_hits[:top_k]]
+            candidates.sort(key=lambda h: h.get("score", 0.0), reverse=True)
+            items = [_hit_to_result_item(hit) for hit in candidates[:top_k]]
 
         latency = (time.perf_counter() - start_time) * 1000
         return RetrievalResponse(
@@ -330,7 +405,11 @@ def find_similar_work(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
-            filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or {paper_id})},
+            filters_applied={
+                "excluded_paper_ids": sorted(excluded),
+                "low_value_section_filter": True,
+                "max_chunks_per_paper": SIMILAR_WORK_MAX_CHUNKS_PER_PAPER,
+            },
         )
     except Exception as e:
         latency = (time.perf_counter() - start_time) * 1000
@@ -366,14 +445,21 @@ def find_counter_evidence(
     gateway = get_embedding_gateway()
 
     try:
-        # Stage 1: Vector recall (over-fetch)
+        # Stage 1: Vector recall (over-fetch). Exclusion of the claim's source
+        # paper is pushed down into the Milvus filter so the source's own
+        # chunks never enter the recall pool — otherwise they would crowd out
+        # genuinely countering evidence.
         recall_k = top_k * 3 if (use_reranker or use_judge) else top_k
         query_vector = gateway.embed_one(claim_text)
         hits = milvus_client.search(
             query_vector,
             workspace_id,
             top_k=recall_k,
+            exclude_paper_ids=exclude_paper_ids,
         )
+        # Belt-and-suspenders: the Milvus filter is the primary exclusion,
+        # but a defensive drop guards against filter-syntax regressions in
+        # specific Milvus versions.
         if exclude_paper_ids:
             hits = [hit for hit in hits if hit.get("paper_id") not in exclude_paper_ids]
 
@@ -384,11 +470,14 @@ def find_counter_evidence(
                 workspace_id=workspace_id,
                 query=claim_text,
                 purpose="counter_evidence",
+                # No Milvus candidates at all. Crucially: this is NOT a system
+                # failure — we just couldn't find anything similar enough.
                 status="succeeded",
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
                 filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or set())},
+                empty_reason="retrieval_empty",
             )
 
         # Stage 2: Rerank
@@ -403,18 +492,44 @@ def find_counter_evidence(
         else:
             items = reranked_items
 
+        # Stage 4: paper-diversify + role-priority sort. Counter evidence per
+        # claim typically concentrates in a handful of papers; cap each
+        # paper's contribution so one paper's many contradicting chunks don't
+        # crowd out a single qualifying hit from a different paper.
+        items = _diversify_and_sort_counter_items(items)
+
+        # Determine status: judge-failed sentinel (any zero-confidence unknown)
+        # pushes the response into "degraded" so the UI can distinguish it
+        # from a clean "no counter-evidence found".
+        status = "succeeded"
+        judge_failed = any(
+            item.judgement == "unknown" and item.judgement_confidence == 0.0
+            for item in items
+        )
+        if judge_failed:
+            status = "degraded"
+
         latency = (time.perf_counter() - start_time) * 1000
 
-        # Determine status: degraded if judge failed
-        status = "succeeded"
-        if use_judge and any(
-            item.judgement == "unknown"
-            and item.judgement_confidence == 0.0
-            for item in items
-        ):
-            # A zero-confidence unknown is the gateway's failure sentinel.
-            # A legitimate unknown judgement should carry non-zero confidence.
-            status = "degraded"
+        # Decide empty_reason. Three mutually exclusive cases the UI must
+        # distinguish (see ``CounterEmptyReason``):
+        #   1. retrieval_empty              → Milvus returned 0 candidates
+        #   2. judge_failed                 → Judge couldn't classify any candidate
+        #                                       (zero-confidence unknown sentinel)
+        #   3. genuinely_no_counter_evidence → Judge ran but only supports /
+        #                                       overlaps / non-zero-confidence unknowns
+        #                                       came back — no real counter-evidence
+        #                                       exists in the workspace.
+        # The fourth case (items contain contradicts/qualifies) sets no
+        # empty_reason — the top-K is good as-is.
+        empty_reason: str | None = None
+        has_counter_role = any(
+            item.judgement in ("contradicts", "qualifies") for item in items
+        )
+        if not items:
+            empty_reason = "judge_failed" if judge_failed else "retrieval_empty"
+        elif not has_counter_role:
+            empty_reason = "judge_failed" if judge_failed else "genuinely_no_counter_evidence"
 
         return RetrievalResponse(
             request_id=request_id,
@@ -425,7 +540,12 @@ def find_counter_evidence(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
-            filters_applied={"excluded_paper_ids": sorted(exclude_paper_ids or set())},
+            filters_applied={
+                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+                "max_chunks_per_paper": COUNTER_EVIDENCE_MAX_CHUNKS_PER_PAPER,
+                "role_priority": COUNTER_ROLE_PRIORITY,
+            },
+            empty_reason=empty_reason,
         )
     except Exception as e:
         latency = (time.perf_counter() - start_time) * 1000
@@ -523,6 +643,59 @@ def _hit_to_result_item(
         score=hit.get("score", 0.0),
         retrieval_stage=retrieval_stage,
     )
+
+
+def _is_low_value_section(section: str | None) -> bool:
+    """True if a chunk's section is one we drop from Similar Work candidates.
+
+    References / Acknowledgments / Appendix etc. usually cite related work
+    rather than describing it — they produce noise that pushes out genuine
+    topical matches. Match is case-insensitive and ignores leading/trailing
+    whitespace (section labels in real chunks are inconsistently cased).
+    """
+    if not section:
+        return False
+    return section.strip().lower() in LOW_VALUE_SECTIONS
+
+
+def _diversify_and_sort_counter_items(
+    items: list[RetrievalResultItem],
+) -> list[RetrievalResultItem]:
+    """Apply role-priority sort + per-paper chunk cap to Counter Evidence items.
+
+    Sort key:
+      1. role priority (contradicts < qualifies < supports/overlaps < unknown)
+      2. judgement_confidence desc (within same role)
+      3. score desc (within same role + confidence; tie-break on reranker score)
+      4. paper diversity cap: at most ``COUNTER_EVIDENCE_MAX_CHUNKS_PER_PAPER``
+         chunks from any single paper survive.
+
+    The cap is applied AFTER sort so we keep the most-confident role
+    representations of each paper, not the first N by score.
+    """
+    if not items:
+        return items
+
+    # Sort by (role priority, -confidence, -score, stable order for ties)
+    def sort_key(item: RetrievalResultItem) -> tuple[int, float, float]:
+        return (
+            COUNTER_ROLE_PRIORITY.get(item.judgement, 99),
+            -item.judgement_confidence,
+            -item.score,
+        )
+
+    ranked = sorted(items, key=sort_key)
+
+    # Apply per-paper cap.
+    by_paper_count: dict[str, int] = {}
+    capped: list[RetrievalResultItem] = []
+    for item in ranked:
+        pid = item.paper_id or ""
+        if by_paper_count.get(pid, 0) >= COUNTER_EVIDENCE_MAX_CHUNKS_PER_PAPER:
+            continue
+        by_paper_count[pid] = by_paper_count.get(pid, 0) + 1
+        capped.append(item)
+    return capped
 
 
 def _spread_sample_indices(total: int, max_samples: int = 5) -> list[int]:

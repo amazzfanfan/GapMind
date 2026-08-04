@@ -30,18 +30,34 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=10, ge=1, le=50)
     section: str | None = None
+    exclude_paper_ids: list[str] = Field(
+        default_factory=list,
+        description="Paper UUIDs to exclude from recall (pushed into the Milvus filter).",
+    )
     use_reranker: bool = True
 
 
 class SimilarWorkRequest(BaseModel):
     paper_id: str
     top_k: int = Field(default=10, ge=1, le=50)
+    exclude_paper_ids: list[str] = Field(
+        default_factory=list,
+        description="Additional paper UUIDs to exclude. The source ``paper_id`` is always excluded.",
+    )
     use_reranker: bool = True
 
 
 class CounterEvidenceRequest(BaseModel):
     claim_text: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=10, ge=1, le=50)
+    source_paper_id: str | None = Field(
+        default=None,
+        description="UUID of the claim's source paper. Always excluded from recall.",
+    )
+    exclude_paper_ids: list[str] = Field(
+        default_factory=list,
+        description="Additional paper UUIDs to exclude. Merged with source_paper_id.",
+    )
     use_reranker: bool = True
     use_judge: bool = True
 
@@ -59,6 +75,7 @@ def api_semantic_search(workspace_id: str, body: SearchRequest) -> RetrievalResp
         query=body.query,
         top_k=body.top_k,
         section=body.section,
+        exclude_paper_ids=set(body.exclude_paper_ids) or None,
         use_reranker=body.use_reranker,
     )
     if result.status == "failed":
@@ -73,6 +90,7 @@ def api_similar_work(workspace_id: str, body: SimilarWorkRequest) -> RetrievalRe
         workspace_id=workspace_id,
         paper_id=body.paper_id,
         top_k=body.top_k,
+        exclude_paper_ids=set(body.exclude_paper_ids) or None,
         use_reranker=body.use_reranker,
     )
     if result.status == "failed":
@@ -83,10 +101,15 @@ def api_similar_work(workspace_id: str, body: SimilarWorkRequest) -> RetrievalRe
 @router.post("/counter-evidence", response_model=RetrievalResponse)
 def api_counter_evidence(workspace_id: str, body: CounterEvidenceRequest) -> RetrievalResponse:
     """Find counter-evidence for a claim (reranked + LLM judged)."""
+    # The claim's source paper must never be returned as its own counter-evidence.
+    excluded = set(body.exclude_paper_ids)
+    if body.source_paper_id:
+        excluded.add(body.source_paper_id)
     result = find_counter_evidence(
         workspace_id=workspace_id,
         claim_text=body.claim_text,
         top_k=body.top_k,
+        exclude_paper_ids=excluded or None,
         use_reranker=body.use_reranker,
         use_judge=body.use_judge,
     )

@@ -6,7 +6,25 @@ and retrieval responses (Contract D output).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+# Role the Judge assigns to a retrieved chunk when scoring it against a
+# claim. Ordered: contradictions first (most informative for the user),
+# qualifications next (still informative), then overlap / support (low signal
+# for "is this a counter-example?"), then unknown (judge failure or no signal).
+CounterRole = Literal["contradicts", "qualifies", "supports", "overlaps", "unknown"]
+
+# Empty-result reason codes for ``counter_evidence``. The user must be able
+# to distinguish "we couldn't find anything" from "we couldn't judge what we
+# found" — those lead to different Discover Run follow-ups.
+CounterEmptyReason = Literal[
+    "retrieval_empty",            # Milvus returned 0 candidates
+    "judge_failed",               # Judge LLM call failed for every candidate
+    "genuinely_no_counter_evidence",  # Judge ran, no contradicting / qualifying chunk
+]
 
 
 # ------------------------------------------------------------------
@@ -79,7 +97,9 @@ class RetrievalResultItem(BaseModel):
     text: str = ""
     score: float = 0.0
     retrieval_stage: str = "candidate_recall"
-    judgement: str = "unknown"
+    # Constrained to the Judge's vocabulary so downstream code (UI, Discover
+    # Agent) can switch on the value rather than pattern-match strings.
+    judgement: CounterRole = "unknown"
     judgement_confidence: float = 0.0
 
 
@@ -97,3 +117,7 @@ class RetrievalResponse(BaseModel):
     latency_ms: float = 0.0
     filters_applied: dict = Field(default_factory=dict)
     error: str | None = None
+    # Populated only when ``total == 0`` and ``purpose == "counter_evidence"``
+    # so the Discover Agent / UI can distinguish three empty states:
+    # retrieval_empty | judge_failed | genuinely_no_counter_evidence.
+    empty_reason: CounterEmptyReason | None = None

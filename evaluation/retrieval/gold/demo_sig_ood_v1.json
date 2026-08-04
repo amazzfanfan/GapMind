@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0.0",
+  "case_id": "demo-sig-ood-v1",
+  "corpus_version": "sig-ood-smoke-v1",
+  "workspace_hint": "123100ea-e75b-4110-9048-1f5b92668c32",
+  "freeze": {
+    "chunk_version": "v1",
+    "embedding_model": "BAAI/bge-m3",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "judge_model": "deepseek-v4-flash"
+  },
+  "semantic_search": [
+    {
+      "query_id": "ss-001",
+      "query": "self-interpretable graph neural network prototype-based explanation",
+      "target_paper_ref": "ProtGNN: Towards Self-Explaining Graph Neural Networks",
+      "note": "DRAFT - confirm against RG-1 human review. Prototype-based intrinsic explanation family."
+    },
+    {
+      "query_id": "ss-002",
+      "query": "systematic evaluation of explainability methods for graph neural networks",
+      "target_paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks",
+      "note": "DRAFT - GraphFramEx is the evaluation-focused paper in the corpus."
+    },
+    {
+      "query_id": "ss-003",
+      "query": "graph out-of-distribution generalization benchmark covariate concept shift",
+      "target_paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",
+      "note": "DRAFT - GOOD defines the shift types the demo question needs."
+    }
+  ],
+  "similar_work": [
+    {
+      "query_id": "sw-001",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "relevant_paper_refs": [
+        "ProtGNN: Towards Self-Explaining Graph Neural Networks",
+        "Discovering Invariant Rationales for Graph Neural Networks",
+        "Interpretable and Generalizable Graph Learning via Stochastic Attention Mechanism"
+      ],
+      "note": "DRAFT - PGIB is prototype/intrinsic; ProtGNN is the sibling prototype method; DIR+GSAT are invariant rationale (closest neighbors)."
+    },
+    {
+      "query_id": "sw-002",
+      "source_paper_ref": "GNNExplainer: Generating Explanations for Graph Neural Networks",
+      "relevant_paper_refs": [
+        "PGExplainer: Parameterized Explainer for Graph Neural Network",
+        "PGM-Explainer: Probabilistic Graphical Model Explanations for Graph Neural Networks",
+        "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search"
+      ],
+      "note": "DRAFT - all post-hoc explanation family; should cluster together."
+    },
+    {
+      "query_id": "sw-003",
+      "source_paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",
+      "relevant_paper_refs": [
+        "OOD-GNN: Out-of-Distribution Generalized Graph Neural Network"
+      ],
+      "note": "DRAFT - GOOD and OOD-GNN are the only two OOD-shift papers; may be a thin gold set until corpus grows."
+    }
+  ],
+  "counter_evidence": [
+    {
+      "query_id": "ce-001",
+      "claim_text": "Intrinsic explanation methods always produce more faithful explanations than post-hoc explanation methods.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        {
+          "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks",
+          "role": "qualifies"
+        },
+        {
+          "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks",
+          "role": "qualifies"
+        }
+      ],
+      "note": "DRAFT - 'always' is a strong universal; evaluation work (GraphFramEx/Zorro) should qualify it. RG-1 must confirm the source paper is excluded."
+    },
+    {
+      "query_id": "ce-002",
+      "claim_text": "Explanations learned on synthetic motifs transfer reliably to real-world graph datasets.",
+      "source_paper_ref": "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search",
+      "gold_roles": [
+        {
+          "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks",
+          "role": "qualifies"
+        },
+        {
+          "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks",
+          "role": "contradicts"
+        }
+      ],
+      "note": "DRAFT - synthetic-to-real transfer is known-fragile; Zorro/GraphFramEx critique it. Confirm against corpus content."
+    },
+    {
+      "query_id": "ce-003",
+      "claim_text": "Self-interpretable GNN explanations remain stable under distribution shift without special out-of-distribution training.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        {
+          "paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",
+          "role": "qualifies"
+        },
+        {
+          "paper_ref": "OOD-GNN: Out-of-Distribution Generalized Graph Neural Network",
+          "role": "qualifies"
+        }
+      ],
+      "note": "DRAFT - OOD papers show shift degrades generalization; whether explanation stability is separately affected is exactly the open question. Confirms the demo's research gap is NOT assumed."
+    }
+  ]
+}

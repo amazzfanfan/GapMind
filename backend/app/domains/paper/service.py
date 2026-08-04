@@ -20,6 +20,7 @@ from app.domains.artifact.pdf_metadata import extract_metadata
 from app.domains.artifact.service import ArtifactService
 from app.domains.paper.models import Paper
 from app.domains.paper.schemas import PaperCreate, PaperUpdate
+from app.domains.retrieval import milvus_client
 from app.domains.workspace.service import WorkspaceService
 
 logger = get_logger(__name__)
@@ -360,6 +361,20 @@ class PaperService:
         paper = self.get(paper_id)
         paper.is_deleted = True
         self.db.commit()
+        # Propagate to the search index: a soft-deleted paper's vectors must
+        # leave Milvus so future retrieval calls don't surface it. We delete
+        # AFTER the DB commit so the rollback semantics are clean — if Milvus
+        # is unreachable we raise, leaving the DB and index in a known
+        # inconsistent state that a reconcile job can detect.
+        try:
+            milvus_client.delete_by_paper(paper.id)
+        except Exception as exc:
+            logger.error(
+                "paper.soft_delete_milvus_failed",
+                paper_id=paper.id,
+                error=str(exc),
+            )
+            raise
         self.timeline_service.record(
             workspace_id=paper.workspace_id,
             event_type="paper.deleted",

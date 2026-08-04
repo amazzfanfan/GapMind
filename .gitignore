@@ -75,6 +75,12 @@ dist/
 backend/openapi.json
 frontend/openapi.json
 
+# ---- Retrieval Gate evaluation outputs ----
+# Every run of `evaluation/retrieval/run_eval.py` writes a JSON report here;
+# they are evidence artifacts, not source, and are not committed.
+evaluation/retrieval/reports/
+evaluation/retrieval/eval_report.json
+
 # ---- Artifact storage (user-uploaded PDFs, parsed text, chunks) ----
 # These contain real paper content and should never be in git.
 # Ignore directory CONTENTS (not the dirs themselves) so we can keep

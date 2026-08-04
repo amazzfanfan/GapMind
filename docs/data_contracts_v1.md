@@ -238,6 +238,17 @@ Workspace 隔离规则。不兼容变更必须升级 major 版本。
 - 外部摘要结果使用 `metadata_only`；关键 Opportunity 结论不能只依赖该级别。
 - 检索失败返回 `status=failed` 和结构化 error；不得伪装成成功的空列表。
 - Workspace 本地检索必须严格过滤 `workspace_id`。
+- **来源论文排除（RG-2 / D1）**：
+  - `counter_evidence` 请求必须携带 claim 的 `source_paper_id`（或等价的 `exclude_paper_ids`）；
+    来源论文必须**在 Milvus recall 阶段被排除**（filter 表达式 `paper_id not in [...]` 下推），
+    不能只做返回后的 post-filter——否则来源论文自身的 chunk 会挤掉真正的反证。
+  - `similar_work` 恒排除源 `paper_id`，即使调用方未显式传 `exclude_paper_ids`。
+  - 每次响应 `filters_applied` 必须记录实际生效的 `excluded_paper_ids`（排序后的 UUID 列表），
+    供审计：排除行为可复现。
+  - 排除行为是**召回语义的一部分**：不传排除时返回来源论文不构成"未发现反证"；只有
+    检索成功且排除后无命中，才算 `succeeded` 空结果。
+  - 服务层对返回结果保留一道防御性 post-filter（belt-and-suspenders），防止特定 Milvus
+    版本 filter 语法回归把来源论文漏进来。
 
 ## 6. Contract E：ExternalPaperCandidate
 
