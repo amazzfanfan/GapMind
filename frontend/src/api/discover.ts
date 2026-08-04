@@ -195,13 +195,6 @@ export interface OpportunityDetail {
   plan: ResearchPlan | null;
 }
 
-export interface DiscoverResponse {
-  opportunity: ResearchOpportunity;
-  claim_text: string;
-  similar_work: RetrievalResponse;
-  counter_evidence: RetrievalResponse;
-}
-
 export const discoverApi = {
   async createRun(workspaceId: string, payload: {
     input: { topic?: string; claim_item_id?: string; paper_ids?: string[]; keywords?: string[]; constraints?: string };
@@ -246,12 +239,9 @@ export const discoverApi = {
   async convert(workspaceId: string, opportunityId: string): Promise<{ plan: ResearchPlan }> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}/convert`)).data;
   },
-  async createOpportunity(workspaceId: string, payload: { claim_item_id?: string; claim_text?: string; paper_id?: string; top_k?: number }): Promise<DiscoverResponse> {
-    return (await apiClient.post<DiscoverResponse>(`/workspaces/${workspaceId}/discover/opportunities`, payload)).data;
-  },
 };
 
 export function claimText(item: KnowledgeItem): string {
-  const statement = item.content.statement;
+  const statement = item.content?.statement;
   return typeof statement === "string" && statement.trim() ? statement : item.canonical_name;
 }

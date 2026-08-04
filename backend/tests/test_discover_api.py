@@ -40,4 +40,4 @@ def test_discover_run_validates_workspace_scope(client: TestClient) -> None:
         json={"input": {"topic": "topic", "paper_ids": [second['id']]}},
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "discover_preflight_failed"
+    assert response.json()["detail"]["error"] == "discover_input_invalid"

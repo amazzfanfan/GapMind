@@ -46,6 +46,15 @@ class ExtractionRunNotFoundError(Exception):
         self.run_id = run_id
 
 
+class KnowledgeItemReviewError(ValueError):
+    """Raised when a human review payload is rejected by the service.
+
+    Subclasses ``ValueError`` so existing callers that catch generic value
+    errors continue to work, but the new central exception handler maps it
+    to a 422 with error code ``invalid_review``.
+    """
+
+
 class KnowledgeService:
     """Knowledge queries + writes for Phase 3."""
 
@@ -532,7 +541,7 @@ class KnowledgeService:
             raise KnowledgeItemNotFoundError(item_id)
         if payload.action == "edit":
             if payload.canonical_name is None and payload.content is None and payload.confidence is None:
-                raise ValueError("edit requires canonical_name, content, or confidence")
+                raise KnowledgeItemReviewError("edit requires canonical_name, content, or confidence")
             if payload.canonical_name is not None:
                 item.canonical_name = payload.canonical_name.strip()
             if payload.content is not None:

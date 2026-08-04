@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
+from fastapi import Header
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -26,3 +27,16 @@ def get_db() -> Generator[Session, None, None]:
 def get_settings_dep() -> "settings.__class__":  # type: ignore[valid-type]
     """FastAPI dependency returning the cached Settings instance."""
     return settings
+
+
+def get_current_user(
+    x_user_id: str | None = Header(default=None, alias="X-User-ID"),
+) -> str:
+    """Resolve the acting user identity from the ``X-User-ID`` header.
+
+    The MVP is single-user, so the header is optional and defaults to
+    ``"user"``. Plumbing this through now means swapping in real auth
+    later only touches this dependency — every downstream service already
+    reads the actor from the request scope.
+    """
+    return x_user_id or "user"

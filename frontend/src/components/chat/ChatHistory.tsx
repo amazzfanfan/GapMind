@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Button, Dropdown, Empty, Input, List, Spin, Typography } from "antd";
 import { DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import type { ChatConversation } from "../../api/chat";
-import { groupConversations, truncateChatTitle } from "../../pages/chatState";
+import { groupConversations, truncateChatTitle } from "../../state/chatState";
 
 interface Props {
   items: ChatConversation[];

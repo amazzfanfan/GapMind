@@ -101,8 +101,8 @@ export default function WorkspaceOverviewPage() {
             <Space direction="vertical" size="small" style={{ width: "100%" }}>
               <Typography.Text><strong>研究主题：</strong>{workspace.topic || "尚未设置"}</Typography.Text>
               <Typography.Text><strong>研究目标：</strong>{workspace.goals || "尚未设置"}</Typography.Text>
-              <Typography.Text><strong>当前问题：</strong>{workspace.active_questions.length ? workspace.active_questions[0] : "尚未设置"}</Typography.Text>
-              <Space wrap>{workspace.keywords.length ? workspace.keywords.map((keyword) => <Tag key={keyword}>{keyword}</Tag>) : <Typography.Text type="secondary">还没有关键词</Typography.Text>}</Space>
+              <Typography.Text><strong>当前问题：</strong>{(workspace.active_questions ?? []).length ? (workspace.active_questions ?? [])[0] : "尚未设置"}</Typography.Text>
+              <Space wrap>{(workspace.keywords ?? []).length ? (workspace.keywords ?? []).map((keyword) => <Tag key={keyword}>{keyword}</Tag>) : <Typography.Text type="secondary">还没有关键词</Typography.Text>}</Space>
             </Space>
           </Card>
         </Col>

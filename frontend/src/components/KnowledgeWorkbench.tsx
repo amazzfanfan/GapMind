@@ -78,7 +78,7 @@ function statusColor(status: string): string {
   return "gold";
 }
 
-function contentPreview(content: Record<string, unknown>): string {
+function contentPreview(content: Record<string, unknown> | undefined): string {
   const preferred = [
     "statement",
     "description",
@@ -87,10 +87,10 @@ function contentPreview(content: Record<string, unknown>): string {
     "limitation_type",
   ];
   for (const key of preferred) {
-    const value = content[key];
+    const value = content?.[key];
     if (typeof value === "string" && value.trim()) return value;
   }
-  return JSON.stringify(content);
+  return JSON.stringify(content ?? {});
 }
 
 export default function KnowledgeWorkbench({
@@ -134,7 +134,7 @@ export default function KnowledgeWorkbench({
         q: appliedQuery || undefined,
         min_confidence: minConfidence,
       });
-      setItems(response.items);
+      setItems(response.items ?? []);
       setTotal(response.total);
     } catch (error) {
       message.error(`Failed to load knowledge: ${errorMessage(error)}`);
@@ -169,8 +169,8 @@ export default function KnowledgeWorkbench({
         knowledgeApi.listEvidence(workspaceId, item.id),
         knowledgeApi.listRelations(workspaceId, { item_id: item.id }),
       ]);
-      setEvidence(evidenceResponse.items);
-      setRelations(relationResponse.items);
+      setEvidence(evidenceResponse.items ?? []);
+      setRelations(relationResponse.items ?? []);
     } catch (error) {
       message.error(`Failed to load evidence: ${errorMessage(error)}`);
     } finally {

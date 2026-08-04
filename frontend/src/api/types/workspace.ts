@@ -1,36 +1,16 @@
-export interface Workspace {
-  id: string;
-  name: string;
-  description: string | null;
-  topic: string | null;
-  keywords: string[];
-  goals: string | null;
-  constraints: string | null;
-  active_questions: string[];
-  is_archived: boolean;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+// Workspace type aliases — all re-exports of the auto-generated OpenAPI
+// schemas. Run `npm run gen:api` after touching backend Pydantic models
+// to keep these in sync.
+//
+// Do NOT add hand-written fields here. If a field is missing from the
+// backend, add it to the Pydantic schema and regenerate.
 
-export interface WorkspaceCreate {
-  name: string;
-  description?: string;
-  topic?: string;
-  keywords?: string[];
-  goals?: string;
-  constraints?: string;
-  active_questions?: string[];
-}
+import type { components } from "./api.gen";
 
-export type WorkspaceUpdate = Partial<WorkspaceCreate>;
-
-export interface WorkspaceListResponse {
-  items: Workspace[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+export type Workspace = components["schemas"]["WorkspaceRead"];
+export type WorkspaceCreate = components["schemas"]["WorkspaceCreate"];
+export type WorkspaceUpdate = components["schemas"]["WorkspaceUpdate"];
+export type WorkspaceListResponse = components["schemas"]["WorkspaceListResponse"];
 
 export interface WorkspaceListParams {
   include_archived?: boolean;

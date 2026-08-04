@@ -67,6 +67,14 @@ dist/
 .vite/
 *.local
 
+# ---- OpenAPI codegen intermediates ----
+# Run `npm run gen:api` to regenerate `frontend/src/api/types/api.gen.ts`
+# (the committed source of truth for frontend types).
+# - backend/openapi.json: exported by `python scripts/export_openapi.py`
+# - frontend/openapi.json: working copy consumed by openapi-typescript
+backend/openapi.json
+frontend/openapi.json
+
 # ---- Artifact storage (user-uploaded PDFs, parsed text, chunks) ----
 # These contain real paper content and should never be in git.
 # Ignore directory CONTENTS (not the dirs themselves) so we can keep

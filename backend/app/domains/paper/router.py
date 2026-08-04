@@ -7,6 +7,13 @@ Endpoints:
   GET    /api/v1/workspaces/{wid}/papers/{pid}         get one
   PATCH  /api/v1/workspaces/{wid}/papers/{pid}         update
   DELETE /api/v1/workspaces/{wid}/papers/{pid}         soft delete
+
+Domain exceptions raised here (PaperNotFoundError, WorkspaceNotFoundError,
+PaperAlreadyHasPdfError, SemanticScholarError) are translated into HTTP
+responses by the central handler registered in
+``app.core.exception_handlers``. Business-rule violations (empty file,
+wrong extension, paper not parsed, …) stay as inline ``HTTPException``
+because they're not tied to any exception class.
 """
 
 from __future__ import annotations
@@ -21,7 +28,6 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
 from app.core.logging import get_logger
-from app.domains.artifact.service import ArtifactNotFoundError
 from app.domains.paper.schemas import (
     PaperCreate,
     PaperListResponse,
@@ -33,13 +39,9 @@ from app.domains.paper.schemas import (
     SemanticScholarSearchHistoryRead,
     SemanticScholarSearchResponse,
 )
-from app.domains.paper.service import (
-    PaperAlreadyHasPdfError,
-    PaperNotFoundError,
-    PaperService,
-)
+from app.domains.paper.service import PaperService
 from app.domains.paper.search_service import PaperSearchService
-from app.domains.workspace.service import WorkspaceNotFoundError, WorkspaceService
+from app.domains.workspace.service import WorkspaceService
 from app.gateway.semantic_scholar import SemanticScholarClient, SemanticScholarError
 
 logger = get_logger(__name__)
@@ -67,40 +69,6 @@ def _get_workspace_service(db: Session = Depends(get_db)) -> WorkspaceService:
 
 def _get_semantic_scholar_client() -> SemanticScholarClient:
     return SemanticScholarClient()
-
-
-def _not_found(exc: Exception) -> HTTPException:
-    if isinstance(exc, PaperNotFoundError):
-        code = "paper_not_found"
-    elif isinstance(exc, ArtifactNotFoundError):
-        code = "artifact_not_found"
-    else:
-        code = "workspace_not_found"
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail={"error": code, "message": str(exc)},
-    )
-
-
-def _conflict(exc: PaperAlreadyHasPdfError) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={"error": "paper_already_has_pdf", "message": str(exc)},
-    )
-
-
-def _semantic_scholar_http_error(exc: SemanticScholarError) -> HTTPException:
-    upstream_status = exc.status_code
-    if upstream_status in {400, 401, 403, 429}:
-        response_status = upstream_status
-    elif upstream_status == 504:
-        response_status = status.HTTP_504_GATEWAY_TIMEOUT
-    else:
-        response_status = status.HTTP_502_BAD_GATEWAY
-    return HTTPException(
-        status_code=response_status,
-        detail={"error": "semantic_scholar_error", "message": str(exc)},
-    )
 
 
 def _arxiv_pdf_url(external_ids: dict[str, object]) -> str | None:
@@ -156,23 +124,20 @@ def search_external_papers(
     if year_from is not None or year_to is not None:
         year_filter = f"{year_from or ''}-{year_to or ''}"
 
-    try:
-        raw = client.search(
-            query=query.strip(),
-            fields=S2_SEARCH_FIELDS,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            token=token,
-            year=year_filter,
-            minCitationCount=min_citation_count,
-            openAccessPdf="" if open_access else None,
-            fieldsOfStudy=fields_of_study,
-            publicationTypes=publication_types,
-            venue=venue,
-        )
-    except SemanticScholarError as exc:
-        raise _semantic_scholar_http_error(exc) from exc
+    raw = client.search(
+        query=query.strip(),
+        fields=S2_SEARCH_FIELDS,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+        token=token,
+        year=year_filter,
+        minCitationCount=min_citation_count,
+        openAccessPdf="" if open_access else None,
+        fieldsOfStudy=fields_of_study,
+        publicationTypes=publication_types,
+        venue=venue,
+    )
 
     try:
         PaperSearchService(db).record_history(
@@ -259,10 +224,7 @@ def import_external_paper(
     Import metadata and, when requested, download the advertised open-access
     PDF. PDF processing continues through the existing Celery pipeline.
     """
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as exc:
-        raise _not_found(exc) from exc
+    workspace_service.get(workspace_id)
 
     external_id = payload.semantic_scholar_paper_id.strip()
     existing = service.find_by_external_paper_id(
@@ -276,10 +238,7 @@ def import_external_paper(
     ):
         return PaperRead.model_validate(existing)
 
-    try:
-        raw = client.get_paper(external_id, fields=S2_IMPORT_FIELDS)
-    except SemanticScholarError as exc:
-        raise _semantic_scholar_http_error(exc) from exc
+    raw = client.get_paper(external_id, fields=S2_IMPORT_FIELDS)
 
     title = raw.get("title")
     if not isinstance(title, str) or not title.strip():
@@ -337,7 +296,8 @@ def import_external_paper(
                 except AttributeError as exc:
                     # Keep metadata import graceful for lightweight test or
                     # custom clients that do not implement PDF downloading.
-                    raise SemanticScholarError(
+                    from app.gateway.semantic_scholar import SemanticScholarError as _S2Err
+                    raise _S2Err(
                         "PDF downloader is unavailable", status_code=502
                     ) from exc
                 filename = re.sub(r"[^A-Za-z0-9._-]+", "_", title.strip())[:120]
@@ -377,10 +337,7 @@ async def upload_paper(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> PaperRead:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
@@ -448,10 +405,7 @@ async def attach_pdf_to_paper(
     user later obtains the PDF. Any empty metadata fields on the paper row
     are best-effort filled from the PDF's embedded metadata.
     """
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
@@ -473,18 +427,13 @@ async def attach_pdf_to_paper(
             },
         )
 
-    try:
-        paper = service.attach_pdf_to_existing(
-            workspace_id=workspace_id,
-            paper_id=paper_id,
-            filename=file.filename,
-            content=content,
-            mime_type=file.content_type or "application/pdf",
-        )
-    except PaperNotFoundError as e:
-        raise _not_found(e) from e
-    except PaperAlreadyHasPdfError as e:
-        raise _conflict(e) from e
+    paper = service.attach_pdf_to_existing(
+        workspace_id=workspace_id,
+        paper_id=paper_id,
+        filename=file.filename,
+        content=content,
+        mime_type=file.content_type or "application/pdf",
+    )
     return PaperRead.model_validate(paper)
 
 
@@ -500,10 +449,7 @@ def create_paper(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> PaperRead:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
     # For JSON metadata-only creation, title is required (can't be empty
     # since there's no PDF to fall back on for a title).
     if not payload.title or not payload.title.strip():
@@ -527,10 +473,7 @@ def list_papers(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> PaperListResponse:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
     items, total = service.list(workspace_id=workspace_id, limit=limit, offset=offset)
     return PaperListResponse(
         items=[PaperRead.model_validate(p) for p in items],
@@ -551,13 +494,11 @@ def trigger_paper_extraction(
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> dict[str, str]:
     """Idempotently trigger or retry extraction for a parsed paper."""
-    try:
-        workspace_service.get(workspace_id)
-        paper = service.get(paper_id)
-    except (WorkspaceNotFoundError, PaperNotFoundError) as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    paper = service.get(paper_id)
     if paper.workspace_id != workspace_id:
-        raise _not_found(PaperNotFoundError(paper_id))
+        from app.domains.paper.service import PaperNotFoundError
+        raise PaperNotFoundError(paper_id)
     if not paper.parsed_markdown_artifact_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -584,16 +525,11 @@ def get_paper(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> PaperRead:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    try:
-        paper = service.get(paper_id)
-    except PaperNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    paper = service.get(paper_id)
     if paper.workspace_id != workspace_id:
-        raise _not_found(PaperNotFoundError(paper_id))
+        from app.domains.paper.service import PaperNotFoundError
+        raise PaperNotFoundError(paper_id)
     return PaperRead.model_validate(paper)
 
 
@@ -609,16 +545,11 @@ def update_paper(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> PaperRead:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    try:
-        paper = service.get(paper_id)
-    except PaperNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    paper = service.get(paper_id)
     if paper.workspace_id != workspace_id:
-        raise _not_found(PaperNotFoundError(paper_id))
+        from app.domains.paper.service import PaperNotFoundError
+        raise PaperNotFoundError(paper_id)
     paper = service.update(paper_id, payload)
     return PaperRead.model_validate(paper)
 
@@ -633,16 +564,11 @@ def delete_paper(
     service: PaperService = Depends(_get_paper_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> dict[str, str | bool]:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    try:
-        paper = service.get(paper_id)
-    except PaperNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    paper = service.get(paper_id)
     if paper.workspace_id != workspace_id:
-        raise _not_found(PaperNotFoundError(paper_id))
+        from app.domains.paper.service import PaperNotFoundError
+        raise PaperNotFoundError(paper_id)
     service.soft_delete(paper_id)
     return {"id": paper_id, "deleted": True}
 

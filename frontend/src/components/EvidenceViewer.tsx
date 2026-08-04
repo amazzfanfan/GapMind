@@ -16,7 +16,7 @@ interface Segment {
 
 function buildSegments(content: string, spans: EvidenceSpan[]): Segment[] {
   const valid = spans
-    .filter((span) => span.start_char !== null && span.end_char !== null && span.end_char > span.start_char)
+    .filter((span) => span.start_char != null && span.end_char != null && (span.end_char ?? 0) > (span.start_char ?? 0))
     .map((span) => ({ start: Math.max(0, span.start_char ?? 0), end: Math.min(content.length, span.end_char ?? 0), relation: span.relation }))
     .filter((span) => span.end > span.start)
     .sort((a, b) => a.start - b.start);
@@ -54,7 +54,7 @@ export default function EvidenceViewer({
   }, [itemId, message, open, workspaceId]);
 
   const segments = useMemo(
-    () => (context ? buildSegments(context.content, context.spans) : []),
+    () => (context ? buildSegments(context.content, context.spans ?? []) : []),
     [context],
   );
   const downloadUrl = context

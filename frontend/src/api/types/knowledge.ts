@@ -1,154 +1,40 @@
-export type KnowledgeType =
-  | "paper"
-  | "method"
-  | "task"
-  | "dataset"
-  | "claim"
-  | "evidence"
-  | "limitation";
+// Knowledge type aliases — re-exported from the auto-generated OpenAPI
+// schemas. Run `npm run gen:api` after touching the corresponding Pydantic
+// models to keep these in sync.
+//
+// Do NOT add hand-written fields here. The Omit+Pick overrides below are
+// the only exception: they relax Pydantic `dict[str, Any]` (which
+// openapi-typescript renders as `Record<string, never>`) to a friendlier
+// `Record<string, unknown>` so component code can iterate without casts.
 
-export type KnowledgeStatus =
-  | "raw_source"
-  | "extracted_candidate"
-  | "evidence_backed_proposal"
-  | "human_confirmed"
-  | "experiment_validated"
-  | "deprecated"
-  | "rejected"
-  | "invalidated";
+import type { components } from "./api.gen";
 
-export interface KnowledgeItem {
-  id: string;
-  workspace_id: string;
-  paper_id: string | null;
-  canonical_entity_id: string | null;
-  extraction_run_id: string | null;
-  item_key: string | null;
-  type: KnowledgeType;
-  canonical_name: string;
-  content: Record<string, unknown>;
-  source_provenance: Record<string, unknown>;
-  created_by: "user" | "agent" | "system";
-  confidence: number;
-  status: KnowledgeStatus;
-  version: number;
-  reviewed_by: string | null;
-  reviewed_at: string | null;
-  review_note: string | null;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+type LooseDictField<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]: NonNullable<T[P]> | undefined extends T[P]
+    ? Record<string, unknown> | undefined
+    : Record<string, unknown>;
+};
 
-export interface KnowledgeItemListResponse {
-  items: KnowledgeItem[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+type _KnowledgeItemRaw = components["schemas"]["KnowledgeItemRead"];
+export type KnowledgeItem = LooseDictField<_KnowledgeItemRaw, "content" | "source_provenance">;
 
-export interface KnowledgeRelation {
-  id: string;
-  workspace_id: string;
-  source_id: string;
-  target_id: string;
-  relation_type: string;
-  confidence: number;
-  payload: Record<string, unknown>;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+type _KnowledgeRelationRaw = components["schemas"]["KnowledgeRelationRead"];
+export type KnowledgeRelation = LooseDictField<_KnowledgeRelationRaw, "payload">;
 
-export interface KnowledgeRelationListResponse {
-  items: KnowledgeRelation[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+export type KnowledgeItemListResponse = components["schemas"]["KnowledgeItemListResponse"];
+export type KnowledgeRelationListResponse = components["schemas"]["KnowledgeRelationListResponse"];
 
-export interface EvidenceSpan {
-  id: string;
-  workspace_id: string;
-  knowledge_item_id: string;
-  paper_id: string;
-  artifact_id: string | null;
-  artifact_kind: string | null;
-  artifact_version: string | null;
-  chunk_index: number | null;
-  start_char: number | null;
-  end_char: number | null;
-  text: string | null;
-  relation: string;
-  confidence: number;
-  created_at: string;
-  updated_at: string;
-}
+export type EvidenceSpan = components["schemas"]["EvidenceSpanRead"];
+export type EvidenceSpanListResponse = components["schemas"]["EvidenceSpanListResponse"];
 
-export interface EvidenceSpanListResponse {
-  items: EvidenceSpan[];
-  total: number;
-}
+type _GraphNodeRaw = components["schemas"]["KnowledgeGraphNodeRead"];
+export type KnowledgeGraphNode = LooseDictField<_GraphNodeRaw, "content">;
 
-export interface KnowledgeGraphNode {
-  id: string;
-  label: string;
-  type: KnowledgeType | string;
-  workspace_id: string;
-  paper_id: string | null;
-  canonical_entity_id: string | null;
-  confidence: number;
-  status: string;
-  content: Record<string, unknown>;
-  node_kind: "knowledge" | "paper" | "canonical_entity" | "paper_mention" | string;
-  paper_title: string | null;
-  entity_type: string | null;
-  mention_text: string | null;
-  knowledge_item_id: string | null;
-}
+export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdgeRead"];
+export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphResponse"];
 
-export interface KnowledgeGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  relation_type: string;
-  confidence: number;
-  payload: Record<string, unknown>;
-}
+export type EvidenceContext = components["schemas"]["EvidenceContextRead"];
 
-export interface KnowledgeGraphResponse {
-  workspace_id: string;
-  nodes: KnowledgeGraphNode[];
-  edges: KnowledgeGraphEdge[];
-  total_nodes: number;
-  total_edges: number;
-  truncated: boolean;
-  limit: number;
-  offset: number;
-}
-
-export interface EvidenceContext {
-  workspace_id: string;
-  paper_id: string;
-  artifact_id: string;
-  artifact_kind: string;
-  filename: string | null;
-  content: string;
-  spans: EvidenceSpan[];
-}
-
-export interface PaperMention {
-  id: string;
-  workspace_id: string;
-  paper_id: string;
-  canonical_entity_id: string;
-  knowledge_item_id: string | null;
-  mention_text: string;
-  artifact_id: string | null;
-  start_char: number | null;
-  end_char: number | null;
-  confidence: number;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
+// Enum-style string literal types derived from the generated schemas.
+export type KnowledgeType = KnowledgeItem["type"];
+export type KnowledgeStatus = KnowledgeItem["status"];

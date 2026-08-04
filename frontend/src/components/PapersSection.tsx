@@ -57,7 +57,7 @@ interface EditFormValues {
 function toEditValues(p: Paper): EditFormValues {
   return {
     title: p.title,
-    authors: p.authors.join(", "),
+    authors: (p.authors ?? []).join(", "),
     year: p.year ?? undefined,
     abstract: p.abstract ?? "",
     doi: p.doi ?? "",

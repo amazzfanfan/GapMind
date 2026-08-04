@@ -173,29 +173,6 @@ def test_evidence_context_and_markdown_download(client: TestClient, db_session) 
     assert download.content == b"# Intro\nEvidence sentence."
 
 
-def test_discover_agent_returns_fallback_opportunity_without_external_keys(
-    client: TestClient, db_session
-) -> None:
-    ws = _create_workspace(client)
-    item = KnowledgeItem(
-        workspace_id=ws["id"], type="claim", canonical_name="A claim",
-        content={"statement": "A claim about the workspace"}, source_provenance={},
-        created_by="agent", confidence=0.7, status="extracted_candidate", is_deleted=False,
-    )
-    db_session.add(item)
-    db_session.commit()
-
-    response = client.post(
-        f"/api/v1/workspaces/{ws['id']}/discover/opportunities",
-        json={"claim_item_id": item.id, "top_k": 2},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["opportunity"]["claim_item_id"] == item.id
-    assert body["opportunity"]["suggested_directions"]
-    assert body["counter_evidence"]["status"] in {"failed", "degraded", "succeeded"}
-
-
 def test_graph_contains_layered_nodes_and_expands_entity_neighbors(
     client: TestClient, db_session
 ) -> None:

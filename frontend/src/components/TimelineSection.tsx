@@ -32,8 +32,8 @@ function summarize(e: TimelineEvent): string {
 }
 
 function visiblePayload(e: TimelineEvent): Record<string, unknown> {
-  if (e.subject_type !== "task") return e.payload;
-  const safe = { ...e.payload };
+  if (e.subject_type !== "task") return e.payload ?? {};
+  const safe = { ...(e.payload ?? {}) };
   delete safe.error;
   delete safe.traceback;
   delete safe.stack;

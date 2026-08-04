@@ -149,8 +149,8 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
         limit: pageSize,
         offset: (page - 1) * pageSize,
       });
-      setNodes(response.nodes);
-      setEdges(response.edges);
+      setNodes(response.nodes ?? []);
+      setEdges(response.edges ?? []);
       setTruncated(response.truncated);
       setSelectedNodeId(null);
     } catch (error) {
@@ -243,12 +243,12 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
       });
       setNodes((current) => {
         const merged = new Map(current.map((node) => [node.id, node]));
-        response.nodes.forEach((node) => merged.set(node.id, node));
+        (response.nodes ?? []).forEach((node) => merged.set(node.id, node));
         return [...merged.values()];
       });
       setEdges((current) => {
         const merged = new Map(current.map((edge) => [edge.id, edge]));
-        response.edges.forEach((edge) => merged.set(edge.id, edge));
+        (response.edges ?? []).forEach((edge) => merged.set(edge.id, edge));
         return [...merged.values()];
       });
       message.success("Neighbor nodes loaded");
