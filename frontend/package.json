@@ -9,7 +9,10 @@
     "test": "vitest run",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:api-types": "cp ../backend/openapi.json ./openapi.json && openapi-typescript ./openapi.json -o src/api/types/api.gen.ts",
+    "gen:openapi": "cd ../backend && .venv/Scripts/python.exe scripts/export_openapi.py",
+    "gen:api": "npm run gen:openapi && npm run gen:api-types"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",
@@ -31,9 +34,10 @@
     "@typescript-eslint/eslint-plugin": "^8.8.0",
     "@typescript-eslint/parser": "^8.8.0",
     "@vitejs/plugin-react": "^4.3.2",
-    "eslint": "^10.8.0",
+    "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.12",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.6.2",
     "vite": "^7.0.0",
     "vitest": "^4.1.10"

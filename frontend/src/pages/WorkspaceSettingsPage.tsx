@@ -12,7 +12,7 @@ const { TextArea } = Input;
 interface FormValues { name: string; description?: string; topic?: string; keywords?: string; goals?: string; constraints?: string; active_questions?: string; }
 
 function valuesFor(workspace: Workspace): FormValues {
-  return { name: workspace.name, description: workspace.description ?? "", topic: workspace.topic ?? "", keywords: workspace.keywords.join(", "), goals: workspace.goals ?? "", constraints: workspace.constraints ?? "", active_questions: workspace.active_questions.join("\n") };
+  return { name: workspace.name, description: workspace.description ?? "", topic: workspace.topic ?? "", keywords: (workspace.keywords ?? []).join(", "), goals: workspace.goals ?? "", constraints: workspace.constraints ?? "", active_questions: (workspace.active_questions ?? []).join("\n") };
 }
 
 export default function WorkspaceSettingsPage() {

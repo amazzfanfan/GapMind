@@ -25,7 +25,7 @@ import { BulbOutlined, CloseCircleOutlined, PlusOutlined, ReloadOutlined } from 
 import { useParams, useSearchParams } from "react-router-dom";
 import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
 import { OpportunityEvidenceViewer } from "../components/EvidenceViewer";
-import { currentRunStage, currentRunStatus, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, TERMINAL_RUN_STATUSES } from "./discoverState";
+import { currentRunStage, currentRunStatus, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, TERMINAL_RUN_STATUSES } from "../state/discoverState";
 
 const { Text, Title, Paragraph } = Typography;
 

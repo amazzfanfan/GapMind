@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Input, Space, Typography } from "antd";
 import { SendOutlined } from "@ant-design/icons";
-import { shouldSendOnEnter } from "../../pages/chatState";
+import { shouldSendOnEnter } from "../../state/chatState";
 
 export default function ChatComposer({ loading, onSend, value, onChange }: { loading: boolean; onSend: (value: string) => void; value: string; onChange: (value: string) => void }) {
   const [focused, setFocused] = useState(false);

@@ -1,152 +1,36 @@
-export interface Paper {
-  id: string;
-  workspace_id: string;
-  primary_artifact_id: string | null;
-  title: string;
-  authors: string[];
-  year: number | null;
-  abstract: string | null;
-  doi: string | null;
-  arxiv_id: string | null;
-  source: string;
-  external_paper_id: string | null;
-  // Phase 2: parsing state
-  parse_status: "not_applicable" | "pending" | "parsing" | "parsed" | "failed";
-  parsed_at: string | null;
-  chunk_count: number;
-  parsed_text_artifact_id: string | null;
-  chunk_index_artifact_id: string | null;
-  parsed_markdown_artifact_id: string | null;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+// Hand-rolled type aliases for Paper, Task, Timeline, Artifact — re-exported
+// from the auto-generated OpenAPI schemas.
+//
+// Run `npm run gen:api` after touching the corresponding Pydantic models to
+// keep these in sync. Do NOT add hand-written fields here; if a field is
+// missing, add it to the backend schema and regenerate.
+//
+// The Omit+Pick overrides relax Pydantic `dict[str, Any]` (rendered as
+// `Record<string, never>` by openapi-typescript) to a friendlier
+// `Record<string, unknown>` so component code can iterate without casts.
 
-export interface PaperCreate {
-  title: string;
-  authors?: string[];
-  year?: number;
-  abstract?: string;
-  doi?: string;
-  arxiv_id?: string;
-}
+import type { components } from "./api.gen";
 
-export type PaperUpdate = Partial<PaperCreate>;
+type LooseDictField<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]: NonNullable<T[P]> | undefined extends T[P]
+    ? Record<string, unknown> | undefined
+    : Record<string, unknown>;
+};
 
-export interface PaperListResponse {
-  items: Paper[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+export type Paper = components["schemas"]["PaperRead"];
+export type PaperCreate = components["schemas"]["PaperCreate"];
+export type PaperUpdate = components["schemas"]["PaperUpdate"];
+export type PaperListResponse = components["schemas"]["PaperListResponse"];
 
-export interface Artifact {
-  id: string;
-  workspace_id: string;
-  kind: string;
-  file_path: string;
-  original_filename: string | null;
-  mime_type: string | null;
-  size_bytes: number;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+export type Artifact = components["schemas"]["ArtifactRead"];
 
-export interface Task {
-  id: string;
-  workspace_id: string | null;
-  task_type: string;
-  status:
-    | "queued"
-    | "running"
-    | "waiting_for_user"
-    | "succeeded"
-    | "failed"
-    | "cancel_requested"
-    | "cancelled";
-  progress: number;
-  payload: Record<string, unknown>;
-  result: Record<string, unknown> | null;
-  error: string | null;
-  celery_task_id: string | null;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
+export type Task = components["schemas"]["TaskRead"];
+export type TaskListResponse = components["schemas"]["TaskListResponse"];
 
-export interface TaskListResponse {
-  items: Task[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+type _TimelineEventRaw = components["schemas"]["TimelineEventRead"];
+export type TimelineEvent = LooseDictField<_TimelineEventRaw, "payload">;
+export type TimelineListResponse = components["schemas"]["TimelineListResponse"];
 
-export interface TimelineEvent {
-  id: string;
-  workspace_id: string;
-  event_type: string;
-  actor: string;
-  subject_type: string | null;
-  subject_id: string | null;
-  payload: Record<string, unknown>;
-  summary: string | null;
-  created_at: string;
-}
-
-export interface TimelineListResponse {
-  items: TimelineEvent[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface KnowledgeItem {
-  id: string;
-  workspace_id: string;
-  type: string;
-  canonical_name: string;
-  content: Record<string, unknown>;
-  source_provenance: Record<string, unknown>;
-  created_by: "user" | "agent" | "system";
-  confidence: number;
-  status: string;
-  version: number;
-  is_deleted: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface KnowledgeItemListResponse {
-  items: KnowledgeItem[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface ExtractionRejection {
-  id: string;
-  workspace_id: string;
-  extraction_run_id: string;
-  paper_id: string;
-  batch_index: number | null;
-  rejection_kind: "item" | "relation" | "output";
-  stage:
-    | "schema_validation"
-    | "evidence_resolution"
-    | "relation_resolution";
-  reason_code: string;
-  reason_detail: string;
-  item_type: string | null;
-  canonical_name: string | null;
-  raw_payload: Record<string, unknown>;
-  evidence_preview: string | null;
-  created_at: string;
-}
-
-export interface ExtractionRejectionListResponse {
-  items: ExtractionRejection[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+type _ExtractionRejectionRaw = components["schemas"]["ExtractionRejectionRead"];
+export type ExtractionRejection = LooseDictField<_ExtractionRejectionRaw, "raw_payload">;
+export type ExtractionRejectionListResponse = components["schemas"]["ExtractionRejectionListResponse"];

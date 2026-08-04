@@ -50,8 +50,8 @@ function toEditValues(ws: Workspace): EditFormValues {
     topic: ws.topic ?? "",
     goals: ws.goals ?? "",
     constraints: ws.constraints ?? "",
-    keywords: ws.keywords.join(", "),
-    active_questions: ws.active_questions.join("\n"),
+    keywords: (ws.keywords ?? []).join(", "),
+    active_questions: (ws.active_questions ?? []).join("\n"),
   };
 }
 
@@ -250,8 +250,8 @@ export default function WorkspaceDetailPage() {
           </Descriptions.Item>
           <Descriptions.Item label="Keywords">
             <Space size={[4, 4]} wrap>
-              {workspace.keywords.length > 0
-                ? workspace.keywords.map((k: string) => <Tag key={k}>{k}</Tag>)
+              {(workspace.keywords ?? []).length > 0
+                ? (workspace.keywords ?? []).map((k: string) => <Tag key={k}>{k}</Tag>)
                 : "—"}
             </Space>
           </Descriptions.Item>
@@ -262,9 +262,9 @@ export default function WorkspaceDetailPage() {
             {workspace.constraints || "—"}
           </Descriptions.Item>
           <Descriptions.Item label="Active Questions">
-            {workspace.active_questions.length > 0 ? (
+            {(workspace.active_questions ?? []).length > 0 ? (
               <ul style={{ margin: 0, paddingLeft: 20 }}>
-                {workspace.active_questions.map((q: string, i: number) => (
+                {(workspace.active_questions ?? []).map((q: string, i: number) => (
                   <li key={i}>{q}</li>
                 ))}
               </ul>
