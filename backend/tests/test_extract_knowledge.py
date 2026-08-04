@@ -598,3 +598,93 @@ def test_celery_task_raises_when_business_task_failed(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="bad evidence"):
         extract_knowledge_task.run("task-id")
     db.close.assert_called_once()
+
+
+# ==================================================================
+# P0 exact dedup integration
+# ==================================================================
+
+
+def _claim_item(
+    statement: str = "PGIB outperforms state-of-the-art methods.",
+    start: int = 100,
+    end: int = 200,
+    confidence: float = 0.9,
+) -> dict:
+    return {
+        "type": "claim",
+        "canonical_name": "PGIB outperforms SOTA",
+        "content": {"statement": statement},
+        "source_provenance": {"start_char": start, "end_char": end, "batch_index": 0},
+        "evidence_text": statement,
+        "confidence": confidence,
+    }
+
+
+def _limitation_item(
+    description: str = "PGIB lacks domain knowledge integration.",
+    start: int = 100,
+    end: int = 200,
+    confidence: float = 0.6,
+) -> dict:
+    return {
+        "type": "limitation",
+        "canonical_name": "PGIB limitation",
+        "content": {"description": description},
+        "source_provenance": {"start_char": start, "end_char": end, "batch_index": 0},
+        "evidence_text": description,
+        "confidence": confidence,
+    }
+
+
+def test_write_extraction_dedups_exact_duplicates(db_session: Session) -> None:
+    ws = _workspace(db_session)
+    paper, artifact = _paper_with_markdown(db_session, ws.id)
+    run = _run(db_session, ws.id, paper, artifact)
+
+    # Two identical method items (same span + same content).
+    counts = _write_extraction(
+        db_session, paper, run, [_method_item(), _method_item()], []
+    )
+    db_session.commit()
+
+    assert counts == (1, 0, 1, 0)  # 1 item, 0 relations, 1 span, 0 rejected relations
+    assert db_session.execute(
+        select(func.count()).select_from(KnowledgeItem)
+    ).scalar_one() == 1
+
+    # The dropped duplicate is auditable as a rejection.
+    rejection = db_session.execute(
+        select(ExtractionRejection).where(
+            ExtractionRejection.stage == "dedup_exact"
+        )
+    ).scalars().one_or_none()
+    assert rejection is not None
+    assert rejection.reason_code == "duplicate_item"
+    assert rejection.item_type == "method"
+    assert rejection.canonical_name == "GNNExplainer"
+
+
+def test_write_extraction_dedups_same_span_claim_limitation(db_session: Session) -> None:
+    ws = _workspace(db_session)
+    paper, artifact = _paper_with_markdown(db_session, ws.id)
+    run = _run(db_session, ws.id, paper, artifact)
+
+    # Same span classified as BOTH a claim and a limitation.
+    claim = _claim_item(statement="Position bias is present.", start=100, end=200, confidence=0.9)
+    limitation = _limitation_item(description="Position bias is present.", start=100, end=200, confidence=0.6)
+
+    counts = _write_extraction(db_session, paper, run, [claim, limitation], [])
+    db_session.commit()
+
+    # Higher-confidence claim survives; limitation is dropped with a rejection.
+    assert counts == (1, 0, 1, 0)
+    items = db_session.execute(select(KnowledgeItem)).scalars().all()
+    assert len(items) == 1
+    assert items[0].type == "claim"
+
+    rejection = db_session.execute(
+        select(ExtractionRejection).where(ExtractionRejection.stage == "dedup_exact")
+    ).scalars().one_or_none()
+    assert rejection is not None
+    assert rejection.item_type == "limitation"

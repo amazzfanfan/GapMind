@@ -53,6 +53,7 @@ from app.gateway.prompts.extract_v1 import (
 )
 from app.workers.celery_app import celery_app
 from app.workers.tasks.extraction.batching import split_extraction_batches
+from app.workers.tasks.extraction.dedup import dedup_exact
 from app.workers.tasks.extraction.evidence_rebaser import resolve_evidence_span
 from app.workers.tasks.extraction.llm_caller import call_llm_with_retry
 
@@ -667,6 +668,38 @@ def _write_extraction(
 ) -> tuple[int, int, int, int]:
     """Stage an extraction atomically. The caller owns commit/rollback."""
     ks = KnowledgeService(db)
+
+    # P0: collapse exact duplicates + same-span claim/limitation collisions
+    # BEFORE anything is written. Rejected items are recorded as auditable
+    # ExtractionRejection rows (never hard-deleted) so the loss is traceable.
+    items, dedup_rejected = dedup_exact(items)
+    for rejected in dedup_rejected:
+        sp = rejected.get("source_provenance") or {}
+        ks.create_rejection(
+            _make_rejection(
+                run=run,
+                paper=paper,
+                batch_index=sp.get("batch_index"),
+                rejection_kind="item",
+                stage="dedup_exact",
+                reason_code="duplicate_item",
+                reason_detail=(
+                    "Exact duplicate or same-span claim/limitation collision"
+                    f" (type={rejected.get('type')})"
+                ),
+                raw_payload=rejected,
+                item_type=rejected.get("type"),
+                canonical_name=rejected.get("canonical_name"),
+                evidence_preview=str(rejected.get("evidence_text") or "")[:200],
+            )
+        )
+    if dedup_rejected:
+        logger.info(
+            "extract_knowledge.dedup_exact",
+            paper_id=paper.id,
+            run_id=run.id,
+            dropped=len(dedup_rejected),
+        )
 
     # Map canonical_name -> knowledge_item_id for relation resolution
     entity_map: dict[tuple[str, str], str] = {}  # (type, canonical_name) -> id
