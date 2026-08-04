@@ -7,8 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.domains.retrieval.schemas import RetrievalResponse
-
 
 class DiscoverInput(BaseModel):
     topic: str | None = Field(default=None, max_length=4000)
@@ -36,23 +34,6 @@ class DiscoverConfig(BaseModel):
     include_counter_evidence: bool = True
     use_reranker: bool = True
     use_judge: bool = True
-
-
-class DiscoverRequest(BaseModel):
-    """Legacy synchronous Claim drawer request."""
-
-    claim_item_id: str | None = None
-    claim_text: str | None = Field(default=None, min_length=1, max_length=4000)
-    paper_id: str | None = None
-    top_k: int = Field(default=5, ge=1, le=20)
-    use_reranker: bool = True
-    use_judge: bool = True
-
-    @model_validator(mode="after")
-    def require_claim_source(self) -> "DiscoverRequest":
-        if not self.claim_item_id and not self.claim_text:
-            raise ValueError("claim_item_id or claim_text is required")
-        return self
 
 
 class DiscoverRunCreateRequest(BaseModel):
@@ -266,6 +247,22 @@ class OpportunityListResponse(BaseModel):
     offset: int
 
 
+class DiscoverRunListResponse(BaseModel):
+    """Standard list envelope for ``GET /discover/runs``.
+
+    Defined explicitly so the front-end's OpenAPI codegen produces a
+    stable shape and so the endpoint can declare ``response_model=...``
+    instead of returning a hand-written dict.
+    """
+    items: list["DiscoverRunRead"]
+    total: int
+    limit: int
+    offset: int
+
+
+DiscoverRunListResponse.model_rebuild()
+
+
 class ExternalSelectionRequest(BaseModel):
     candidate_ids: list[str] = Field(min_length=1, max_length=30)
     action: Literal["import_and_verify"] = "import_and_verify"
@@ -285,15 +282,6 @@ class EditConfirmRequest(BaseModel):
 class DecisionRequest(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
     defer_condition: str | None = Field(default=None, max_length=2000)
-
-
-class DiscoverResponse(BaseModel):
-    """Legacy synchronous response retained for existing clients."""
-
-    opportunity: ResearchOpportunityRead
-    claim_text: str
-    similar_work: RetrievalResponse
-    counter_evidence: RetrievalResponse
 
 
 class ResearchOpportunityListResponse(OpportunityListResponse):

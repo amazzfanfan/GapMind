@@ -8,11 +8,14 @@ Endpoints:
   POST   /api/v1/workspaces/{id}/archive          archive
   POST   /api/v1/workspaces/{id}/unarchive        unarchive
   DELETE /api/v1/workspaces/{id}                  soft delete (returns 200 + {"deleted": true})
+
+Domain exceptions raised here are translated into HTTP responses by the
+central handler registered in ``app.core.exception_handlers``.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
@@ -22,23 +25,13 @@ from app.domains.workspace.schemas import (
     WorkspaceRead,
     WorkspaceUpdate,
 )
-from app.domains.workspace.service import (
-    WorkspaceNotFoundError,
-    WorkspaceService,
-)
+from app.domains.workspace.service import WorkspaceService
 
 router = APIRouter(prefix="/workspaces", tags=["workspace"])
 
 
 def _get_service(db: Session = Depends(get_db)) -> WorkspaceService:
     return WorkspaceService(db)
-
-
-def _not_found(exc: WorkspaceNotFoundError) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail={"error": "workspace_not_found", "message": str(exc)},
-    )
 
 
 @router.post(
@@ -86,11 +79,7 @@ def get_workspace(
     workspace_id: str,
     service: WorkspaceService = Depends(_get_service),
 ) -> WorkspaceRead:
-    try:
-        ws = service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    return WorkspaceRead.model_validate(ws)
+    return WorkspaceRead.model_validate(service.get(workspace_id))
 
 
 @router.patch(
@@ -103,11 +92,7 @@ def update_workspace(
     payload: WorkspaceUpdate,
     service: WorkspaceService = Depends(_get_service),
 ) -> WorkspaceRead:
-    try:
-        ws = service.update(workspace_id, payload)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    return WorkspaceRead.model_validate(ws)
+    return WorkspaceRead.model_validate(service.update(workspace_id, payload))
 
 
 @router.post(
@@ -119,11 +104,7 @@ def archive_workspace(
     workspace_id: str,
     service: WorkspaceService = Depends(_get_service),
 ) -> WorkspaceRead:
-    try:
-        ws = service.archive(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    return WorkspaceRead.model_validate(ws)
+    return WorkspaceRead.model_validate(service.archive(workspace_id))
 
 
 @router.post(
@@ -135,11 +116,7 @@ def unarchive_workspace(
     workspace_id: str,
     service: WorkspaceService = Depends(_get_service),
 ) -> WorkspaceRead:
-    try:
-        ws = service.unarchive(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    return WorkspaceRead.model_validate(ws)
+    return WorkspaceRead.model_validate(service.unarchive(workspace_id))
 
 
 @router.delete(
@@ -150,8 +127,5 @@ def delete_workspace(
     workspace_id: str,
     service: WorkspaceService = Depends(_get_service),
 ) -> dict[str, str | bool]:
-    try:
-        service.soft_delete(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    service.soft_delete(workspace_id)
     return {"id": workspace_id, "deleted": True}

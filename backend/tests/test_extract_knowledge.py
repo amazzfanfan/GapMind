@@ -33,13 +33,13 @@ from app.domains.task.service import TaskService
 from app.domains.workspace.models import Workspace
 from app.workers.tasks import extract_knowledge as extraction_module
 from app.workers.tasks.extract_knowledge import (
-    _run_extract,
     _normalize_relation_type,
-    _split_extraction_batches,
+    _run_extract,
     _validate_and_rebase_evidence,
     _write_extraction,
     extract_knowledge_task,
 )
+from app.workers.tasks.extraction.batching import split_extraction_batches as _split_extraction_batches
 
 
 def _id() -> str:
@@ -413,7 +413,7 @@ def test_invalid_item_is_rejected_without_losing_valid_item(
     }
     monkeypatch.setattr(
         extraction_module,
-        "_call_llm_with_retry",
+        "call_llm_with_retry",
         lambda messages, max_retries: ("{}", invalid_output),
     )
 
@@ -452,7 +452,7 @@ def test_all_invalid_items_fail_but_keep_rejections(
     )
     monkeypatch.setattr(
         extraction_module,
-        "_call_llm_with_retry",
+        "call_llm_with_retry",
         lambda messages, max_retries: (
             "{}",
             {

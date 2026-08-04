@@ -5,6 +5,16 @@ Endpoints:
   GET /api/v1/workspaces/{wid}/knowledge/{kid}      get one item
   GET /api/v1/workspaces/{wid}/knowledge/{kid}/evidence   list evidence spans
   GET /api/v1/workspaces/{wid}/knowledge/relations  list relations (filter by item_id)
+
+Domain exceptions raised here are translated into HTTP responses by the
+central handler registered in ``app.core.exception_handlers``. The two
+exceptions to that rule are:
+
+  * cross-workspace 404s (we deliberately raise ``KnowledgeItemNotFoundError``
+    when an item id belongs to a different workspace, to avoid leaking
+    existence)
+  * local artefact problems (``evidence_source_*``) that aren't tied to a
+    domain exception class
 """
 
 from __future__ import annotations
@@ -19,8 +29,6 @@ from app.domains.knowledge.schemas import (
     EvidenceContextRead,
     ExtractionRejectionListResponse,
     ExtractionRejectionRead,
-    KnowledgeGraphEdgeRead,
-    KnowledgeGraphNodeRead,
     KnowledgeGraphResponse,
     KnowledgeItemListResponse,
     KnowledgeItemRead,
@@ -33,7 +41,7 @@ from app.domains.knowledge.service import (
     KnowledgeItemNotFoundError,
     KnowledgeService,
 )
-from app.domains.workspace.service import WorkspaceNotFoundError, WorkspaceService
+from app.domains.workspace.service import WorkspaceService
 
 router = APIRouter(tags=["knowledge"])
 
@@ -44,19 +52,6 @@ def _get_knowledge_service(db: Session = Depends(get_db)) -> KnowledgeService:
 
 def _get_workspace_service(db: Session = Depends(get_db)) -> WorkspaceService:
     return WorkspaceService(db)
-
-
-def _not_found(exc: Exception) -> HTTPException:
-    if isinstance(exc, KnowledgeItemNotFoundError):
-        code = "knowledge_item_not_found"
-    elif isinstance(exc, ExtractionRunNotFoundError):
-        code = "extraction_run_not_found"
-    else:
-        code = "workspace_not_found"
-    return HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail={"error": code, "message": str(exc)},
-    )
 
 
 @router.get(
@@ -74,13 +69,10 @@ def list_extraction_rejections(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> ExtractionRejectionListResponse:
-    try:
-        workspace_service.get(workspace_id)
-        run = service.get_extraction_run(run_id)
-    except (WorkspaceNotFoundError, ExtractionRunNotFoundError) as exc:
-        raise _not_found(exc) from exc
+    workspace_service.get(workspace_id)
+    run = service.get_extraction_run(run_id)
     if run.workspace_id != workspace_id:
-        raise _not_found(ExtractionRunNotFoundError(run_id))
+        raise ExtractionRunNotFoundError(run_id)
 
     items, total = service.list_rejections(
         workspace_id=workspace_id,
@@ -116,10 +108,7 @@ def list_knowledge(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeItemListResponse:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
     items, total = service.list_items(
         workspace_id=workspace_id,
         type_filter=type,
@@ -154,10 +143,7 @@ def list_relations(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeRelationListResponse:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
     items, total = service.list_relations(
         workspace_id=workspace_id,
         item_id=item_id,
@@ -191,10 +177,7 @@ def get_knowledge_graph(
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeGraphResponse:
     """Return a self-contained, workspace-scoped graph projection."""
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
 
     nodes, edges, total_nodes, total_edges, truncated = service.graph_projection(
         workspace_id=workspace_id,
@@ -232,19 +215,14 @@ def get_knowledge_graph_neighbors(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeGraphResponse:
-    try:
-        workspace_service.get(workspace_id)
-        nodes, edges = service.graph_neighbors(
-            workspace_id=workspace_id,
-            node_id=node_id,
-            depth=depth,
-            limit=limit,
-            relation_type=relation_type,
-        )
-    except WorkspaceNotFoundError as exc:
-        raise _not_found(exc) from exc
-    except KnowledgeItemNotFoundError as exc:
-        raise _not_found(exc) from exc
+    workspace_service.get(workspace_id)
+    nodes, edges = service.graph_neighbors(
+        workspace_id=workspace_id,
+        node_id=node_id,
+        depth=depth,
+        limit=limit,
+        relation_type=relation_type,
+    )
     return KnowledgeGraphResponse(
         workspace_id=workspace_id,
         nodes=nodes,
@@ -267,16 +245,10 @@ def get_knowledge_item(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeItemRead:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    try:
-        item = service.get_item(item_id)
-    except KnowledgeItemNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    item = service.get_item(item_id)
     if item.workspace_id != workspace_id:
-        raise _not_found(KnowledgeItemNotFoundError(item_id))
+        raise KnowledgeItemNotFoundError(item_id)
     return KnowledgeItemRead.model_validate(item)
 
 
@@ -292,20 +264,10 @@ def review_knowledge_item(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> KnowledgeItemRead:
-    try:
-        workspace_service.get(workspace_id)
-        item = service.review_item(
-            workspace_id=workspace_id, item_id=item_id, payload=payload
-        )
-    except WorkspaceNotFoundError as exc:
-        raise _not_found(exc) from exc
-    except KnowledgeItemNotFoundError as exc:
-        raise _not_found(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "invalid_review", "message": str(exc)},
-        ) from exc
+    workspace_service.get(workspace_id)
+    item = service.review_item(
+        workspace_id=workspace_id, item_id=item_id, payload=payload
+    )
     return KnowledgeItemRead.model_validate(item)
 
 
@@ -320,16 +282,10 @@ def list_evidence(
     service: KnowledgeService = Depends(_get_knowledge_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> EvidenceSpanListResponse:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise _not_found(e) from e
-    try:
-        item = service.get_item(item_id)
-    except KnowledgeItemNotFoundError as e:
-        raise _not_found(e) from e
+    workspace_service.get(workspace_id)
+    item = service.get_item(item_id)
     if item.workspace_id != workspace_id:
-        raise _not_found(KnowledgeItemNotFoundError(item_id))
+        raise KnowledgeItemNotFoundError(item_id)
     spans = service.list_evidence_for_item(item_id)
     return EvidenceSpanListResponse(
         items=[EvidenceSpanRead.model_validate(s) for s in spans],
@@ -352,13 +308,10 @@ def get_evidence_context(
     from app.domains.artifact.service import ArtifactService
     from app.domains.paper.models import Paper
 
-    try:
-        workspace_service.get(workspace_id)
-        item = service.get_item(item_id)
-    except (WorkspaceNotFoundError, KnowledgeItemNotFoundError) as exc:
-        raise _not_found(exc) from exc
+    workspace_service.get(workspace_id)
+    item = service.get_item(item_id)
     if item.workspace_id != workspace_id:
-        raise _not_found(KnowledgeItemNotFoundError(item_id))
+        raise KnowledgeItemNotFoundError(item_id)
 
     spans = service.list_evidence_for_item(item_id)
     artifact_id = next((span.artifact_id for span in spans if span.artifact_id), None)

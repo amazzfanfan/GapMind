@@ -19,6 +19,12 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.domains.artifact.models import Artifact
 from app.domains.artifact.service import ArtifactService
+from app.domains.discover.adapters import (
+    ExternalSearchAdapter,
+    LLMGatewayAdapter,
+    RetrievalAdapter,
+    assert_protocol,
+)
 from app.domains.discover.models import (
     DiscoverExternalCandidate,
     DiscoverRun,
@@ -28,6 +34,8 @@ from app.domains.discover.models import (
     ResearchOpportunity,
     ResearchPlan,
 )
+from app.domains.discover.opportunity_workflow import OpportunityWorkflow
+from app.domains.discover.ports import ExternalSearchPort, LLMGatewayPort, RetrievalPort
 from app.domains.discover.schemas import (
     DiscoverConfig,
     DiscoverInput,
@@ -39,12 +47,10 @@ from app.domains.paper.models import Paper
 from app.domains.paper.schemas import PaperCreate
 from app.domains.paper.service import PaperService
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
-from app.domains.retrieval.service import find_counter_evidence, find_similar_work, semantic_search
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
 from app.domains.timeline.service import TimelineService
-from app.gateway.llm import get_llm_gateway
 from app.gateway.semantic_scholar import SemanticScholarClient, SemanticScholarError
 
 logger = get_logger(__name__)
@@ -54,41 +60,43 @@ TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_RUN_STATUSES = {"waiting_for_user", "waiting_for_fulltext"}
 PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
 
-
-class DiscoverInputError(Exception):
-    pass
-
-
-class DiscoverRunNotFoundError(Exception):
-    pass
-
-
-class OpportunityNotFoundError(Exception):
-    pass
-
-
-class OpportunityVersionConflict(Exception):
-    pass
+# Domain exception classes live in their own module so they can be
+# imported by submodules (and tests) without dragging the whole service.
+from app.domains.discover.exceptions import (  # noqa: E402
+    DiscoverGateError,
+    DiscoverInputError,
+    DiscoverRunCancelled,
+    DiscoverRunNotFoundError,
+    InvalidOpportunityTransition,
+    OpportunityNotFoundError,
+    OpportunityVersionConflict,
+)
 
 
-class InvalidOpportunityTransition(Exception):
-    pass
-
-
-class DiscoverGateError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class DiscoverRunCancelled(Exception):
-    """Internal control-flow signal used to stop a stale worker safely."""
-
-
-class DiscoverService:
-    def __init__(self, db: Session) -> None:
+class DiscoverService(OpportunityWorkflow):
+    def __init__(
+        self,
+        db: Session,
+        *,
+        retrieval: RetrievalPort | None = None,
+        external_search: ExternalSearchPort | None = None,
+        llm: LLMGatewayPort | None = None,
+    ) -> None:
         self.db = db
         self.timeline = TimelineService(db)
+
+        # Bind the cross-domain collaborators through Protocol ports (see
+        # ``ports.py``). Tests can inject Protocol-compatible fakes to
+        # exercise the orchestration without Milvus / DeepSeek / S2.
+        self.retrieval: RetrievalPort = retrieval or RetrievalAdapter()
+        self.external_search: ExternalSearchPort = external_search or ExternalSearchAdapter()
+        self.llm: LLMGatewayPort = llm or LLMGatewayAdapter()
+
+        # Cheap runtime sanity check — fails loudly if a custom binding is
+        # missing a method the orchestrator calls.
+        assert_protocol(self.retrieval, RetrievalPort)
+        assert_protocol(self.external_search, ExternalSearchPort)
+        assert_protocol(self.llm, LLMGatewayPort)
 
     # ---------------------------------------------------------------- runs
     def create_run(
@@ -98,6 +106,7 @@ class DiscoverService:
         *,
         trigger_type: str = "topic",
         parent_run_id: str | None = None,
+        actor: str = "user",
     ) -> tuple[DiscoverRun, str | None]:
         claim = self._resolve_claim(workspace_id, request.input.claim_item_id)
         topic = (request.input.topic or "").strip() or (self._claim_text(claim) if claim else "")
@@ -142,7 +151,7 @@ class DiscoverService:
             event_type="discover.run_created",
             subject_type="discover_run",
             subject_id=run.id,
-            actor="user",
+            actor=actor,
             payload={"run_id": run.id, "task_id": task.id, "trigger_type": trigger_type},
         )
         return run, task.id
@@ -510,14 +519,14 @@ class DiscoverService:
     def _workspace_similar(self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig) -> RetrievalResponse:
         paper_id = claim.paper_id if claim else None
         if paper_id:
-            return find_similar_work(run.workspace_id, paper_id, config.top_k, use_reranker=config.use_reranker, exclude_paper_ids={paper_id})
-        return semantic_search(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker)
+            return self.retrieval.find_similar_work(run.workspace_id, paper_id, config.top_k, use_reranker=config.use_reranker, exclude_paper_ids={paper_id})
+        return self.retrieval.semantic_search(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker)
 
     def _workspace_counter(self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig) -> RetrievalResponse:
         if not config.include_counter_evidence:
             return self._empty_response(run.workspace_id, text, "counter_evidence")
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
-        return find_counter_evidence(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker, use_judge=config.use_judge, exclude_paper_ids=excluded)
+        return self.retrieval.find_counter_evidence(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker, use_judge=config.use_judge, exclude_paper_ids=excluded)
 
     def _external_verify(self, run: DiscoverRun, query: str) -> int:
         existing = int(self.db.execute(select(func.count()).select_from(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalar() or 0)
@@ -530,7 +539,7 @@ class DiscoverService:
         if scope.year_from is not None or scope.year_to is not None:
             year = f"{scope.year_from or ''}-{scope.year_to or ''}"
         try:
-            raw = SemanticScholarClient().search(query=query[:200], fields=S2_FIELDS, sort="relevance", limit=min(20, int((run.config or {}).get("top_k", 10))), year=year)
+            raw = self.external_search.search(query=query[:200], fields=S2_FIELDS, sort="relevance", limit=min(20, int((run.config or {}).get("top_k", 10))), year=year)
         except SemanticScholarError as exc:
             run.verification_status = "failed"
             run.stage_summaries = {**(run.stage_summaries or {}), "external_search": {"status": "failed", "error": str(exc), "retryable": exc.status_code in {429, 502, 504}, "executed": False}}
@@ -671,7 +680,7 @@ class DiscoverService:
         config: DiscoverConfig,
     ) -> RetrievalResponse:
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
-        response = semantic_search(run.workspace_id, text, config.top_k * 3, use_reranker=config.use_reranker)
+        response = self.retrieval.semantic_search(run.workspace_id, text, config.top_k * 3, use_reranker=config.use_reranker)
         return self._filter_supporting_response(run, response, excluded)
 
     def _candidate_supporting(
@@ -696,7 +705,7 @@ class DiscoverService:
             )
         ).strip()
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
-        response = semantic_search(
+        response = self.retrieval.semantic_search(
             run.workspace_id,
             query[:3000] or (run.input_topic or ""),
             config.top_k * 3,
@@ -925,7 +934,7 @@ class DiscoverService:
             "\n\nEVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
         )
         try:
-            response = get_llm_gateway().chat_completion(
+            response = self.llm.chat_completion(
                 [{"role": "system", "content": "You produce auditable research opportunity proposals."}, {"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=2200,
             )
@@ -1089,185 +1098,6 @@ class DiscoverService:
     def _find_span(self, item: RetrievalResultItem) -> str | None:
         span = self._find_evidence_span(item)
         return span.id if span else None
-
-    # --------------------------------------------------------- opportunity
-    def list_opportunities(self, workspace_id: str, *, status_filter: str | None, run_id: str | None, limit: int, offset: int) -> tuple[list[ResearchOpportunity], int]:
-        base = select(ResearchOpportunity).where(ResearchOpportunity.workspace_id == workspace_id, ResearchOpportunity.is_deleted.is_(False))
-        if status_filter: base = base.where(ResearchOpportunity.status == status_filter)
-        if run_id: base = base.where(ResearchOpportunity.discover_run_id == run_id)
-        items = list(self.db.execute(base.order_by(ResearchOpportunity.created_at.desc()).limit(limit).offset(offset)).scalars())
-        total = int(self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0)
-        return items, total
-
-    def get_opportunity(self, workspace_id: str, opportunity_id: str) -> ResearchOpportunity:
-        item = self.db.get(ResearchOpportunity, opportunity_id)
-        if item is None or item.is_deleted or item.workspace_id != workspace_id:
-            raise OpportunityNotFoundError(opportunity_id)
-        return item
-
-    def opportunity_detail(self, workspace_id: str, opportunity_id: str) -> dict[str, Any]:
-        item = self.get_opportunity(workspace_id, opportunity_id)
-        versions = list(self.db.execute(select(OpportunityVersion).where(OpportunityVersion.opportunity_id == item.id).order_by(OpportunityVersion.version_number.desc())).scalars())
-        current = next((version for version in versions if version.id == item.current_version_id), versions[0] if versions else None)
-        evidence = list(self.db.execute(select(OpportunityEvidence).where(OpportunityEvidence.opportunity_version_id == current.id).order_by(OpportunityEvidence.rank)) .scalars()) if current else []
-        decisions = list(self.db.execute(select(HumanDecision).where(HumanDecision.opportunity_id == item.id).order_by(HumanDecision.created_at.desc())).scalars())
-        plan = self.db.execute(select(ResearchPlan).where(ResearchPlan.opportunity_id == item.id).order_by(ResearchPlan.created_at.desc())).scalars().first()
-        return {"opportunity": item, "current_version": current, "versions": versions, "evidence": evidence, "decisions": decisions, "plan": plan}
-
-    def opportunity_evidence_context(self, workspace_id: str, evidence_id: str) -> dict[str, Any]:
-        evidence = self.db.get(OpportunityEvidence, evidence_id)
-        if evidence is None:
-            raise OpportunityNotFoundError(evidence_id)
-        version = self.db.get(OpportunityVersion, evidence.opportunity_version_id)
-        opportunity = self.db.get(ResearchOpportunity, version.opportunity_id) if version else None
-        if opportunity is None or opportunity.workspace_id != workspace_id or opportunity.is_deleted:
-            raise OpportunityNotFoundError(evidence_id)
-        result: dict[str, Any] = {
-            "evidence": evidence,
-            "available": False,
-            "paper_id": evidence.paper_id,
-            "artifact_id": evidence.artifact_id,
-            "artifact_kind": None,
-            "filename": None,
-            "content": None,
-            "start_char": None,
-            "end_char": None,
-            "message": "This metadata-only evidence has no local full-text anchor.",
-        }
-        if not evidence.evidence_span_id:
-            return result
-        span = self.db.get(EvidenceSpan, evidence.evidence_span_id)
-        if span is None or not span.artifact_id:
-            return result
-        artifact = self.db.get(Artifact, span.artifact_id)
-        if artifact is None or artifact.is_deleted:
-            result["message"] = "The source artifact is no longer available."
-            return result
-        path = ArtifactService(self.db).resolve_abs_path(artifact)
-        if not path.exists():
-            result["message"] = "The source artifact file is missing on disk."
-            return result
-        result.update(
-            {
-                "available": True,
-                "artifact_id": artifact.id,
-                "artifact_kind": artifact.kind,
-                "filename": artifact.original_filename,
-                "content": path.read_text(encoding="utf-8"),
-                "start_char": span.start_char,
-                "end_char": span.end_char,
-                "message": None,
-            }
-        )
-        return result
-
-    def versions(self, workspace_id: str, opportunity_id: str) -> list[OpportunityVersion]:
-        item = self.get_opportunity(workspace_id, opportunity_id)
-        return list(self.db.execute(select(OpportunityVersion).where(OpportunityVersion.opportunity_id == item.id).order_by(OpportunityVersion.version_number.desc())).scalars())
-
-    def confirm(self, workspace_id: str, opportunity_id: str, version_id: str | None, note: str | None) -> ResearchOpportunity:
-        item = self.get_opportunity(workspace_id, opportunity_id)
-        version = self._current_version(item, version_id)
-        self._require_confirmable(version)
-        action = "confirm"
-        item.status = "confirmed"
-        self._decision(item, version, version, action, note, None)
-        self.db.commit()
-        self.timeline.record(workspace_id=workspace_id, event_type="opportunity.confirmed", subject_type="opportunity", subject_id=item.id, actor="user", payload={"version_id": version.id, "note": note})
-        return item
-
-    def edit_confirm(self, workspace_id: str, opportunity_id: str, base_version_id: str, changes: dict[str, Any], note: str | None) -> ResearchOpportunity:
-        item = self.get_opportunity(workspace_id, opportunity_id)
-        base = self._current_version(item, base_version_id)
-        if item.current_version_id != base_version_id:
-            raise OpportunityVersionConflict("Opportunity has changed; refresh before editing")
-        self._require_confirmable(base)
-        data = {key: getattr(base, key) for key in ("title", "problem_statement", "research_scope", "why_existing_work_is_insufficient", "candidate_research_question", "candidate_hypothesis", "candidate_validation_plan", "open_risks", "novelty_score", "feasibility_score", "significance_score", "confidence", "evidence_coverage", "verification_status", "synthesis_metadata")}
-        for key, value in changes.items():
-            if key in data: data[key] = value
-        number = int(self.db.execute(select(func.max(OpportunityVersion.version_number)).where(OpportunityVersion.opportunity_id == item.id)).scalar() or 0) + 1
-        new_version = OpportunityVersion(id=str(uuid4()), opportunity_id=item.id, version_number=number, created_by="user", **data)
-        self.db.add(new_version); self.db.flush(); item.current_version_id = new_version.id; item.status = "edited_confirmed"
-        old_evidence = list(self.db.execute(select(OpportunityEvidence).where(OpportunityEvidence.opportunity_version_id == base.id)).scalars())
-        for evidence in old_evidence:
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=new_version.id, relation=evidence.relation, source_scope=evidence.source_scope, evidence_level=evidence.evidence_level, paper_id=evidence.paper_id, external_candidate_id=evidence.external_candidate_id, evidence_span_id=evidence.evidence_span_id, artifact_id=evidence.artifact_id, chunk_id=evidence.chunk_id, rank=evidence.rank, score=evidence.score, judgement=evidence.judgement, judgement_confidence=evidence.judgement_confidence, display_excerpt=evidence.display_excerpt, snapshot_payload=evidence.snapshot_payload))
-        self._decision(item, base, new_version, "edit_confirm", note, None)
-        self.db.commit()
-        self.timeline.record(workspace_id=workspace_id, event_type="opportunity.edited_confirmed", subject_type="opportunity", subject_id=item.id, actor="user", payload={"from_version_id": base.id, "to_version_id": new_version.id})
-        return item
-
-    def reject(self, workspace_id: str, opportunity_id: str, note: str | None) -> ResearchOpportunity:
-        return self._simple_decision(workspace_id, opportunity_id, "rejected", "reject", note, None)
-
-    def defer(self, workspace_id: str, opportunity_id: str, note: str | None, condition: str | None) -> ResearchOpportunity:
-        return self._simple_decision(workspace_id, opportunity_id, "deferred", "defer", note, condition)
-
-    def convert_to_plan(self, workspace_id: str, opportunity_id: str) -> ResearchPlan:
-        item = self.get_opportunity(workspace_id, opportunity_id)
-        if item.status not in {"confirmed", "edited_confirmed"}:
-            raise DiscoverGateError("plan_requires_confirmed_opportunity", "Only a confirmed opportunity can become a research plan")
-        version = self._current_version(item, None)
-        existing = self.db.execute(select(ResearchPlan).where(ResearchPlan.opportunity_id == item.id, ResearchPlan.opportunity_version_id == version.id)).scalars().first()
-        if existing: return existing
-        plan_data = version.candidate_validation_plan or {}
-        plan = ResearchPlan(id=str(uuid4()), workspace_id=workspace_id, opportunity_id=item.id, opportunity_version_id=version.id, status="draft", research_question=version.candidate_research_question, hypothesis=version.candidate_hypothesis, scope_and_assumptions=version.research_scope, datasets=list(plan_data.get("datasets", [])), baselines=list(plan_data.get("baselines", [])), metrics=list(plan_data.get("metrics", [])), validation_steps=list(plan_data.get("steps", [])), expected_supporting_result=str(plan_data.get("expected_supporting_result", "")), falsification_criteria=str(plan_data.get("falsification_criteria", "")), risks=list(version.open_risks), resource_constraints=str((self.get_run(workspace_id, item.discover_run_id).input_payload or {}).get("constraints", "")) if item.discover_run_id else "")
-        self.db.add(plan); self.db.commit(); self.db.refresh(plan)
-        self.timeline.record(workspace_id=workspace_id, event_type="plan.generated", subject_type="research_plan", subject_id=plan.id, actor="user", payload={"opportunity_id": item.id, "version_id": version.id})
-        return plan
-
-    def _simple_decision(self, workspace_id: str, opportunity_id: str, status: str, action: str, note: str | None, condition: str | None) -> ResearchOpportunity:
-        item = self.get_opportunity(workspace_id, opportunity_id); version = self._current_version(item, None)
-        if item.status in {"confirmed", "edited_confirmed"} and status in {"rejected", "deferred"}:
-            raise InvalidOpportunityTransition("A confirmed opportunity cannot be rejected or deferred")
-        item.status = status; self._decision(item, version, version, action, note, condition); self.db.commit()
-        event = {"reject": "opportunity.rejected", "defer": "opportunity.deferred"}[action]
-        self.timeline.record(workspace_id=workspace_id, event_type=event, subject_type="opportunity", subject_id=item.id, actor="user", payload={"version_id": version.id, "note": note, "defer_condition": condition})
-        return item
-
-    def _decision(self, item: ResearchOpportunity, from_version: OpportunityVersion, to_version: OpportunityVersion, action: str, note: str | None, condition: str | None) -> None:
-        self.db.add(HumanDecision(id=str(uuid4()), opportunity_id=item.id, from_version_id=from_version.id, to_version_id=to_version.id, action=action, reason=note, defer_condition=condition, actor="user"))
-
-    def _current_version(self, item: ResearchOpportunity, version_id: str | None) -> OpportunityVersion:
-        version = self.db.get(OpportunityVersion, version_id or item.current_version_id) if (version_id or item.current_version_id) else None
-        if version is None or version.opportunity_id != item.id: raise OpportunityVersionConflict("Requested version is not part of this opportunity")
-        return version
-
-    def _require_confirmable(self, version: OpportunityVersion) -> None:
-        evidence_rows = list(self.db.execute(
-            select(OpportunityEvidence).where(
-                OpportunityEvidence.opportunity_version_id == version.id,
-                OpportunityEvidence.relation == "supports",
-                OpportunityEvidence.judgement == "supports",
-                OpportunityEvidence.evidence_level == "full_text",
-            )
-        ).scalars())
-        independent_papers = {
-            evidence.paper_id
-            for evidence in evidence_rows
-            if evidence.paper_id and evidence.evidence_span_id and evidence.artifact_id
-        }
-        if (
-            version.verification_status != "verified"
-            or version.evidence_coverage < 0.6
-            or len(independent_papers) < 2
-        ):
-            raise DiscoverGateError("insufficient_full_text_evidence", "At least two independent full-text evidence papers are required before confirmation")
-
-    # ------------------------------------------------ legacy sync API
-    def discover(self, workspace_id: str, request: Any) -> tuple[ResearchOpportunity, str, RetrievalResponse, RetrievalResponse]:
-        """Compatibility path for the existing Claim drawer.
-
-        It keeps the old response shape while new UI clients use async runs.
-        """
-        claim = self._resolve_claim(workspace_id, request.claim_item_id)
-        claim_text = self._claim_text(claim) if claim else (request.claim_text or "").strip()
-        if not claim_text: raise DiscoverInputError("claim text is empty")
-        similar = find_similar_work(workspace_id, request.paper_id or (claim.paper_id if claim else ""), request.top_k, use_reranker=request.use_reranker) if request.paper_id or (claim and claim.paper_id) else self._empty_response(workspace_id, claim_text, "similar_work")
-        counter = find_counter_evidence(workspace_id, claim_text, request.top_k, use_reranker=request.use_reranker, use_judge=request.use_judge, exclude_paper_ids={claim.paper_id} if claim and claim.paper_id else set())
-        synthesis = self._fallback_candidate(claim_text, self._empty_response(workspace_id, claim_text, "supporting_evidence"), similar, counter, {"verified": False, "independent_full_text_papers": 0})
-        opportunity = ResearchOpportunity(id=str(uuid4()), workspace_id=workspace_id, claim_item_id=claim.id if claim else None, title=synthesis["title"], summary=synthesis["problem_statement"], rationale=synthesis["why_existing_work_is_insufficient"], suggested_directions=list(synthesis["candidate_validation_plan"].get("steps", [])), confidence=synthesis["confidence"], status="needs_more_evidence", source_payload={"claim_text": claim_text, "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json"), "synthesis_provider": synthesis["provider"]}, is_deleted=False)
-        self.db.add(opportunity); self.db.commit(); self.db.refresh(opportunity)
-        return opportunity, claim_text, similar, counter
 
     # -------------------------------------------------------------- helpers
     def _resolve_claim(self, workspace_id: str, claim_item_id: str | None) -> KnowledgeItem | None:

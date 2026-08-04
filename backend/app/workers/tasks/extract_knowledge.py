@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -48,13 +46,15 @@ from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
 from app.domains.timeline.service import TimelineService
-from app.gateway.llm import LLMGateway
 from app.gateway.prompts.extract_v1 import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
     build_user_prompt,
 )
 from app.workers.celery_app import celery_app
+from app.workers.tasks.extraction.batching import split_extraction_batches
+from app.workers.tasks.extraction.evidence_rebaser import resolve_evidence_span
+from app.workers.tasks.extraction.llm_caller import call_llm_with_retry
 
 logger = get_logger(__name__)
 
@@ -137,7 +137,7 @@ def _run_extract(db: Session, task_id: str) -> dict:
         validated_items: list[dict] = []
         validated_relations: list[dict] = []
         output_item_count = 0
-        batches = _split_extraction_batches(paper_text)
+        batches = split_extraction_batches(paper_text)
 
         for batch_index, (batch_start, batch_text) in enumerate(batches):
             user_prompt = build_user_prompt(
@@ -150,7 +150,7 @@ def _run_extract(db: Session, task_id: str) -> dict:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ]
-            raw_response, parsed = _call_llm_with_retry(
+            raw_response, parsed = call_llm_with_retry(
                 messages, max_retries=MAX_RETRIES
             )
             if parsed is None:
@@ -335,37 +335,6 @@ def _attach_run_to_task(db: Session, task_id: str, run_id: str) -> None:
     db.commit()
 
 
-def _split_extraction_batches(
-    text: str,
-    *,
-    max_chars: int = 40000,
-    overlap_chars: int = 1000,
-) -> list[tuple[int, str]]:
-    """Split a document without silently dropping its tail."""
-    if len(text) <= max_chars:
-        return [(0, text)]
-
-    batches: list[tuple[int, str]] = []
-    start = 0
-    while start < len(text):
-        hard_end = min(start + max_chars, len(text))
-        end = hard_end
-        if hard_end < len(text):
-            min_split = start + max_chars // 2
-            heading = text.rfind("\n## ", min_split, hard_end)
-            paragraph = text.rfind("\n\n", min_split, hard_end)
-            split_at = heading if heading >= min_split else paragraph
-            if split_at >= min_split:
-                end = split_at
-        if end <= start:
-            end = hard_end
-        batches.append((start, text[start:end]))
-        if end >= len(text):
-            break
-        start = max(end - overlap_chars, start + 1)
-    return batches
-
-
 def _validate_output_records(
     *,
     parsed: dict,
@@ -541,7 +510,7 @@ def _validate_and_rebase_evidence(
     for item in items:
         evidence_text = item.evidence_text
         try:
-            start, end, resolved_text = _resolve_evidence_span(
+            start, end, resolved_text = resolve_evidence_span(
                 paper_text=paper_text,
                 batch_text=batch_text,
                 batch_start=batch_start,
@@ -596,100 +565,6 @@ def _validate_and_rebase_evidence(
         data["evidence_text"] = resolved_text
         validated.append(data)
     return validated, rejections
-
-
-def _resolve_evidence_span(
-    *,
-    paper_text: str,
-    batch_text: str,
-    batch_start: int,
-    reported_start: int,
-    reported_end: int,
-    evidence_text: str,
-) -> tuple[int, int, str]:
-    """Resolve an exact source span, tolerating only whitespace differences."""
-    relative_end = reported_start + len(evidence_text)
-    if reported_start >= 0 and batch_text[reported_start:relative_end] == evidence_text:
-        start = batch_start + reported_start
-        return start, start + len(evidence_text), evidence_text
-
-    if (
-        reported_start >= 0
-        and paper_text[reported_start : reported_start + len(evidence_text)]
-        == evidence_text
-    ):
-        return reported_start, reported_start + len(evidence_text), evidence_text
-
-    batch_matches = _all_occurrences(batch_text, evidence_text)
-    if batch_matches:
-        relative_start = _nearest_match(batch_matches, reported_start)
-        start = batch_start + relative_start
-        return start, start + len(evidence_text), evidence_text
-
-    document_matches = _all_occurrences(paper_text, evidence_text)
-    if document_matches:
-        expected_positions = [batch_start + reported_start, reported_start]
-        start = min(
-            document_matches,
-            key=lambda match: min(
-                abs(match - expected) for expected in expected_positions
-            ),
-        )
-        return start, start + len(evidence_text), evidence_text
-
-    batch_whitespace_matches = _whitespace_equivalent_matches(
-        batch_text, evidence_text
-    )
-    if batch_whitespace_matches:
-        relative_start, relative_end = min(
-            batch_whitespace_matches,
-            key=lambda match: abs(match[0] - reported_start),
-        )
-        start = batch_start + relative_start
-        end = batch_start + relative_end
-        return start, end, paper_text[start:end]
-
-    document_whitespace_matches = _whitespace_equivalent_matches(
-        paper_text, evidence_text
-    )
-    if document_whitespace_matches:
-        expected_positions = [batch_start + reported_start, reported_start]
-        start, end = min(
-            document_whitespace_matches,
-            key=lambda match: min(
-                abs(match[0] - expected) for expected in expected_positions
-            ),
-        )
-        return start, end, paper_text[start:end]
-
-    raise ValueError(
-        "evidence_text has no exact or whitespace-equivalent parsed_markdown span"
-    )
-
-
-def _all_occurrences(text: str, needle: str) -> list[int]:
-    matches: list[int] = []
-    cursor = 0
-    while True:
-        index = text.find(needle, cursor)
-        if index < 0:
-            return matches
-        matches.append(index)
-        cursor = index + 1
-
-
-def _nearest_match(matches: list[int], expected: int) -> int:
-    return min(matches, key=lambda match: abs(match - expected))
-
-
-def _whitespace_equivalent_matches(
-    text: str, evidence_text: str
-) -> list[tuple[int, int]]:
-    tokens = re.split(r"\s+", evidence_text.strip())
-    if not tokens or any(not token for token in tokens):
-        return []
-    pattern = r"\s+".join(re.escape(token) for token in tokens)
-    return [(match.start(), match.end()) for match in re.finditer(pattern, text)]
 
 
 def _run_counts(db: Session, run_id: str) -> dict:
@@ -780,60 +655,6 @@ def _mark_extraction_failed(
     if paper:
         paper.extract_status = "failed"
     db.commit()
-
-
-# ----------------------------------------------------------------- LLM call
-def _call_llm_with_retry(
-    messages: list[dict], max_retries: int = 2
-) -> tuple[str, dict | None]:
-    """Call the LLM and parse JSON. Retry on parse failure.
-
-    Uses max_tokens=16384 because a full paper's extraction (methods, tasks,
-    datasets, claims, limitations + relations) easily exceeds the default 4096.
-    """
-    gateway = LLMGateway()
-    last_raw = ""
-    for attempt in range(max_retries + 1):
-        try:
-            resp = gateway.chat_completion(messages, temperature=0.1, max_tokens=16384)
-            raw = resp.content
-            last_raw = raw
-            parsed = _parse_llm_json(raw)
-            if parsed is not None and "items" in parsed:
-                return raw, parsed
-            logger.warning(
-                "extract_knowledge.parse_retry",
-                attempt=attempt,
-                raw_preview=raw[:200],
-            )
-        except Exception as e:
-            logger.warning(
-                "extract_knowledge.llm_error",
-                attempt=attempt,
-                error=str(e),
-            )
-        if attempt < max_retries:
-            time.sleep(2)
-    return last_raw, None
-
-
-def _parse_llm_json(raw: str) -> dict | None:
-    """Extract JSON from LLM response. Handles ```json fences and trailing commas."""
-    # Try extracting from ```json ... ``` block
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
-    if m:
-        raw = m.group(1).strip()
-    # Try to find first { and last }
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        raw = raw[start : end + 1]
-    # Remove trailing commas before ] or }
-    raw = re.sub(r",\s*([}\]])", r"\1", raw)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
 
 
 # ----------------------------------------------------------------- DB write

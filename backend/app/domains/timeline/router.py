@@ -4,17 +4,20 @@ Endpoints:
   GET /api/v1/workspaces/{wid}/timeline               list (filterable)
   GET /api/v1/workspaces/{wid}/timeline/{subject_type}/{subject_id}
                                                       list events for a subject
+
+Domain exceptions raised here are translated into HTTP responses by the
+central handler registered in ``app.core.exception_handlers``.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
 from app.domains.timeline.schemas import TimelineListResponse, TimelineEventRead
 from app.domains.timeline.service import TimelineService
-from app.domains.workspace.service import WorkspaceNotFoundError, WorkspaceService
+from app.domains.workspace.service import WorkspaceService
 
 router = APIRouter(tags=["timeline"])
 
@@ -42,13 +45,7 @@ def list_timeline(
     service: TimelineService = Depends(_get_timeline_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
 ) -> TimelineListResponse:
-    try:
-        workspace_service.get(workspace_id)
-    except WorkspaceNotFoundError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "workspace_not_found", "message": str(e)},
-        ) from e
+    workspace_service.get(workspace_id)
     items, total = service.list(
         workspace_id=workspace_id,
         subject_type=subject_type,
