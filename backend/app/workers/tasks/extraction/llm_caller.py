@@ -52,7 +52,14 @@ def call_llm_with_retry(
     last_raw = ""
     for attempt in range(max_retries + 1):
         try:
-            response = gateway.chat_completion(messages, temperature=temperature, max_tokens=max_tokens)
+            response = gateway.chat_completion(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                # Structured extraction: the reasoning model otherwise burns the
+                # whole budget on CoT and returns empty content (see plan §八).
+                disable_thinking=True,
+            )
             raw = response.content
             last_raw = raw
             parsed = parse_llm_json(raw)

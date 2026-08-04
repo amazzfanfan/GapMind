@@ -150,9 +150,17 @@ def search(
     top_k: int = 10,
     *,
     paper_id: str | None = None,
+    exclude_paper_ids: set[str] | None = None,
     section: str | None = None,
 ) -> list[dict[str, Any]]:
     """Vector similarity search within a workspace.
+
+    ``exclude_paper_ids`` is pushed down into the Milvus ``filter``
+    expression (``paper_id not in [...]``) so excluded papers never enter
+    the recall pool at all — not merely filtered after ranking. This is a
+    correctness requirement for counter-evidence: a claim's source paper
+    must be excluded *at recall time*, or its own chunks would crowd out
+    genuinely countering evidence.
 
     Returns list of dicts with fields + score, sorted by relevance desc.
     """
@@ -163,6 +171,9 @@ def search(
     filters = [f'workspace_id == "{workspace_id}"']
     if paper_id:
         filters.append(f'paper_id == "{paper_id}"')
+    if exclude_paper_ids:
+        quoted = ", ".join(f'"{pid}"' for pid in sorted(exclude_paper_ids))
+        filters.append(f"paper_id not in [{quoted}]")
     if section:
         filters.append(f'section == "{section}"')
     filter_expr = " and ".join(filters)

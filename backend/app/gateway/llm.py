@@ -64,8 +64,21 @@ class LLMGateway:
         temperature: float = 0.2,
         max_tokens: int | None = None,
         response_format: dict[str, str] | None = None,
+        disable_thinking: bool = False,
     ) -> LLMResponse:
-        """Run a chat completion against the configured Deepseek model."""
+        """Run a chat completion against the configured Deepseek model.
+
+        ``disable_thinking=True`` turns off the model's chain-of-thought
+        (``thinking.type = "disabled"``). Reasoning models (deepseek-v4-flash)
+        otherwise spend the whole ``max_tokens`` budget on reasoning and
+        return an empty ``content`` for long structured-extraction prompts
+        (see docs/knowledge_dedup_fix_plan.md §八). Structured JSON callers
+        (extraction / discover synthesis / judge) should pass it; free-form
+        chat may keep thinking enabled.
+
+        NOTE: do NOT combine ``thinking.type="disabled"`` with a
+        ``reasoning_effort`` param — Deepseek returns a 400 on that conflict.
+        """
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -75,6 +88,8 @@ class LLMGateway:
             kwargs["max_tokens"] = max_tokens
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if disable_thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         logger.info("llm.chat.start", model=self.model, messages=len(messages))
         resp = self.client.chat.completions.create(**kwargs)

@@ -145,6 +145,9 @@ class JudgementGateway:
                 ],
                 temperature=0.0,
                 max_tokens=max_tokens,
+                # Structured JSON classification: disable CoT so the reasoning
+                # model doesn't burn max_tokens on reasoning (see plan §八).
+                extra_body={"thinking": {"type": "disabled"}},
             )
 
             choice = resp.choices[0]

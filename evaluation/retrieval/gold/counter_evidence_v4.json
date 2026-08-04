@@ -1,0 +1,169 @@
+{
+  "schema_version": "1.0.0",
+  "case_id": "counter-evidence-v4",
+  "corpus_version": "sig-ood-smoke-v1",
+  "freeze": {
+    "chunk_version": "v1",
+    "embedding_model": "BAAI/bge-m3",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "judge_model": "deepseek-v4-flash"
+  },
+  "counter_evidence": [
+    {
+      "query_id": "v4-a-01",
+      "claim_type": "A_fact",
+      "claim_text": "GNNExplainer uses a learned edge-mask to explain predictions on graph neural networks.",
+      "source_paper_ref": "GNNExplainer: Generating Explanations for Graph Neural Networks",
+      "gold_roles": [
+        { "paper_ref": "PGExplainer: Parameterized Explainer for Graph Neural Network", "role": "supports" }
+      ],
+      "note": "Type A: clearly-supported factual claim about a method. Source paper (GNNExplainer) must be excluded."
+    },
+    {
+      "query_id": "v4-a-02",
+      "claim_type": "A_fact",
+      "claim_text": "SubgraphX explains graph neural network predictions via Monte Carlo tree search over subgraphs.",
+      "source_paper_ref": "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search",
+      "gold_roles": [
+        { "paper_ref": "PGM-Explainer: Probabilistic Graphical Model Explanations for Graph Neural Networks", "role": "supports" }
+      ],
+      "note": "Type A: factual claim about a method's mechanism."
+    },
+    {
+      "query_id": "v4-a-03",
+      "claim_type": "A_fact",
+      "claim_text": "ProtGNN uses prototype-based explanations that are learned jointly with the classifier.",
+      "source_paper_ref": "ProtGNN: Towards Self-Explaining Graph Neural Networks",
+      "gold_roles": [
+        { "paper_ref": "Prototype-based Graph Information Bottleneck", "role": "supports" }
+      ],
+      "note": "Type A: factual claim about the prototype family."
+    },
+    {
+      "query_id": "v4-a-04",
+      "claim_type": "A_fact",
+      "claim_text": "The GOOD benchmark defines covariate, concept, and size distribution shifts for graph out-of-distribution evaluation.",
+      "source_paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",
+      "gold_roles": [
+        { "paper_ref": "OOD-GNN: Out-of-Distribution Generalized Graph Neural Network", "role": "supports" }
+      ],
+      "note": "Type A: factual claim about the GOOD benchmark."
+    },
+    {
+      "query_id": "v4-a-05",
+      "claim_type": "A_fact",
+      "claim_text": "Zorro focuses on valid, sparse, and stable explanations in graph neural networks.",
+      "source_paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks",
+      "gold_roles": [
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "supports" }
+      ],
+      "note": "Type A: factual claim about Zorro's focus."
+    },
+    {
+      "query_id": "v4-b-01",
+      "claim_type": "B_qualified",
+      "claim_text": "Prototype-based explanation methods always produce more faithful explanations than post-hoc methods.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "qualifies" },
+        { "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks", "role": "qualifies" }
+      ],
+      "note": "Type B: 'always' universal is fragile; evaluation papers should qualify it."
+    },
+    {
+      "query_id": "v4-b-02",
+      "claim_type": "B_qualified",
+      "claim_text": "Explanations learned on synthetic motifs transfer reliably to real-world graph datasets.",
+      "source_paper_ref": "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search",
+      "gold_roles": [
+        { "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks", "role": "qualifies" },
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "qualifies" }
+      ],
+      "note": "Type B: synthetic-to-real transfer is known-fragile."
+    },
+    {
+      "query_id": "v4-b-03",
+      "claim_type": "B_qualified",
+      "claim_text": "Increasing GNN depth always improves node classification accuracy.",
+      "source_paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",
+      "gold_roles": [
+        { "paper_ref": "OOD-GNN: Out-of-Distribution Generalized Graph Neural Network", "role": "qualifies" }
+      ],
+      "note": "Type B: 'always' claim; over-smoothing / shift literature should qualify it."
+    },
+    {
+      "query_id": "v4-b-04",
+      "claim_type": "B_qualified",
+      "claim_text": "A self-interpretable model does not need any post-hoc explanation method.",
+      "source_paper_ref": "ProtGNN: Towards Self-Explaining Graph Neural Networks",
+      "gold_roles": [
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "qualifies" }
+      ],
+      "note": "Type B: absolute claim; evaluation work should qualify with fidelity caveats."
+    },
+    {
+      "query_id": "v4-b-05",
+      "claim_type": "B_qualified",
+      "claim_text": "Prototype-based explanations remain stable under out-of-distribution shift without special training.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark", "role": "qualifies" },
+        { "paper_ref": "OOD-GNN: Out-of-Distribution Generalized Graph Neural Network", "role": "qualifies" }
+      ],
+      "note": "Type B: scope claim — OOD papers should qualify stability under shift."
+    },
+    {
+      "query_id": "v4-c-01",
+      "claim_type": "C_first_novel",
+      "claim_text": "This is the first method to combine self-interpretable graph learning with out-of-distribution generalization.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "Discovering Invariant Rationales for Graph Neural Networks", "role": "qualifies" },
+        { "paper_ref": "Interpretable and Generalizable Graph Learning via Stochastic Attention Mechanism", "role": "qualifies" }
+      ],
+      "note": "Type C: 'first' claim; invariant-rationale methods (DIR/GSAT) partially cover the combination."
+    },
+    {
+      "query_id": "v4-c-02",
+      "claim_type": "C_first_novel",
+      "claim_text": "Our explanation method outperforms all existing graph neural network explainability approaches.",
+      "source_paper_ref": "PGExplainer: Parameterized Explainer for Graph Neural Network",
+      "gold_roles": [
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "contradicts" },
+        { "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks", "role": "qualifies" }
+      ],
+      "note": "Type C: 'outperforms all' is the strongest claim; evaluation papers should challenge it."
+    },
+    {
+      "query_id": "v4-c-03",
+      "claim_type": "C_first_novel",
+      "claim_text": "No existing work evaluates explanation faithfulness under distribution shift.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "Discovering Invariant Rationales for Graph Neural Networks", "role": "qualifies" },
+        { "paper_ref": "Interpretable and Generalizable Graph Learning via Stochastic Attention Mechanism", "role": "qualifies" }
+      ],
+      "note": "Type C: 'no existing work' absolute; DIR/GSAT evaluate generalization with rationale constraints."
+    },
+    {
+      "query_id": "v4-c-04",
+      "claim_type": "C_first_novel",
+      "claim_text": "We are the first to use a prototype-based information bottleneck objective for graph explanation.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "ProtGNN: Towards Self-Explaining Graph Neural Networks", "role": "qualifies" }
+      ],
+      "note": "Type C: 'first to use' — ProtGNN is a close prior prototype method."
+    },
+    {
+      "query_id": "v4-c-05",
+      "claim_type": "C_first_novel",
+      "claim_text": "Intrinsic and post-hoc explanation methods have never been systematically compared on GNNs.",
+      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks", "role": "contradicts" }
+      ],
+      "note": "Type C: 'never been compared' — GraphFramEx is precisely a systematic comparison."
+    }
+  ]
+}

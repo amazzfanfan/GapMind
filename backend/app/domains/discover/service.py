@@ -937,6 +937,7 @@ class DiscoverService(OpportunityWorkflow):
             response = self.llm.chat_completion(
                 [{"role": "system", "content": "You produce auditable research opportunity proposals."}, {"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=2200,
+                disable_thinking=True,  # structured JSON — avoid CoT burning the budget
             )
             parsed = self._parse_json(response.content)
             raw_items = parsed.get("opportunities") if isinstance(parsed, dict) else None

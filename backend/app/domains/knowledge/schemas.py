@@ -207,6 +207,7 @@ class ExtractionRejectionCreate(BaseModel):
         "schema_validation",
         "evidence_resolution",
         "relation_resolution",
+        "dedup_exact",
     ]
     reason_code: str = Field(min_length=1, max_length=64)
     reason_detail: str = Field(min_length=1)

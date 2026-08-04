@@ -12,7 +12,7 @@ a real Celery worker / Redis.
 from __future__ import annotations
 
 from collections.abc import Generator
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +24,36 @@ from app.core.deps import get_db
 from app.db.base import Base
 from app.db.models import *  # noqa: F401,F403  (registers all models on Base.metadata)
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _stub_milvus(monkeypatch):
+    """Replace the Milvus client with a no-op MagicMock for every test.
+
+    Tests that exercise Milvus behaviour should override this with their
+    own fake. The default is a no-op that swallows the call so tests
+    that only care about DB state (e.g. paper API tests) don't need to
+    know Milvus exists.
+
+    Added in RG-6: paper.soft_delete now propagates to Milvus, so
+    previously-passing tests would otherwise hit a real (or missing)
+    Milvus and fail with RPC errors. Routing everything through this
+    stub keeps the test suite green.
+    """
+    fake = MagicMock(name="milvus_client")
+    fake.get_existing_chunk_ids.return_value = set()
+    fake.search.return_value = []
+    fake.insert_chunks.return_value = 0
+
+    # patch the module-level milvus_client in both retrieval.service and
+    # paper.service (each holds its own reference via `from ... import
+    # milvus_client`, so a single module-attribute patch is enough).
+    from app.domains.paper import service as paper_service_module
+    from app.domains.retrieval import service as retrieval_service_module
+
+    monkeypatch.setattr(retrieval_service_module, "milvus_client", fake)
+    monkeypatch.setattr(paper_service_module, "milvus_client", fake)
+    return fake
 
 
 @pytest.fixture(scope="function")
