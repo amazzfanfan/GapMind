@@ -44,16 +44,17 @@
 | **完整 demo Gate**（12+ 篇 corpus） | 🟡 semantic 1.0 ✅；similar 0.778 / counter 0.667 ❌（差 <0.03，需调召回）；详细见 `docs/retrieval_gate_report.md` |
 | 检索结果人工标注 + Gold Set 定稿 | ⏳ **RG-1**（人工审查的一部分） |
 
-## Stage 3 — 外部新颖性核验 🔲（未开始）
+## Stage 3 — 外部新颖性核验 ⏳（管线 PASS，query 生成待增强）
 
 | 功能 | 状态 |
 |---|---|
-| 从工作空间线索构造外部检索问题 | 🔲 |
-| Semantic Scholar 召回外部论文元数据 + 摘要 | 🔲 |
-| 外部候选角色判别（相似/重叠/限定/反驳/未知） | 🔲 |
-| 高价值开放 PDF 全文下载 + 解析核验 | 🔲 |
-| 外部结果快照保存（元数据 vs 全文明确区分） | 🔲 |
-| 外部检索失败时 Opportunity 标记"核验不完整" | 🔲 |
+| 从工作空间线索构造外部检索问题 | ⏳ 研究轴 query 库 + 精确名查找已落地（LLM 轴分解 + 方法名 grounding + `_title_verified` 标题验证前置），auto recall 0.0→0.286、MRR 0.5（GIB/IRM top-3、候选主题相关）；剩余 5 篇 gold 需 LLM 恰好生成概念词（非确定性）|
+| Semantic Scholar 召回外部论文元数据 + 摘要 | ✅ |
+| 外部候选角色判别（相似/重叠/限定/反驳/未知） | ✅（heuristic 打底 + LLM 批量精化，8/batch，失败保留启发式） |
+| 高价值开放 PDF 全文下载 + 解析核验 | ⏳ 导入链路已建（import_selected_candidates），全文核验流程待跑通验证 |
+| 外部结果快照保存（元数据 vs 全文明确区分） | ✅（snapshot_payload + evidence_level 两态） |
+| 外部检索失败时 Opportunity 标记"核验不完整" | ✅（verification_status = failed / incomplete） |
+| **Stage 3 Gate 验证**（主 Case gold 外部反证 Top 10 召回） | 🟡 **管线 PASS（curated 0.857）；auto 经轴 query 库 + 精确名查找后 0.286 recall / MRR 0.5（GIB/IRM top-3、候选主题相关）**；详见 `docs/external_novelty_gate_report.md` |
 
 ## Stage 4 — 研究机会 Proposal 🔲（同步原型有，正式闭环未过）
 
@@ -134,3 +135,4 @@ RG-9  文档收尾 + 状态同步                         ← 依赖 RG-8
 | 日期 | 内容 |
 |---|---|
 | 2026-08-04 | 初版；RG-2（来源排除）、RG-3（评测框架）已完成 |
+| 2026-08-06 | Stage 3 外部检索多 query 构造 + 轮转合并；**Stage 3 Gate 首跑：管线 PASS（curated 0.857）、query 自动生成 FAIL（auto 0.0）**；详见 `docs/external_novelty_gate_report.md` |

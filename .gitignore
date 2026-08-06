@@ -81,6 +81,10 @@ frontend/openapi.json
 evaluation/retrieval/reports/
 evaluation/retrieval/eval_report.json
 
+# ---- Stage 3 external novelty Gate outputs ----
+# Every run of `evaluation/external/verify_external_gate.py` writes a report here.
+evaluation/external/reports/
+
 # ---- Artifact storage (user-uploaded PDFs, parsed text, chunks) ----
 # These contain real paper content and should never be in git.
 # Ignore directory CONTENTS (not the dirs themselves) so we can keep
