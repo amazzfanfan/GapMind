@@ -91,6 +91,25 @@ class _NoopLLM:
         return SimpleNamespace(content=json.dumps({"roles": []}))
 
 
+class _AxisLLM:
+    """Returns axis queries (+ optional exact lookups) for the query-generation call."""
+
+    def __init__(self, queries: list[str], exact_lookups: list[str] | None = None) -> None:
+        self.queries = queries
+        self.exact_lookups = exact_lookups or []
+        self.messages: list[list[dict[str, str]]] = []
+
+    def chat_completion(self, messages, **kwargs):
+        self.messages.append(messages)
+        payload = {"queries": self.queries, "exact_lookups": self.exact_lookups}
+        return SimpleNamespace(content=json.dumps(payload))
+
+
+class _BoomLLM:
+    def chat_completion(self, messages, **kwargs):
+        raise RuntimeError("llm down")
+
+
 def _service(db_session, external_search, llm=None) -> DiscoverService:
     return DiscoverService(
         db_session,
@@ -176,6 +195,84 @@ def test_external_query_signal_items_orders_and_filters(db_session) -> None:
     assert "Low" not in names
 
 
+# ------------------------------------------------------------------ axis queries (LLM)
+def test_axis_queries_from_llm_parses_response(db_session) -> None:
+    workspace_id = str(uuid4())
+    llm = _AxisLLM(["graph information bottleneck", "explanation stability neural networks"])
+    service = _service(db_session, _S2Fake({}), llm)
+    run = _run(workspace_id)
+    out, lookups = service._axis_queries_from_llm(run, "My research question")
+    assert out == ["graph information bottleneck", "explanation stability neural networks"]
+    assert lookups == []
+    # one LLM call with the research question in the user prompt
+    assert len(llm.messages) == 1
+    assert "My research question" in llm.messages[0][-1]["content"]
+
+
+def test_axis_queries_from_llm_parses_exact_lookups(db_session) -> None:
+    workspace_id = str(uuid4())
+    llm = _AxisLLM(["graph information bottleneck"], exact_lookups=["Invariant Risk Minimization", "Graph Information Bottleneck"])
+    service = _service(db_session, _S2Fake({}), llm)
+    run = _run(workspace_id)
+    out, lookups = service._axis_queries_from_llm(run, "My research question")
+    assert out == ["graph information bottleneck"]
+    assert lookups == ["Invariant Risk Minimization", "Graph Information Bottleneck"]
+
+
+def test_build_external_queries_uses_llm_axis_queries(db_session) -> None:
+    workspace_id = str(uuid4())
+    llm = _AxisLLM(["graph information bottleneck", "explanation stability", "saliency robustness"])
+    service = _service(db_session, _S2Fake({}), llm)
+    run = _run(workspace_id)
+    queries = service._build_external_queries(run, "Primary claim")
+    assert queries[0] == "Primary claim"
+    for axis in ("graph information bottleneck", "explanation stability", "saliency robustness"):
+        assert axis in queries
+    assert len(queries) <= EXTERNAL_QUERY_MAX_TOTAL
+
+
+def test_build_external_queries_falls_back_when_llm_bad_shape(db_session) -> None:
+    workspace_id = str(uuid4())
+    db_session.add(_knowledge_item(workspace_id, "method", "PGIB", confidence=0.9))
+    db_session.commit()
+    # _NoopLLM returns {"roles": []} — a bad shape for axis queries → fallback
+    service = _service(db_session, _S2Fake({}), _NoopLLM())
+    run = _run(workspace_id)
+    queries = service._build_external_queries(run, "Primary")
+    assert queries[0] == "Primary"
+    assert "PGIB" in queries  # workspace-signal fallback
+
+
+def test_build_external_queries_llm_failure_keeps_workspace_signals(db_session) -> None:
+    workspace_id = str(uuid4())
+    db_session.add(_knowledge_item(workspace_id, "method", "SubgraphX", confidence=0.9))
+    db_session.commit()
+    service = _service(db_session, _S2Fake({}), _BoomLLM())
+    run = _run(workspace_id)
+    queries = service._build_external_queries(run, "Primary")
+    assert queries[0] == "Primary"
+    assert "SubgraphX" in queries  # graceful fallback
+
+
+def test_external_query_signal_texts_renders_compact(db_session) -> None:
+    workspace_id = str(uuid4())
+    db_session.add_all(
+        [
+            _knowledge_item(workspace_id, "method", "Graph Information Bottleneck", confidence=0.9),
+            _knowledge_item(workspace_id, "method", "IRM", confidence=0.9, content={"description": "Invariant Risk Minimization finds a representation"}),
+            _knowledge_item(workspace_id, "limitation", "Existing methods ignore stability", confidence=0.9),
+        ]
+    )
+    db_session.commit()
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    text = service._external_query_signal_texts(workspace_id)
+    assert "Methods:" in text
+    assert "Graph Information Bottleneck" in text
+    assert "Invariant Risk Minimization" in text
+    assert "Limitations:" in text
+    assert "Existing methods ignore stability" in text
+
+
 # ------------------------------------------------------------------ merge & dedupe
 def test_external_verify_merges_and_dedupes_candidates(db_session) -> None:
     workspace_id = str(uuid4())
@@ -252,3 +349,46 @@ def test_external_verify_semantic_scholar_failure(db_session) -> None:
     assert run.verification_status == "failed"
     assert run.stage_summaries["external_search"]["status"] == "failed"
     assert run.stage_summaries["external_search"]["retryable"] is True
+
+
+# ------------------------------------------------------------------ exact-name lookup
+def test_title_verified_matches_words(db_session) -> None:
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    assert service._title_verified("Graph Information Bottleneck", "Graph Information Bottleneck")
+    assert service._title_verified("Invariant Risk Minimization", "Invariant Risk Minimization")
+    assert not service._title_verified("Graph Information Bottleneck", "Some Unrelated Paper")
+    assert not service._title_verified("GIB", "Graph Information Bottleneck")  # too few words
+
+
+def test_external_verify_precise_lookup_prepends_verified(db_session) -> None:
+    workspace_id = str(uuid4())
+    primary = "GNN interpretability"
+    fake = _S2Fake(
+        {
+            primary: [_s2_paper("p1", "Paper One")],
+            "other query": [_s2_paper("p2", "Paper Two")],
+            "Graph Information Bottleneck": [_s2_paper("pGIB", "Graph Information Bottleneck", year=2020)],
+            "Unrelated Name": [_s2_paper("pX", "Something Completely Different")],
+        }
+    )
+    service = _service(db_session, fake, _NoopLLM())
+    run = _run(workspace_id)
+    count = service._external_verify(
+        run,
+        [primary, "other query"],
+        exact_lookups=["Graph Information Bottleneck", "Unrelated Name"],
+    )
+    from app.domains.discover.models import DiscoverExternalCandidate
+
+    cands = (
+        db_session.query(DiscoverExternalCandidate)
+        .filter(DiscoverExternalCandidate.discover_run_id == run.id)
+        .order_by(DiscoverExternalCandidate.rank)
+        .all()
+    )
+    # Verified lookup prepended; unmatched lookup skipped.
+    assert [c.external_paper_id for c in cands] == ["pGIB", "p1", "p2"]
+    assert cands[0].query == "exact: Graph Information Bottleneck"
+    assert count == 3
+    # Lookup made an extra S2 call with the exact name.
+    assert any(call["query"] == "Graph Information Bottleneck" for call in fake.calls)

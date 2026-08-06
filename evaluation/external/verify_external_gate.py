@@ -103,14 +103,16 @@ def _run(db, gold: dict[str, Any], workspace_id: str, args: argparse.Namespace) 
     db.add(run)
     db.commit()
 
-    service = DiscoverService(db, llm=_NoopLLM())
+    llm = None if args.real_llm else _NoopLLM()  # None → real LLMGatewayAdapter
+    service = DiscoverService(db, llm=llm)
     if args.queries:
         # Pipeline-only verification: bypass query generation so the Gate can
         # isolate retrieval/merge/role defects from query-construction defects.
         queries = [q.strip() for q in args.queries.split(",") if q.strip()]
+        exact_lookups: list[str] = []
     else:
-        queries = service._build_external_queries(run, research_question)
-    count = service._external_verify(run, queries)
+        queries, exact_lookups = service._external_query_plan(run, research_question)
+    count = service._external_verify(run, queries, exact_lookups)
     run_summary = dict(run.stage_summaries or {}).get("external_search", {})
     if run_summary.get("status") == "failed":
         print(f"\n[ERROR] external search failed: {run_summary.get('error')}")
@@ -216,6 +218,7 @@ def main() -> int:
     parser.add_argument("--research-question", type=str, default=None, help="Primary query override (default: gold research_question).")
     parser.add_argument("--keywords", type=str, default=None, help="Comma-separated input keywords (default: gold default_keywords).")
     parser.add_argument("--queries", type=str, default=None, help="Comma-separated explicit query list; bypasses _build_external_queries (pipeline-only verification).")
+    parser.add_argument("--real-llm", action="store_true", help="Use the real LLM for axis-query generation + role judgement (default: stub LLM so auto query generation falls back to workspace signals).")
     parser.add_argument("--cleanup", action="store_true", help="Delete the verification run + candidates after reporting.")
     parser.add_argument("--output", type=str, default=None, help="Report output path (default: reports/<case_id>_external_<ts>.json).")
     args = parser.parse_args()
