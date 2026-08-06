@@ -8,6 +8,20 @@
 
 ---
 
+## 状态更新（2026-08-06）
+
+> **Retrieval Gate：minimal gold set 已通过，完整 Gate 待语料扩充。**
+>
+> - 技术链路：RG-2..7 全部完成（来源排除 / 评测框架 / Similar Work 聚合 / Counter 角色排序 / 索引生命周期 / V4 专项）
+> - minimal gold set（9 篇 GNN explanation 论文，workspace `123100ea`）完整版带 judge 实测：
+>   Semantic/Similar/Counter Recall@10 = **1.0/1.0/1.0**，leakage = **0**（2026-08-06，`evaluation/retrieval/reports/minimal-gnn-v1_*.json`）
+> - 抽取质量：RG-1 人工审查回链 100% 精确；P0 精确去重已实现（claim/limitation 同 span 碰撞）
+> - 生产 bug 已修：deepseek-v4-flash reasoning 烧光 token → `disable_thinking` 参数
+> - **仍待做**：完整 5 case / 12 篇 demo corpus 的正式 Gate（需扩 corpus 缺 GraphFramEx/GOOD/Zorro/OOD-GNN + 补检索 relevance 标注）；之后才能进入 Stage 3 外部核验 / Stage 4 Opportunity 正式生成
+> - 完整功能状态见 `docs/functional_roadmap.md`
+
+---
+
 ## 0. 给后续执行任务的使用说明
 
 后续任务开始时，应先完整阅读：

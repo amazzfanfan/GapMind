@@ -282,18 +282,20 @@ Counter Evidence：
 
 ### 尚未确认
 
-- 尚未逐条判断所有 KnowledgeItem 的语义是否忠实于论文；
-- 尚未统计抽取 precision、recall 和 rejection 的真实质量；
-- 尚未建立 Retrieval gold set，不能计算 Recall@10；
-- 尚未证明 Counter-Evidence Recall@10 达到 0.70；
-- 尚未证明 Similar Work Recall@10 达到 0.80；
-- 尚未完成 12 篇 Smoke Corpus；
-- 尚未完成外部文献新颖性核验；
-- 尚未证明 Opportunity 可以满足至少两篇独立全文证据的 Gate。
+- 尚未逐条判断所有 KnowledgeItem 的语义是否忠实于论文；→ **已做（RG-1 人工审查，回链 100%）**
+- 尚未统计抽取 precision、recall 和 rejection 的真实质量；→ **已做（RG-1 五类判断 + P0 去重）**
+- 尚未建立 Retrieval gold set，不能计算 Recall@10；→ **已建（RG-3 minimal_gnn_v1）**
+- 尚未证明 Counter-Evidence Recall@10 达到 0.70；→ **minimal 语料 1.0（RG-8，2026-08-06）**
+- 尚未证明 Similar Work Recall@10 达到 0.80；→ **minimal 语料 1.0（RG-8，2026-08-06）**
+- 尚未完成 12 篇 Smoke Corpus；→ **仍待**（当前 9 篇 GNN explanation 论文，缺 evaluation/OOD 篇目）
+- 尚未完成外部文献新颖性核验；→ **仍待（Stage 3）**
+- 尚未证明 Opportunity 可以满足至少两篇独立全文证据的 Gate。→ **仍待（Stage 4）**
 
 因此，当前应记录为：
 
-> Phase 3 / Retrieval 技术 Smoke 通过；Stage 2 质量 Gate 未通过、也尚未正式评测。
+> Phase 3 / Retrieval 技术 Smoke 通过；**minimal gold set（9 篇语料）质量 Gate 已通过**
+> （Semantic/Similar/Counter Recall@10 = 1.0/1.0/1.0，leakage = 0，2026-08-06 完整版带 judge 实测）；
+> 完整 12 篇 Smoke Corpus 的正式 Gate 尚未跑（需扩 corpus + 补检索 relevance 标注）。
 
 ## 6. 下一步验证计划
 
