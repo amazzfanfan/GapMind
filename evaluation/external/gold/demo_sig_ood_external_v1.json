@@ -1,0 +1,60 @@
+{
+  "case_id": "demo-sig-ood-v1",
+  "version": "1",
+  "updated": "2026-08-06",
+  "annotation_status": "gold",
+  "research_question": "Are self-interpretable graph neural network explanations faithful, stable, and predictively useful under graph distribution shift?",
+  "default_keywords": ["self-interpretable GNN", "graph neural network explanation", "distribution shift", "out-of-distribution", "invariant rationalization"],
+  "gate": {"metric": "recall@10", "threshold": 0.8},
+  "gold_papers": [
+    {
+      "title": "Graph Information Bottleneck",
+      "semantic_scholar_id": "2fce1ef37391cd685fc5459e1cbfcb8490b85242",
+      "year": 2020,
+      "expected_role": "overlap",
+      "rationale": "Foundational IB objective for graph rationale — GSAT/PGIB/VGIB in the workspace build on it. An external gate must surface it so the system does not claim the IB-rationale combination is novel."
+    },
+    {
+      "title": "Invariant Risk Minimization",
+      "semantic_scholar_id": "753b7a701adc1b6072378bd048cfa8567885d9c7",
+      "year": 2019,
+      "expected_role": "overlap",
+      "rationale": "Foundational invariant-feature learning under environment shift. DIR in the workspace derives from it; overlaps the 'invariant + distribution shift' axis of the research question."
+    },
+    {
+      "title": "Graph Rationalization with Environment-based Augmentations",
+      "semantic_scholar_id": "22f1d9efab67a43d83df0178f6f67b2ffe93039e",
+      "year": 2022,
+      "expected_role": "counter",
+      "rationale": "Explicitly combines graph rationalization (invariant rationales) with environment-based augmentation for OOD — a close prior that challenges the novelty of 'invariant rationale under graph shift'."
+    },
+    {
+      "title": "Interpretation of Neural Networks is Fragile",
+      "semantic_scholar_id": "96cf326c91adc96aa59382bf71fbead29ea34c52",
+      "year": 2017,
+      "expected_role": "counter",
+      "rationale": "Shows explanations are unstable under small adversarial perturbations of the input — direct counter-evidence against assuming explanations stay stable, relevant to the 'stability' axis."
+    },
+    {
+      "title": "Sanity Checks for Saliency Maps",
+      "semantic_scholar_id": "8dc8f3e0127adc6985d4695e9b69d04717b2fde8",
+      "year": 2018,
+      "expected_role": "qualifies",
+      "rationale": "Cautions that saliency-style explanations can be insensitive to model and data randomization — qualifies any claim that explanation faithfulness is measurable without rigorous baselines."
+    },
+    {
+      "title": "Reliable Post hoc Explanations: Modeling Uncertainty in Explainability",
+      "semantic_scholar_id": "097a125fea441e2973cee1a95b77cc8582a4ed8c",
+      "year": 2020,
+      "expected_role": "qualifies",
+      "rationale": "Explanations should carry uncertainty — qualifies the predictive-utility and reliability axes of the research question."
+    },
+    {
+      "title": "Explainability Methods for Graph Convolutional Neural Networks",
+      "semantic_scholar_id": "cb2d9b2f171da67f7b47ac3e0eb935a0de223354",
+      "year": 2019,
+      "expected_role": "overlap",
+      "rationale": "Early systematic evaluation of GNN explanation methods — overlaps the evaluation-protocol axis and should be recalled as related work."
+    }
+  ]
+}

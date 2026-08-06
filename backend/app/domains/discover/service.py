@@ -83,6 +83,22 @@ Output a JSON object, nothing else:
 WAITING_RUN_STATUSES = {"waiting_for_user", "waiting_for_fulltext"}
 PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
 
+# Stage 3 external-query construction budget. A handful of focused queries
+# covers more angles than the literal claim wording while keeping S2 API
+# calls and the LLM role-judge batches bounded. Method names are the
+# highest-value external-search keys (they map to named methods in the
+# literature), so they are prioritized over generic keywords.
+EXTERNAL_QUERY_MAX_TOTAL = 6  # max external search queries per run
+EXTERNAL_QUERY_SIGNAL_TYPES = ("method", "claim", "task", "limitation")
+EXTERNAL_QUERY_MIN_CONFIDENCE = 0.3  # skip low-confidence extracted signals
+EXTERNAL_QUERY_MAX_KEYWORDS = 2  # generic user keywords are lowest priority
+# Architectural components are not named research contributions, so they are
+# poor external-search keys; deprioritize them so real method names win.
+EXTERNAL_METHOD_COMPONENT_TOKENS = {
+    "pool", "module", "layer", "encoder", "decoder", "aggregation",
+    "step", "fourier", "regularization", "block",
+}
+
 # Domain exception classes live in their own module so they can be
 # imported by submodules (and tests) without dragging the whole service.
 from app.domains.discover.exceptions import (  # noqa: E402
@@ -394,7 +410,8 @@ class DiscoverService(OpportunityWorkflow):
             },
         )
 
-        external = self._external_verify(run, claim_text)
+        external_queries = self._build_external_queries(run, claim_text)
+        external = self._external_verify(run, external_queries)
         self._stage(run, "external_search", 0.58, {"external_candidates": external})
         self._checkpoint(run)
         candidate_state = self._external_candidate_state(run)
@@ -551,36 +568,90 @@ class DiscoverService(OpportunityWorkflow):
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
         return self.retrieval.find_counter_evidence(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker, use_judge=config.use_judge, exclude_paper_ids=excluded)
 
-    def _external_verify(self, run: DiscoverRun, query: str) -> int:
+    def _external_verify(self, run: DiscoverRun, queries: list[str]) -> int:
+        """Search Semantic Scholar across several queries and merge candidates.
+
+        ``queries[0]`` is the run's research question (claim/topic); the rest
+        are extra angles built by ``_build_external_queries``. Results are
+        deduped by ``external_paper_id`` and assigned fresh sequential ranks.
+        Each candidate records the query that surfaced it, so the audit trail
+        shows which workspace signal produced which candidate.
+        """
         existing = int(self.db.execute(select(func.count()).select_from(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalar() or 0)
         if existing:
             rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalars())
             self._external_candidate_state(run)
             return existing
+        queries = [q.strip() for q in queries if q and q.strip()]
+        if not queries:
+            run.verification_status = "incomplete"
+            self.db.commit()
+            return 0
+        primary = queries[0]
+        config = DiscoverConfig.model_validate(run.config or {})
+        top_k = config.top_k
         scope = DiscoverScope.model_validate(run.scope or {})
         year = None
         if scope.year_from is not None or scope.year_to is not None:
             year = f"{scope.year_from or ''}-{scope.year_to or ''}"
+        per_query: list[list[tuple[str, dict[str, Any]]]] = []
         try:
-            raw = self.external_search.search(query=query[:200], fields=S2_FIELDS, sort="relevance", limit=min(20, int((run.config or {}).get("top_k", 10))), year=year)
+            for position, query in enumerate(queries):
+                limit = top_k if position == 0 else max(3, top_k // 2)
+                raw = self.external_search.search(
+                    query=query[:200],
+                    fields=S2_FIELDS,
+                    sort="relevance",
+                    limit=limit,
+                    year=year,
+                )
+                seen_in_query: set[str] = set()
+                q_results: list[tuple[str, dict[str, Any]]] = []
+                for item in raw.get("data") or []:
+                    if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
+                        continue
+                    pid = str(item["paperId"])
+                    if pid not in seen_in_query:
+                        seen_in_query.add(pid)
+                        q_results.append((pid, item))
+                per_query.append(q_results)
         except SemanticScholarError as exc:
             run.verification_status = "failed"
-            run.stage_summaries = {**(run.stage_summaries or {}), "external_search": {"status": "failed", "error": str(exc), "retryable": exc.status_code in {429, 502, 504}, "executed": False}}
+            run.stage_summaries = {**(run.stage_summaries or {}), "external_search": {"status": "failed", "error": str(exc), "retryable": exc.status_code in {429, 502, 504}, "executed": False, "queries": [q[:120] for q in queries]}}
             self.db.commit()
             logger.warning("discover.external_search_failed", run_id=run.id, error=str(exc))
             return 0
+
+        # Round-robin interleave across queries so each query's top hits reach
+        # the merged top-K — a primary-first merge would hide extra-query
+        # discoveries below rank 10. Dedupe globally, attributing each paper
+        # to the query that surfaced it earliest.
+        merged: list[tuple[str, dict[str, Any], str]] = []
+        seen: set[str] = set()
+        round_index = 0
+        while True:
+            added_this_round = False
+            for position, q_results in enumerate(per_query):
+                if round_index < len(q_results):
+                    pid, item = q_results[round_index]
+                    if pid not in seen:
+                        seen.add(pid)
+                        merged.append((pid, item, queries[position][:200]))
+                    added_this_round = True
+            if not added_this_round:
+                break
+            round_index += 1
+
         rows: list[DiscoverExternalCandidate] = []
-        for rank, item in enumerate(raw.get("data") or [], start=1):
-            if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
-                continue
+        for rank, (pid, item, source_query) in enumerate(merged, start=1):
             authors = [a.get("name", "") for a in item.get("authors") or [] if isinstance(a, dict) and a.get("name")]
             row = DiscoverExternalCandidate(
-                id=str(uuid4()), discover_run_id=run.id, query=query[:200], rank=rank,
-                external_paper_id=str(item["paperId"]), title=str(item["title"]), authors=authors,
+                id=str(uuid4()), discover_run_id=run.id, query=source_query, rank=rank,
+                external_paper_id=pid, title=str(item["title"]), authors=authors,
                 year=item.get("year") if isinstance(item.get("year"), int) else None,
                 abstract=item.get("abstract") if isinstance(item.get("abstract"), str) else None,
                 open_access_pdf=item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else None,
-                role=self._external_role(query, item), role_confidence=0.35,
+                role=self._external_role(primary, item), role_confidence=0.35,
                 evidence_level="metadata_only", verification_status="unverified", snapshot_payload=item,
             )
             rows.append(row)
@@ -592,15 +663,125 @@ class DiscoverService(OpportunityWorkflow):
                 "status": "succeeded" if rows else "succeeded_empty",
                 "executed": True,
                 "candidate_count": len(rows),
+                "queries": [q[:120] for q in queries],
             },
         }
         self.db.commit()
         # Refine candidate roles (similar/overlap/qualify/contradict/unknown)
         # with the LLM — the heuristic only gives similar/unknown. Failure
-        # keeps the heuristic role; candidates remain auditable.
+        # keeps the heuristic role; candidates remain auditable. Roles are
+        # judged against the research question (the primary query).
         if rows:
-            self._judge_external_roles(run, query, rows)
+            self._judge_external_roles(run, primary, rows)
         return len(rows)
+
+    def _build_external_queries(self, run: DiscoverRun, primary: str) -> list[str]:
+        """Build a small set of external-search queries from workspace signals.
+
+        The primary query is the run's claim/topic (the research question
+        itself). Extra queries are prioritized by external-search value:
+        method names first (they map to named methods in the literature and
+        surface the method paper plus its variants/critiques), then
+        claims/tasks/limitations (specific findings), then generic user
+        keywords last. Queries are deduped and capped by
+        ``EXTERNAL_QUERY_MAX_TOTAL`` to bound S2 calls and LLM judge batches.
+        """
+        queries: list[str] = []
+        seen: set[str] = set()
+
+        def add(text: str) -> bool:
+            text = text.strip()
+            if not text or text.lower() in seen:
+                return False
+            queries.append(text[:200])
+            seen.add(text.lower())
+            return True
+
+        add(primary)
+        for item in self._external_query_signal_items(run.workspace_id, types=("method",)):
+            add(self._external_query_text(item))
+            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
+                return queries
+        for item in self._external_query_signal_items(run.workspace_id, types=("limitation", "claim", "task")):
+            add(self._external_query_text(item))
+            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
+                return queries
+        keyword_count = 0
+        for kw in (run.input_payload or {}).get("keywords") or []:
+            if not isinstance(kw, str) or keyword_count >= EXTERNAL_QUERY_MAX_KEYWORDS:
+                continue
+            if add(kw):
+                keyword_count += 1
+            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
+                break
+        return queries
+
+    def _external_query_signal_items(self, workspace_id: str, types: tuple[str, ...] | None = None) -> list[KnowledgeItem]:
+        """Workspace items ordered by usefulness for external queries.
+
+        Methods first (named entities → strongest external-search keys),
+        preferring descriptive multi-word names over abbreviations; then
+        claims (asserted facts), tasks, limitations. Rejected and
+        low-confidence items are skipped so a noisy extraction cannot
+        pollute the external search.
+        """
+        types = types or EXTERNAL_QUERY_SIGNAL_TYPES
+        items = list(
+            self.db.execute(
+                select(KnowledgeItem).where(
+                    KnowledgeItem.workspace_id == workspace_id,
+                    KnowledgeItem.is_deleted.is_(False),
+                    KnowledgeItem.status != "rejected",
+                    KnowledgeItem.type.in_(types),
+                    KnowledgeItem.confidence >= EXTERNAL_QUERY_MIN_CONFIDENCE,
+                )
+            ).scalars()
+        )
+        type_rank = {"limitation": 0, "claim": 1, "task": 2}
+
+        def is_component(item: KnowledgeItem) -> bool:
+            words = {w.lower() for w in re.findall(r"[A-Za-z]+", item.canonical_name)}
+            return bool(words & EXTERNAL_METHOD_COMPONENT_TOKENS)
+
+        def priority(item: KnowledgeItem) -> tuple[float, float]:
+            if item.type == "method":
+                if is_component(item):
+                    return (2.0, -float(item.confidence or 0.0))
+                descriptive = 0.0 if len(item.canonical_name.split()) >= 2 else 1.0
+                return (descriptive, -float(item.confidence or 0.0))
+            return (type_rank.get(item.type, 9) + 10.0, -float(item.confidence or 0.0))
+
+        items.sort(key=priority)
+        return items
+
+    def _external_query_text(self, item: KnowledgeItem) -> str:
+        """Render a KnowledgeItem as an external-search query string.
+
+        Methods render as their descriptive name: a multi-word canonical name
+        is used as-is; an all-caps abbreviation is expanded from the leading
+        noun phrase of its description (e.g. ``IRM`` → "Invariant Risk
+        Minimization") when available. Limitations render as their short
+        canonical name (caveats → counter-evidence); claims render as their
+        statement.
+        """
+        content = item.content or {}
+        if item.type == "claim":
+            return self._claim_text(item)
+        if item.type == "method":
+            name = item.canonical_name.strip()
+            if len(name.split()) >= 2 or not re.fullmatch(r"[A-Z]{2,5}", name):
+                return name
+            description = content.get("description")
+            if isinstance(description, str) and description.strip():
+                match = re.match(r"[A-Z][a-zA-Z0-9-]*(?:\s+[A-Z][a-zA-Z0-9-]*){1,3}", description.strip())
+                full = match.group(0) if match else ""
+                first = full.split()[0].lower() if full else ""
+                if full and len(full.split()) >= 2 and full.lower() != name.lower() and first not in {"a", "an", "the"}:
+                    return full
+            return name
+        # limitations and tasks: short canonical names carry the most signal;
+        # long descriptions dilute S2 relevance matching.
+        return item.canonical_name.strip()
 
     def _import_selected_candidates(self, run: DiscoverRun) -> None:
         """Best-effort import of user-selected OA PDFs.

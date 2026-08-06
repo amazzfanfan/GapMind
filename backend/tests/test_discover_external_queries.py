@@ -1,0 +1,254 @@
+"""Tests for Stage 3 external query construction + multi-query merging."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from app.domains.discover.models import DiscoverRun  # noqa: E402
+from app.domains.discover.service import (  # noqa: E402
+    EXTERNAL_QUERY_MAX_TOTAL,
+    DiscoverService,
+)
+from app.domains.knowledge.models import KnowledgeItem  # noqa: E402
+from app.gateway.semantic_scholar import SemanticScholarError  # noqa: E402
+
+
+def _run(workspace_id: str, **overrides: Any) -> DiscoverRun:
+    kwargs = {
+        "id": str(uuid4()),
+        "workspace_id": workspace_id,
+        "trigger_type": "topic",
+        "input_topic": "GNN interpretability under distribution shift",
+        "input_payload": {"topic": "GNN interpretability under distribution shift", "keywords": []},
+        "scope": {},
+        "config": {"top_k": 10},
+        "status": "running",
+        "stage": "external_search",
+        "progress": 0.5,
+        "verification_status": "in_progress",
+        "stage_summaries": {},
+    }
+    kwargs.update(overrides)
+    return DiscoverRun(**kwargs)
+
+
+def _knowledge_item(
+    workspace_id: str,
+    type_: str,
+    name: str,
+    *,
+    confidence: float = 0.8,
+    status: str = "extracted_candidate",
+    content: dict[str, Any] | None = None,
+) -> KnowledgeItem:
+    return KnowledgeItem(
+        id=str(uuid4()),
+        workspace_id=workspace_id,
+        type=type_,
+        canonical_name=name,
+        content=content or {},
+        confidence=confidence,
+        status=status,
+        is_deleted=False,
+        created_by="agent",
+    )
+
+
+class _S2Fake:
+    """Canned per-query Semantic Scholar results."""
+
+    def __init__(self, per_query: dict[str, list[dict[str, Any]]]) -> None:
+        self.per_query = per_query
+        self.calls: list[dict[str, Any]] = []
+
+    def search(self, query: str, *, fields: str, **kw: Any):
+        self.calls.append({"query": query, **kw})
+        return {"data": self.per_query.get(query, []), "total": len(self.per_query.get(query, []))}
+
+    def get_paper(self, paper_id: str, *, fields: str):
+        return {"paperId": paper_id}
+
+
+def _s2_paper(pid: str, title: str, **extra: Any) -> dict[str, Any]:
+    return {"paperId": pid, "title": title, "abstract": "abstract", **extra}
+
+
+class _NoopLLM:
+    def __init__(self) -> None:
+        self.messages: list[list[dict[str, str]]] = []
+
+    def chat_completion(self, messages, **kwargs):
+        self.messages.append(messages)
+        return SimpleNamespace(content=json.dumps({"roles": []}))
+
+
+def _service(db_session, external_search, llm=None) -> DiscoverService:
+    return DiscoverService(
+        db_session,
+        external_search=external_search,
+        llm=llm or _NoopLLM(),
+    )
+
+
+# ------------------------------------------------------------------ build queries
+def test_build_external_queries_primary_then_keywords(db_session) -> None:
+    workspace_id = str(uuid4())
+    run = _run(workspace_id, input_payload={"keywords": ["invariant rationalization", "counterfactual"]})
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    queries = service._build_external_queries(run, "My research claim")
+    assert queries[0] == "My research claim"
+    assert "invariant rationalization" in queries
+    assert "counterfactual" in queries
+    # dedup + cap
+    assert len(queries) == len(set(q.lower() for q in queries))
+    assert len(queries) <= EXTERNAL_QUERY_MAX_TOTAL
+
+
+def test_build_external_queries_adds_workspace_signals(db_session) -> None:
+    workspace_id = str(uuid4())
+    db_session.add_all(
+        [
+            _knowledge_item(workspace_id, "method", "PGIB", confidence=0.9, content={"description": "invariant rationale extraction"}),
+            _knowledge_item(workspace_id, "claim", "IB improves OOD generalization", confidence=0.8, content={"statement": "IB improves OOD generalization"}),
+            _knowledge_item(workspace_id, "task", "OOD detection", confidence=0.7),
+            # rejected and low-confidence items must be skipped
+            _knowledge_item(workspace_id, "method", "NoisyMethod", confidence=0.9, status="rejected"),
+            _knowledge_item(workspace_id, "method", "LowConf", confidence=0.1),
+        ]
+    )
+    db_session.commit()
+    run = _run(workspace_id)
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    queries = service._build_external_queries(run, "Primary")
+    assert queries[0] == "Primary"
+    joined = " | ".join(queries)
+    assert "IB improves OOD generalization" in joined  # claim signal
+    assert "PGIB" in joined  # method signal
+    assert "NoisyMethod" not in joined
+    assert "LowConf" not in joined
+    assert len(queries) <= EXTERNAL_QUERY_MAX_TOTAL
+
+
+def test_external_query_text_renders_by_type(db_session) -> None:
+    workspace_id = str(uuid4())
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    # multi-word method name is used as-is
+    gnn = _knowledge_item(workspace_id, "method", "Graph Information Bottleneck", content={"description": "..."})
+    assert service._external_query_text(gnn) == "Graph Information Bottleneck"
+    # mixed-case method name is used as-is
+    pgib = _knowledge_item(workspace_id, "method", "PGIB", content={"description": "invariant rationale"})
+    assert service._external_query_text(pgib) == "PGIB"
+    # all-caps abbreviation expands from the description's leading noun phrase
+    irm = _knowledge_item(workspace_id, "method", "IRM", content={"description": "Invariant Risk Minimization finds a representation"})
+    assert service._external_query_text(irm) == "Invariant Risk Minimization"
+    # claim renders as its statement
+    claim = _knowledge_item(workspace_id, "claim", "same", content={"statement": "IB improves OOD generalization"})
+    assert service._external_query_text(claim) == "IB improves OOD generalization"
+    task = _knowledge_item(workspace_id, "task", "OOD detection", content={})
+    assert service._external_query_text(task) == "OOD detection"
+
+
+def test_external_query_signal_items_orders_and_filters(db_session) -> None:
+    workspace_id = str(uuid4())
+    db_session.add_all(
+        [
+            _knowledge_item(workspace_id, "method", "Method", confidence=0.9),
+            _knowledge_item(workspace_id, "claim", "Claim", confidence=0.6),
+            _knowledge_item(workspace_id, "method", "Rejected", confidence=0.9, status="rejected"),
+            _knowledge_item(workspace_id, "method", "Low", confidence=0.2),
+        ]
+    )
+    db_session.commit()
+    service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())
+    items = service._external_query_signal_items(workspace_id)
+    names = [it.canonical_name for it in items]
+    assert names == ["Method", "Claim"]  # methods before claims, filtered
+    assert "Rejected" not in names
+    assert "Low" not in names
+
+
+# ------------------------------------------------------------------ merge & dedupe
+def test_external_verify_merges_and_dedupes_candidates(db_session) -> None:
+    workspace_id = str(uuid4())
+    primary = "GNN interpretability"
+    fake = _S2Fake(
+        {
+            primary: [
+                _s2_paper("p1", "Paper One", authors=[{"name": "A"}], year=2020),
+                _s2_paper("p2", "Paper Two"),
+                _s2_paper("p3", "Paper Three"),
+            ],
+            "PGIB: invariant rationale": [
+                _s2_paper("p2", "Paper Two"),  # duplicate across queries
+                _s2_paper("p4", "Paper Four"),
+            ],
+        }
+    )
+    llm = _NoopLLM()
+    service = _service(db_session, fake, llm)
+    run = _run(workspace_id)
+    count = service._external_verify(run, [primary, "PGIB: invariant rationale"])
+
+    assert count == 4  # p1..p4 deduped, no duplicate p2
+    from app.domains.discover.models import DiscoverExternalCandidate
+
+    cands = (
+        db_session.query(DiscoverExternalCandidate)
+        .filter(DiscoverExternalCandidate.discover_run_id == run.id)
+        .order_by(DiscoverExternalCandidate.rank)
+        .all()
+    )
+    # Round-robin interleave: p1(primary), p2(extra), p4(extra), p3(primary).
+    assert [c.external_paper_id for c in cands] == ["p1", "p2", "p4", "p3"]
+    assert [c.rank for c in cands] == [1, 2, 3, 4]
+    # each candidate records the query that surfaced it
+    assert cands[0].query == primary  # p1 only in the primary query
+    assert cands[1].query == "PGIB: invariant rationale"  # p2 first seen under the extra query
+    assert cands[3].query == primary  # p3 only in the primary query
+    assert fake.calls[0]["query"] == primary
+    assert fake.calls[0]["limit"] == 10  # primary uses full top_k
+    assert fake.calls[1]["limit"] == 5  # extra query uses top_k // 2
+    assert run.stage_summaries["external_search"]["candidate_count"] == 4
+    # role judge ran against the research question (primary), not the extra query
+    assert llm.messages
+    assert primary in llm.messages[0][-1]["content"]
+    assert "PGIB" not in llm.messages[0][-1]["content"].split("CANDIDATES:")[0]
+
+
+def test_external_verify_empty_queries(db_session) -> None:
+    workspace_id = str(uuid4())
+    fake = _S2Fake({})
+    service = _service(db_session, fake)
+    run = _run(workspace_id)
+    count = service._external_verify(run, ["   ", ""])
+    assert count == 0
+    assert run.verification_status == "incomplete"
+    assert fake.calls == []
+
+
+def test_external_verify_semantic_scholar_failure(db_session) -> None:
+    workspace_id = str(uuid4())
+
+    class _BoomS2:
+        def search(self, query: str, *, fields: str, **kw: Any):
+            raise SemanticScholarError(status_code=429, message="rate limited")
+
+        def get_paper(self, paper_id: str, *, fields: str):
+            raise SemanticScholarError(status_code=429, message="rate limited")
+
+    service = _service(db_session, _BoomS2())
+    run = _run(workspace_id)
+    count = service._external_verify(run, ["claim"])
+    assert count == 0
+    assert run.verification_status == "failed"
+    assert run.stage_summaries["external_search"]["status"] == "failed"
+    assert run.stage_summaries["external_search"]["retryable"] is True
