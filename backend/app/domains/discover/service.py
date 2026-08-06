@@ -57,6 +57,29 @@ logger = get_logger(__name__)
 
 S2_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf,url,publicationDate"
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
+
+# LLM prompt for external candidate role judgement (Stage 3).
+EXTERNAL_ROLE_SYSTEM_PROMPT = """\
+You classify whether external research papers serve as counter-evidence for a \
+research question.
+
+Categories:
+- similar: same research area, closely related approach
+- overlap: partially overlapping topic but different focus
+- qualifies: adds caveats or limitations that constrain the research question
+- contradicts: provides evidence against the research question
+- unknown: cannot determine from the metadata alone
+
+Rules:
+- Be conservative: use "unknown" if ambiguous
+- "contradicts" requires clear opposing evidence, not just a different focus
+- Base your judgement on the title and abstract only
+- A candidate that merely resembles the question is "similar"; only call it \
+"qualifies" or "contradicts" when it explicitly challenges or constrains it
+
+Output a JSON object, nothing else:
+{"roles": [{"index": 0, "role": "similar|overlap|qualifies|contradicts|unknown", \
+"confidence": 0.0-1.0}, ...]}"""
 WAITING_RUN_STATUSES = {"waiting_for_user", "waiting_for_fulltext"}
 PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
 
@@ -572,6 +595,11 @@ class DiscoverService(OpportunityWorkflow):
             },
         }
         self.db.commit()
+        # Refine candidate roles (similar/overlap/qualify/contradict/unknown)
+        # with the LLM — the heuristic only gives similar/unknown. Failure
+        # keeps the heuristic role; candidates remain auditable.
+        if rows:
+            self._judge_external_roles(run, query, rows)
         return len(rows)
 
     def _import_selected_candidates(self, run: DiscoverRun) -> None:
@@ -671,6 +699,83 @@ class DiscoverService(OpportunityWorkflow):
         tokens = [token for token in re.findall(r"[a-z0-9]{4,}", query.lower()) if token not in {"with", "from", "under", "using"}]
         overlap = sum(token in haystack for token in tokens)
         return "similar" if overlap >= max(1, len(tokens) // 4) else "unknown"
+
+    def _judge_external_roles(
+        self,
+        run: DiscoverRun,
+        query: str,
+        candidates: list[DiscoverExternalCandidate],
+    ) -> None:
+        """LLM-refine external candidate roles.
+
+        ``_external_role`` is a cheap word-overlap heuristic that only yields
+        similar/unknown. Stage 3 requires discriminating similar / overlap /
+        qualify / contradict / unknown so Discover can tell which external
+        paper might *challenge* an opportunity, not just resemble it.
+
+        This batch-judges candidates against the research question using the
+        LLM gateway. On failure it silently keeps the heuristic role (the
+        candidate rows already carry a role from ``_external_role``).
+        """
+        if not candidates:
+            return
+        # Reuse the injected LLM port; fall back to the heuristic result if
+        # the LLM call throws (candidates already have a heuristic role).
+        gateway = self.llm
+        batch_size = 8
+        role_map = {
+            "similar": "similar",
+            "overlaps": "overlap",
+            "overlap": "overlap",
+            "qualifies": "qualifies",
+            "qualify": "qualifies",
+            "contradicts": "contradicts",
+            "contradict": "contradicts",
+            "unknown": "unknown",
+        }
+
+        for start in range(0, len(candidates), batch_size):
+            batch = candidates[start : start + batch_size]
+            lines = [
+                f"[{i}] {c.title or ''} — {(c.abstract or '')[:400]}"
+                for i, c in enumerate(batch)
+            ]
+            user_prompt = (
+                f"RESEARCH QUESTION: {query[:300]}\n\nCANDIDATES:\n" + "\n".join(lines)
+            )
+            try:
+                resp = gateway.chat_completion(
+                    [
+                        {"role": "system", "content": EXTERNAL_ROLE_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.0,
+                    max_tokens=2000,
+                    disable_thinking=True,
+                )
+                parsed = self._parse_json(resp.content)
+                items = parsed.get("roles") if isinstance(parsed, dict) else None
+                if not isinstance(items, list):
+                    logger.warning("discover.external_role_bad_shape", raw_preview=(resp.content or "")[:200])
+                    continue
+                for hit in items:
+                    if not isinstance(hit, dict):
+                        continue
+                    idx = hit.get("index")
+                    if not isinstance(idx, int) or not (0 <= idx < len(batch)):
+                        continue
+                    role = str(hit.get("role", "unknown")).lower()
+                    candidate = batch[idx]
+                    candidate.role = role_map.get(role, "unknown")
+                    try:
+                        candidate.role_confidence = float(hit.get("confidence", 0.3))
+                    except (TypeError, ValueError):
+                        candidate.role_confidence = 0.3
+            except Exception as exc:
+                logger.warning("discover.external_role_judge_failed", error=str(exc))
+                # Keep the heuristic role (already set on the rows) on failure.
+        # Persist refined roles once, after all batches.
+        self.db.commit()
 
     def _workspace_supporting(
         self,
