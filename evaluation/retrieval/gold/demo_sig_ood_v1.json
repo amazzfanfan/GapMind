@@ -13,7 +13,7 @@
     {
       "query_id": "ss-001",
       "query": "self-interpretable graph neural network prototype-based explanation",
-      "target_paper_ref": "ProtGNN: Towards Self-Explaining Graph Neural Networks",
+      "target_paper_ref": "ProtGNN",
       "note": "DRAFT - confirm against RG-1 human review. Prototype-based intrinsic explanation family."
     },
     {
@@ -32,10 +32,10 @@
   "similar_work": [
     {
       "query_id": "sw-001",
-      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "source_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
       "relevant_paper_refs": [
-        "ProtGNN: Towards Self-Explaining Graph Neural Networks",
-        "Discovering Invariant Rationales for Graph Neural Networks",
+        "ProtGNN",
+        "DIR",
         "Interpretable and Generalizable Graph Learning via Stochastic Attention Mechanism"
       ],
       "note": "DRAFT - PGIB is prototype/intrinsic; ProtGNN is the sibling prototype method; DIR+GSAT are invariant rationale (closest neighbors)."
@@ -44,9 +44,9 @@
       "query_id": "sw-002",
       "source_paper_ref": "GNNExplainer: Generating Explanations for Graph Neural Networks",
       "relevant_paper_refs": [
-        "PGExplainer: Parameterized Explainer for Graph Neural Network",
+        "Parameterized Explainer for Graph Neural Network",
         "PGM-Explainer: Probabilistic Graphical Model Explanations for Graph Neural Networks",
-        "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search"
+        "On Explainability of Graph Neural Networks via Subgraph Explorations"
       ],
       "note": "DRAFT - all post-hoc explanation family; should cluster together."
     },
@@ -63,7 +63,7 @@
     {
       "query_id": "ce-001",
       "claim_text": "Intrinsic explanation methods always produce more faithful explanations than post-hoc explanation methods.",
-      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "source_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
       "gold_roles": [
         {
           "paper_ref": "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks",
@@ -79,7 +79,7 @@
     {
       "query_id": "ce-002",
       "claim_text": "Explanations learned on synthetic motifs transfer reliably to real-world graph datasets.",
-      "source_paper_ref": "SubgraphX: Towards Explaining Graph Neural Networks via Monte Carlo Tree Search",
+      "source_paper_ref": "On Explainability of Graph Neural Networks via Subgraph Explorations",
       "gold_roles": [
         {
           "paper_ref": "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks",
@@ -95,7 +95,7 @@
     {
       "query_id": "ce-003",
       "claim_text": "Self-interpretable GNN explanations remain stable under distribution shift without special out-of-distribution training.",
-      "source_paper_ref": "Prototype-based Graph Information Bottleneck",
+      "source_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
       "gold_roles": [
         {
           "paper_ref": "GOOD: A Graph Out-of-Distribution Benchmark",

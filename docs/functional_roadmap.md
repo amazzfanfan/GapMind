@@ -41,7 +41,7 @@
 | 索引生命周期验证（重复索引/删除/软删除/降级） | ✅ **RG-6** |
 | 反证专项验证（三类主张 × 5 条人工标注） | ✅ **RG-7** |
 | **minimal gold set Gate**（9 篇语料完整版） | ✅ **RG-8 部分**（2026-08-06：recall 1.0/1.0/1.0 + leakage 0 全 PASS） |
-| **完整 Gate**（5 case / 12 篇 demo corpus） | 🔲 需扩 corpus（缺 GraphFramEx/GOOD/Zorro/OOD-GNN）+ 补检索 relevance 标注 |
+| **完整 demo Gate**（12+ 篇 corpus） | 🟡 semantic 1.0 ✅；similar 0.778 / counter 0.667 ❌（差 <0.03，需调召回）；详细见 `docs/retrieval_gate_report.md` |
 | 检索结果人工标注 + Gold Set 定稿 | ⏳ **RG-1**（人工审查的一部分） |
 
 ## Stage 3 — 外部新颖性核验 🔲（未开始）
