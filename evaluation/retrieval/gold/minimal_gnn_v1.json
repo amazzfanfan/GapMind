@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0.0",
+  "case_id": "minimal-gnn-v1",
+  "corpus_version": "gnn-explanation-9papers",
+  "workspace_hint": "123100ea-e75b-4110-9048-1f5b92668c32",
+  "freeze": {
+    "chunk_version": "v1",
+    "embedding_model": "BAAI/bge-m3",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "judge_model": "deepseek-v4-flash"
+  },
+  "semantic_search": [
+    {
+      "query_id": "min-ss-01",
+      "query": "prototype-based self-explaining graph neural network",
+      "target_paper_ref": "ProtGNN",
+      "note": "ProtGNN is the prototype self-explaining method."
+    },
+    {
+      "query_id": "min-ss-02",
+      "query": "graph information bottleneck for interpretable prediction",
+      "target_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
+      "note": "PGIB is the IB-based explanation method."
+    },
+    {
+      "query_id": "min-ss-03",
+      "query": "sufficient and necessary explanations for graph learning",
+      "target_paper_ref": "Self-Interpretable Graph Learning with Sufficient and Necessary Explanations",
+      "note": "SunnyGNN focuses on sufficiency + necessity."
+    }
+  ],
+  "similar_work": [
+    {
+      "query_id": "min-sw-01",
+      "source_paper_ref": "ProtGNN",
+      "relevant_paper_refs": [
+        "Towards Prototype-Based Self-Explainable Graph Neural Network",
+        "Interpretable Prototype-based Graph Information Bottleneck"
+      ],
+      "note": "Prototype-based explanation family."
+    },
+    {
+      "query_id": "min-sw-02",
+      "source_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
+      "relevant_paper_refs": [
+        "VGIB",
+        "ProtGNN"
+      ],
+      "note": "PGIB neighbors: IB variant (VGIB) + prototype sibling (ProtGNN)."
+    },
+    {
+      "query_id": "min-sw-03",
+      "source_paper_ref": "Self-Interpretable Graph Learning with Sufficient and Necessary Explanations",
+      "relevant_paper_refs": [
+        "DIR"
+      ],
+      "note": "SunnyGNN neighbors: invariant-rationale self-interpretable method."
+    }
+  ],
+  "counter_evidence": [
+    {
+      "query_id": "min-ce-01",
+      "claim_text": "Prototype-based methods always produce more faithful explanations than information-bottleneck based methods.",
+      "source_paper_ref": "ProtGNN",
+      "gold_roles": [
+        { "paper_ref": "Interpretable Prototype-based Graph Information Bottleneck", "role": "qualifies" }
+      ],
+      "note": "'always' universal — PGIB (IB+prototype hybrid) qualifies it. VGIB removed 2026-08-05: its fidelity experiments compare IB variants, not prototype-vs-IB, so it is NOT a valid counter-evidence for this claim."
+    },
+    {
+      "query_id": "min-ce-02",
+      "claim_text": "Graph information bottleneck explanations remain perfectly stable across different graph structures.",
+      "source_paper_ref": "Interpretable Prototype-based Graph Information Bottleneck",
+      "gold_roles": [
+        { "paper_ref": "Why Self-Inconsistency Arises in GNN Explanations and How to Exploit It", "role": "qualifies" }
+      ],
+      "note": "Self-inconsistency paper challenges explanation stability. Verified: recalled + judge qualifies."
+    }
+  ],
+  "removed_counter_evidence": [
+    {
+      "query_id": "min-ce-03",
+      "claim_text": "Adding more explanation constraints always improves prediction accuracy.",
+      "source_paper_ref": "Self-Interpretable Graph Learning with Sufficient and Necessary Explanations",
+      "reason": "No paper in this 9-paper corpus argues that constraints HURT accuracy — every paper mentioning constraints does so to USE them for interpretation, not to qualify a performance trade-off. This is a no-counter-evidence claim in the corpus (Judge should return genuinely_no_counter_evidence)."
+    }
+  ]
+}

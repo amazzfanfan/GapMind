@@ -445,8 +445,12 @@ def _detect_sections(
                     continue
                 avg_size = sum(s.get("size", 0) for s in spans) / len(spans)
                 is_bold = all("bold" in (s.get("font", "").lower()) for s in spans)
-                # 11pt is a typical body threshold; headings usually 12+.
-                is_large = avg_size >= 12.0
+                # 11pt is a typical body threshold; headings are usually 12+.
+                # BUT some LaTeX PDFs (e.g. arXiv) typeset headings at ~11.95pt
+                # while body is ~10pt — an absolute `>= 12.0` misses them and
+                # the paper gets chunked with only its appendix. Use 11.5 as a
+                # safer boundary: real body text almost never exceeds 11.5.
+                is_large = avg_size >= 11.5
                 if not (is_large or is_bold):
                     continue
 

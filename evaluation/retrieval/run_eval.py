@@ -139,8 +139,21 @@ def _paper_ids(items: list[Any]) -> list[str]:
     return out
 
 
-def _workspace_ids(items: list[Any]) -> list[str]:
-    return [getattr(item, "workspace_id", None) or "" for item in items]
+def _paper_workspace_ids(db, items: list[Any], target_workspace_id: str) -> list[str]:
+    """Workspace id of each retrieved item, resolved via the DB.
+
+    ``RetrievalResultItem`` carries ``paper_id`` but NOT ``workspace_id``
+    (workspace scoping happens inside the Milvus filter). To compute real
+    leakage we look each paper up; unknown / None paper_ids count as in-scope
+    (they cannot have crossed the workspace boundary by construction).
+    """
+    paper_ids = [getattr(item, "paper_id", None) for item in items]
+    present = [pid for pid in paper_ids if pid]
+    wmap: dict[str, str] = {}
+    if present:
+        for row in db.query(Paper).filter(Paper.id.in_(present)).all():
+            wmap[row.id] = row.workspace_id
+    return [wmap.get(pid, target_workspace_id) if pid else target_workspace_id for pid in paper_ids]
 
 
 def run_semantic_search(db, workspace_id: str, q: SemanticSearchQuery, top_k: int, minimal: bool):
@@ -159,7 +172,7 @@ def run_semantic_search(db, workspace_id: str, q: SemanticSearchQuery, top_k: in
         "count": len(pids),
         "recall@10": recall_at_k({target.id}, pids, top_k),
         "mrr@10": mrr_at_k({target.id}, pids, top_k),
-        "leakage": workspace_leakage(_workspace_ids(resp.items), workspace_id),
+        "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
     }
 
 
@@ -190,7 +203,7 @@ def run_similar_work(db, workspace_id: str, q: SimilarWorkQuery, top_k: int, min
         "recall@10": recall_at_k(gold_ids, pids, top_k),
         "mrr@10": mrr_at_k(gold_ids, pids, top_k),
         "diversity": paper_diversity(pids, top_k),
-        "leakage": workspace_leakage(_workspace_ids(resp.items), workspace_id),
+        "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
         "source_leaked": source.id in pids,
     }
 
@@ -237,7 +250,7 @@ def run_counter_evidence(db, workspace_id: str, q: CounterEvidenceQuery, top_k: 
         "recall@10": recall_at_k(gold_ids, pids, top_k),
         "mrr@10": mrr_at_k(gold_ids, pids, top_k),
         "diversity": paper_diversity(pids, top_k),
-        "leakage": workspace_leakage(_workspace_ids(resp.items), workspace_id),
+        "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
         "source_leaked": source.id in pids,
         "role_recall_diagnostic": round(role_recall, 4),
     }

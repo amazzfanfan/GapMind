@@ -220,14 +220,20 @@ Workspace 隔离规则。不兼容变更必须升级 major 版本。
       "text": "Retrieved text or abstract",
       "score": 0.87,
       "retrieval_stage": "candidate_recall|reranked|llm_judged",
-      "judgement": "supports|overlaps|qualifies|contradicts|unknown",
+      "judgement": "contradicts|qualifies|supports|overlaps|unknown",
       "judgement_confidence": 0.72
     }
   ],
   "total": 10,
   "latency_ms": 45.2,
-  "filters_applied": {},
-  "error": null
+  "filters_applied": {
+    "excluded_paper_ids": ["uuid"],
+    "low_value_section_filter": true,
+    "max_chunks_per_paper": 2,
+    "role_priority": {"contradicts": 0, "qualifies": 1, "supports": 2, "overlaps": 2, "unknown": 3}
+  },
+  "error": null,
+  "empty_reason": "retrieval_empty|judge_failed|genuinely_no_counter_evidence"
 }
 ```
 
@@ -235,6 +241,12 @@ Workspace 隔离规则。不兼容变更必须升级 major 版本。
 
 - 向量相似度只能产生 `candidate_recall`，不能直接宣称反证。
 - `counter_evidence` 必须经过 rerank 或 LLM/NLI 判别，并允许 `unknown`。
+- **`judgement` 是受约束枚举**（contradicts/qualifies/supports/overlaps/unknown），UI 标签与 Discover 决策按此 switch，不允许自由字符串。
+- **`counter_evidence` 结果按角色优先级排序**：`contradicts` > `qualifies` > `supports/overlaps` > `unknown`（`role_priority` 记录在 `filters_applied`）。同角色内按 confidence desc。
+- **`empty_reason` 三态互斥**（仅 `counter_evidence` 且 `total == 0` 时设置）：
+  - `retrieval_empty`：Milvus 召回 0 候选；
+  - `judge_failed`：Judge 全失败（zero-confidence unknown 哨兵），此时 `status=degraded`；
+  - `genuinely_no_counter_evidence`：Judge 成功但无反证。三态区分"扩大检索 / 重试 Judge / 接受无反证"。
 - 外部摘要结果使用 `metadata_only`；关键 Opportunity 结论不能只依赖该级别。
 - 检索失败返回 `status=failed` 和结构化 error；不得伪装成成功的空列表。
 - Workspace 本地检索必须严格过滤 `workspace_id`。
