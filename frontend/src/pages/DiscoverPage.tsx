@@ -14,14 +14,16 @@ import {
   Input,
   List,
   Modal,
+  Popconfirm,
   Progress,
   Select,
   Space,
   Steps,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
-import { BulbOutlined, CloseCircleOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { BulbOutlined, CloseCircleOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useParams, useSearchParams } from "react-router-dom";
 import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
 import { OpportunityEvidenceViewer } from "../components/EvidenceViewer";
@@ -32,7 +34,7 @@ const { Text, Title, Paragraph } = Typography;
 function errorMessage(error: unknown): string {
   const response = error as { response?: { status?: number; data?: { detail?: { message?: string; error?: string } } } };
   const detail = response.response?.data?.detail;
-  if (response.response?.status === 409) return "This item changed elsewhere. Refresh the opportunity and try again.";
+  if (response.response?.status === 409) return detail?.message || "This item changed elsewhere. Refresh and try again.";
   return detail?.message || (error as Error).message || "Request failed";
 }
 
@@ -41,6 +43,14 @@ function statusColor(status: string): string {
   if (["failed", "cancelled", "rejected", "verification_failed"].includes(status)) return "red";
   if (["waiting_for_user", "waiting_for_fulltext", "needs_more_evidence", "verification_incomplete", "deferred"].includes(status)) return "orange";
   return "blue";
+}
+
+function externalSearchHasNoResults(run: DiscoverRun | null): boolean {
+  const rawSummary = run?.stage_summaries?.external_search;
+  if (!rawSummary || typeof rawSummary !== "object" || Array.isArray(rawSummary)) return false;
+  const summary = rawSummary as { status?: unknown; candidate_count?: unknown };
+  if (summary.status === "failed" || summary.status === "succeeded_empty") return true;
+  return summary.status === "succeeded" && Number(summary.candidate_count ?? 0) === 0;
 }
 
 function verificationStatusLabel(status: string): string {
@@ -250,10 +260,28 @@ export default function DiscoverPage() {
     try { await discoverApi.cancelRun(workspaceId, selectedRun.id); message.success("Discover run cancelled"); await load(); }
     catch (error) { message.error(`Cancel failed: ${errorMessage(error)}`); }
   };
+  const deleteRun = async (run: DiscoverRun) => {
+    if (!workspaceId) return;
+    try {
+      await discoverApi.deleteRun(workspaceId, run.id);
+      if (selectedRunId === run.id) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("run");
+        setSearchParams(next, { replace: true });
+        setRunDetail(null);
+      }
+      message.success("Discover run deleted from history");
+      await load();
+    } catch (error) {
+      message.error(`Delete failed: ${errorMessage(error)}`);
+    }
+  };
 
   if (!workspaceId) return <Empty description="Workspace not found" />;
   const stage = currentRunStage(runDetail, selectedRun);
   const stagePosition = stageIndex(stage);
+  const activeRun = runDetail?.id === selectedRun?.id ? runDetail : selectedRun;
+  const externalSearchError = externalSearchHasNoResults(activeRun);
   const selectedOpportunities = opportunities.filter((item) => !selectedRun || item.discover_run_id === selectedRun.id);
 
   return (
@@ -265,19 +293,19 @@ export default function DiscoverPage() {
         </Space>
         <div style={{ display: "grid", gridTemplateColumns: screens.md ? "minmax(230px, 0.28fr) minmax(0, 0.72fr)" : "minmax(0, 1fr)", gap: 20 }}>
           <Card title={`Run history (${runs.length})`} bodyStyle={{ padding: 0 }}>
-            <List dataSource={runs} locale={{ emptyText: "No Discover runs yet" }} renderItem={(run) => <List.Item onClick={() => openRun(run.id)} style={{ cursor: "pointer", padding: "14px 16px", background: selectedRun?.id === run.id ? "#f0f5ff" : undefined }}><List.Item.Meta avatar={<BulbOutlined />} title={<Text ellipsis>{run.input_topic || "Claim-driven discovery"}</Text>} description={<Space wrap><Tag color={statusColor(run.status)}>{run.status}</Tag><Text type="secondary">{Math.round(run.progress * 100)}%</Text><Text type="secondary">{run.stage.replaceAll("_", " ")}</Text></Space>} /></List.Item>} />
+            <List dataSource={runs} locale={{ emptyText: "No Discover runs yet" }} renderItem={(run) => <List.Item onClick={() => openRun(run.id)} actions={[<Popconfirm key="delete" title="Delete this Discover run?" description="The run will be hidden from history. Workspace papers, PDFs, opportunities, and plans will be preserved." okText="Delete" cancelText="Cancel" okButtonProps={{ danger: true }} onConfirm={() => void deleteRun(run)}><Button type="text" danger disabled={!TERMINAL_RUN_STATUSES.has(run.status)} title={TERMINAL_RUN_STATUSES.has(run.status) ? "Delete run" : "Cancel the run before deleting"} aria-label={`Delete ${run.input_topic || "Discover run"}`} icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} /></Popconfirm>]} style={{ cursor: "pointer", padding: "14px 16px", background: selectedRun?.id === run.id ? "#f0f5ff" : undefined }}><List.Item.Meta avatar={<BulbOutlined />} title={<Text ellipsis>{run.input_topic || "Claim-driven discovery"}</Text>} description={<Space wrap><Tag color={statusColor(run.status)}>{run.status}</Tag><Text type="secondary">{Math.round(run.progress * 100)}%</Text><Text type="secondary">{run.stage.replaceAll("_", " ")}</Text></Space>} /></List.Item>} />
           </Card>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
             <Card title="Run overview" extra={selectedRun && <Space wrap><Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag>{selectedRun.status === "waiting_for_fulltext" && <Tag color="orange">Waiting for PDF pipeline</Tag>}</Space>}>
               {!selectedRun ? <Empty description="Start a run to inspect its progress and candidates" /> : <>
                 <Descriptions size="small" column={{ xs: 1, sm: 2 }}><Descriptions.Item label="Topic">{selectedRun.input_topic || "Claim-driven"}</Descriptions.Item><Descriptions.Item label="Verification">{selectedRun.verification_status}</Descriptions.Item><Descriptions.Item label="Stage">{stage || "Unknown"}</Descriptions.Item><Descriptions.Item label="Selected opportunities">{selectedOpportunityCount(opportunities, selectedRun.id)}</Descriptions.Item></Descriptions>
                 <Progress percent={Math.round((runDetail?.id === selectedRun.id ? runDetail.progress : selectedRun.progress) * 100)} status={selectedRun.status === "failed" ? "exception" : undefined} />
-                {stagePosition < 0 ? <Tag color="red">Unknown stage: {stage || "missing"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item) => ({ title: item.replaceAll("_", " ") }))} />}
+                {stagePosition < 0 ? <Tag color="red">Unknown stage: {stage || "missing"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item) => { const label = item.replaceAll("_", " "); const failed = item === "external_search" && externalSearchError; return { status: failed ? "error" : undefined, title: <Tooltip title={failed ? "No papers found or external search failed" : label}><span>{label}</span></Tooltip> }; })} />}
                 {selectedRun.status === "waiting_for_fulltext" && <Paragraph type="warning" style={{ marginTop: 16 }}>The selected paper is being parsed, indexed, and checked for EvidenceSpan. Synthesis is paused until the pipeline is ready.</Paragraph>}
                 {selectedRun.error_message && <Paragraph type="danger" style={{ marginTop: 16 }}>{selectedRun.error_message}</Paragraph>}
               </>}
             </Card>
-            <Card title={`Opportunity candidates (${selectedOpportunities.length})`}>
+            <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
               {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(item.status)}>{item.status}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>} />}
             </Card>
             {runDetail?.external_candidates?.length ? <Card title="External candidates for verification"><List size="small" dataSource={runDetail.external_candidates} renderItem={(candidate) => <List.Item actions={[<Button key="select" size="small" onClick={() => void selectExternal(candidate)} disabled={verificationActionDisabled(candidate.verification_status)}>{verificationActionLabel(candidate.verification_status)}</Button>]}><List.Item.Meta title={`${candidate.rank}. ${candidate.title}`} description={<Space wrap><Tag>{candidate.year || "Year unknown"}</Tag><Tag>{candidate.evidence_level}</Tag><Tag color={candidate.verification_status === "verified" ? "green" : candidate.verification_status === "verification_failed" ? "red" : "processing"}>{verificationStatusLabel(candidate.verification_status)}</Tag><Tag>{candidate.role}</Tag></Space>} /></List.Item>} /></Card> : null}

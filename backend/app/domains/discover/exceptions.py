@@ -17,6 +17,10 @@ class DiscoverRunNotFoundError(Exception):
     """No DiscoverRun with the given id (or it belongs to a different workspace)."""
 
 
+class DiscoverRunDeletionConflict(Exception):
+    """A DiscoverRun cannot be deleted while its worker is still active."""
+
+
 class OpportunityNotFoundError(Exception):
     """No ResearchOpportunity with the given id (or workspace mismatch)."""
 
@@ -46,6 +50,7 @@ class DiscoverRunCancelled(Exception):
 
 __all__ = [
     "DiscoverInputError",
+    "DiscoverRunDeletionConflict",
     "DiscoverRunNotFoundError",
     "OpportunityNotFoundError",
     "OpportunityVersionConflict",

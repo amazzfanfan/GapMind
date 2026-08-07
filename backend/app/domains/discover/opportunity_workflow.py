@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.domains.discover.exceptions import (
     DiscoverGateError,
@@ -24,12 +24,17 @@ from app.domains.discover.exceptions import (
     OpportunityVersionConflict,
 )
 from app.domains.discover.models import (
+    DiscoverRun,
     HumanDecision,
     OpportunityEvidence,
     OpportunityVersion,
     ResearchOpportunity,
     ResearchPlan,
 )
+
+
+CLOSED_OPPORTUNITY_STATUSES = frozenset({"confirmed", "edited_confirmed", "rejected"})
+
 from app.domains.knowledge.models import EvidenceSpan
 from app.domains.artifact.service import ArtifactService
 from app.domains.artifact.models import Artifact
@@ -50,15 +55,29 @@ class OpportunityWorkflow:
         *,
         status_filter: str | None,
         run_id: str | None,
+        pending_only: bool,
         limit: int,
         offset: int,
     ) -> tuple[list[ResearchOpportunity], int]:
-        base = select(ResearchOpportunity).where(
-            ResearchOpportunity.workspace_id == workspace_id,
-            ResearchOpportunity.is_deleted.is_(False),
+        base = (
+            select(ResearchOpportunity)
+            .outerjoin(
+                DiscoverRun,
+                ResearchOpportunity.discover_run_id == DiscoverRun.id,
+            )
+            .where(
+                ResearchOpportunity.workspace_id == workspace_id,
+                ResearchOpportunity.is_deleted.is_(False),
+                or_(
+                    ResearchOpportunity.discover_run_id.is_(None),
+                    DiscoverRun.deleted_at.is_(None),
+                ),
+            )
         )
         if status_filter:
             base = base.where(ResearchOpportunity.status == status_filter)
+        if pending_only:
+            base = base.where(ResearchOpportunity.status.not_in(CLOSED_OPPORTUNITY_STATUSES))
         if run_id:
             base = base.where(ResearchOpportunity.discover_run_id == run_id)
         items = list(

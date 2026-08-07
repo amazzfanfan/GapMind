@@ -137,16 +137,34 @@ def cancel_run(
     return DiscoverRunRead.model_validate(service.cancel_run(workspace_id, run_id))
 
 
+@router.delete("/runs/{run_id}", response_model=None, status_code=status.HTTP_204_NO_CONTENT)
+def delete_run(
+    workspace_id: str,
+    run_id: str,
+    service: DiscoverService = Depends(_service),
+    current_user: str = Depends(get_current_user),
+) -> None:
+    service.delete_run(workspace_id, run_id, actor=current_user)
+
+
 @router.get("/opportunities", response_model=OpportunityListResponse)
 def list_opportunities(
     workspace_id: str,
     status_filter: str | None = Query(None, alias="status"),
     run_id: str | None = None,
+    pending_only: bool = Query(False, description="Only return opportunities awaiting human handling"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     service: DiscoverService = Depends(_service),
 ) -> OpportunityListResponse:
-    items, total = service.list_opportunities(workspace_id, status_filter=status_filter, run_id=run_id, limit=limit, offset=offset)
+    items, total = service.list_opportunities(
+        workspace_id,
+        status_filter=status_filter,
+        run_id=run_id,
+        pending_only=pending_only,
+        limit=limit,
+        offset=offset,
+    )
     return OpportunityListResponse(items=[ResearchOpportunityRead.model_validate(item) for item in items], total=total, limit=limit, offset=offset)
 
 

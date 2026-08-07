@@ -146,6 +146,7 @@ EXTERNAL_METHOD_COMPONENT_TOKENS = {
 from app.domains.discover.exceptions import (  # noqa: E402
     DiscoverGateError,
     DiscoverInputError,
+    DiscoverRunDeletionConflict,
     DiscoverRunCancelled,
     DiscoverRunNotFoundError,
     InvalidOpportunityTransition,
@@ -238,7 +239,10 @@ class DiscoverService(OpportunityWorkflow):
         return run, task.id
 
     def list_runs(self, workspace_id: str, *, status_filter: str | None, limit: int, offset: int) -> tuple[list[DiscoverRun], int]:
-        base = select(DiscoverRun).where(DiscoverRun.workspace_id == workspace_id)
+        base = select(DiscoverRun).where(
+            DiscoverRun.workspace_id == workspace_id,
+            DiscoverRun.deleted_at.is_(None),
+        )
         if status_filter:
             base = base.where(DiscoverRun.status == status_filter)
         items = list(self.db.execute(base.order_by(DiscoverRun.created_at.desc()).limit(limit).offset(offset)).scalars())
@@ -247,7 +251,7 @@ class DiscoverService(OpportunityWorkflow):
 
     def get_run(self, workspace_id: str, run_id: str) -> DiscoverRun:
         run = self.db.get(DiscoverRun, run_id)
-        if run is None or run.workspace_id != workspace_id:
+        if run is None or run.workspace_id != workspace_id or run.deleted_at is not None:
             raise DiscoverRunNotFoundError(run_id)
         return run
 
@@ -269,6 +273,25 @@ class DiscoverService(OpportunityWorkflow):
         self.db.commit()
         self.timeline.record(workspace_id=workspace_id, event_type="discover.run_cancelled", subject_type="discover_run", subject_id=run.id, payload={"run_id": run.id})
         return run
+
+    def delete_run(self, workspace_id: str, run_id: str, *, actor: str = "user") -> None:
+        """Hide a completed Discover Run without deleting its research data."""
+        run = self.get_run(workspace_id, run_id)
+        if run.status not in TERMINAL_RUN_STATUSES:
+            raise DiscoverRunDeletionConflict(
+                "Only completed, failed, or cancelled Discover runs can be deleted; cancel the active run first."
+            )
+        run.deleted_at = datetime.now(timezone.utc)
+        run.deleted_by = actor
+        self.db.commit()
+        self.timeline.record(
+            workspace_id=workspace_id,
+            event_type="discover.run_deleted",
+            subject_type="discover_run",
+            subject_id=run.id,
+            actor=actor,
+            payload={"run_id": run.id, "preserved_outputs": True},
+        )
 
     def select_external(self, workspace_id: str, run_id: str, candidate_ids: list[str]) -> DiscoverRun:
         run = self.get_run(workspace_id, run_id)

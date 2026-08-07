@@ -749,7 +749,8 @@ export interface paths {
         get: operations["get_run_api_v1_workspaces__workspace_id__discover_runs__run_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete Run */
+        delete: operations["delete_run_api_v1_workspaces__workspace_id__discover_runs__run_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1219,6 +1220,16 @@ export interface components {
              */
             top_k: number;
             /**
+             * Source Paper Id
+             * @description UUID of the claim's source paper. Always excluded from recall.
+             */
+            source_paper_id?: string | null;
+            /**
+             * Exclude Paper Ids
+             * @description Additional paper UUIDs to exclude. Merged with source_paper_id.
+             */
+            exclude_paper_ids?: string[];
+            /**
              * Use Reranker
              * @default true
              */
@@ -1403,6 +1414,24 @@ export interface components {
             external_candidates?: components["schemas"]["DiscoverExternalCandidateRead"][];
             /** Opportunities */
             opportunities?: components["schemas"]["ResearchOpportunityRead"][];
+        };
+        /**
+         * DiscoverRunListResponse
+         * @description Standard list envelope for ``GET /discover/runs``.
+         *
+         *     Defined explicitly so the front-end's OpenAPI codegen produces a
+         *     stable shape and so the endpoint can declare ``response_model=...``
+         *     instead of returning a hand-written dict.
+         */
+        DiscoverRunListResponse: {
+            /** Items */
+            items: components["schemas"]["DiscoverRunRead"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** DiscoverRunRead */
         DiscoverRunRead: {
@@ -2271,6 +2300,8 @@ export interface components {
             filters_applied?: Record<string, never>;
             /** Error */
             error?: string | null;
+            /** Empty Reason */
+            empty_reason?: ("retrieval_empty" | "judge_failed" | "genuinely_no_counter_evidence") | null;
         };
         /**
          * RetrievalResultItem
@@ -2324,8 +2355,9 @@ export interface components {
             /**
              * Judgement
              * @default unknown
+             * @enum {string}
              */
-            judgement: string;
+            judgement: "contradicts" | "qualifies" | "supports" | "overlaps" | "unknown";
             /**
              * Judgement Confidence
              * @default 0
@@ -2343,6 +2375,11 @@ export interface components {
             top_k: number;
             /** Section */
             section?: string | null;
+            /**
+             * Exclude Paper Ids
+             * @description Paper UUIDs to exclude from recall (pushed into the Milvus filter).
+             */
+            exclude_paper_ids?: string[];
             /**
              * Use Reranker
              * @default true
@@ -2498,6 +2535,11 @@ export interface components {
              * @default 10
              */
             top_k: number;
+            /**
+             * Exclude Paper Ids
+             * @description Additional paper UUIDs to exclude. The source ``paper_id`` is always excluded.
+             */
+            exclude_paper_ids?: string[];
             /**
              * Use Reranker
              * @default true
@@ -4263,7 +4305,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["DiscoverRunListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4280,7 +4322,9 @@ export interface operations {
     create_run_api_v1_workspaces__workspace_id__discover_runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -4332,6 +4376,38 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DiscoverRunDetail"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_run_api_v1_workspaces__workspace_id__discover_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -4417,6 +4493,8 @@ export interface operations {
             query?: {
                 status?: string | null;
                 run_id?: string | null;
+                /** @description Only return opportunities awaiting human handling */
+                pending_only?: boolean;
                 limit?: number;
                 offset?: number;
             };
@@ -4483,7 +4561,9 @@ export interface operations {
     edit_confirm_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4583,7 +4663,9 @@ export interface operations {
     confirm_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__confirm_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4619,7 +4701,9 @@ export interface operations {
     reject_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__reject_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4655,7 +4739,9 @@ export interface operations {
     defer_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__defer_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4691,7 +4777,9 @@ export interface operations {
     convert_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__convert_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;

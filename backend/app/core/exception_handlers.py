@@ -29,6 +29,7 @@ from app.domains.chat.service import (
 from app.domains.discover.service import (
     DiscoverGateError,
     DiscoverInputError,
+    DiscoverRunDeletionConflict,
     DiscoverRunNotFoundError,
     InvalidOpportunityTransition,
     OpportunityNotFoundError,
@@ -62,6 +63,7 @@ EXCEPTION_REGISTRY: dict[type[Exception], tuple[int, str, bool]] = {
     WorkspaceNotFoundError: (404, "workspace_not_found", False),
     # 409 — Conflict / state machine
     ChatConflictError: (409, "chat_conflict", False),
+    DiscoverRunDeletionConflict: (409, "discover_run_deletion_conflict", False),
     InvalidOpportunityTransition: (409, "invalid_opportunity_transition", False),
     InvalidTaskTransition: (409, "invalid_task_transition", False),
     OpportunityVersionConflict: (409, "opportunity_version_conflict", False),

@@ -80,6 +80,8 @@ class DiscoverRun(Base, UUIDPKMixin, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DiscoverExternalCandidate(Base, UUIDPKMixin, TimestampMixin):

@@ -215,8 +215,19 @@ export const discoverApi = {
   async cancelRun(workspaceId: string, runId: string): Promise<DiscoverRun> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/runs/${runId}/cancel`)).data;
   },
-  async listOpportunities(workspaceId: string): Promise<{ items: ResearchOpportunity[]; total: number }> {
-    return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities`, { params: { limit: 50 } })).data;
+  async deleteRun(workspaceId: string, runId: string): Promise<void> {
+    await apiClient.delete(`/workspaces/${workspaceId}/discover/runs/${runId}`);
+  },
+  async listOpportunities(workspaceId: string, options: { status?: string; runId?: string; pendingOnly?: boolean; limit?: number; offset?: number } = {}): Promise<{ items: ResearchOpportunity[]; total: number; limit: number; offset: number }> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities`, {
+      params: {
+        status: options.status,
+        run_id: options.runId,
+        pending_only: options.pendingOnly,
+        limit: options.limit ?? 50,
+        offset: options.offset ?? 0,
+      },
+    })).data;
   },
   async getOpportunity(workspaceId: string, opportunityId: string): Promise<OpportunityDetail> {
     return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}`)).data;

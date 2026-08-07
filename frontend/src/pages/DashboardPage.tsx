@@ -20,6 +20,7 @@ interface WorkspaceSummary {
   reviewKnowledge: number | null;
   waitingRuns: DiscoverRun[] | null;
   opportunities: ResearchOpportunity[] | null;
+  pendingOpportunityCount: number | null;
 }
 
 export default function DashboardPage() {
@@ -37,7 +38,7 @@ export default function DashboardPage() {
           taskApi.list(workspace.id, { limit: 100 }),
           knowledgeApi.listItems(workspace.id, { limit: 200 }),
           discoverApi.listRuns(workspace.id),
-          discoverApi.listOpportunities(workspace.id),
+          discoverApi.listOpportunities(workspace.id, { pendingOnly: true, limit: 100 }),
         ]);
         const taskItems = tasks.status === "fulfilled" ? tasks.value.items : null;
         const runItems = runs.status === "fulfilled" ? runs.value.items : null;
@@ -47,7 +48,8 @@ export default function DashboardPage() {
           pendingTasks: taskItems?.filter((task) => ["queued", "running", "waiting_for_user", "failed"].includes(task.status)) ?? taskItems,
           reviewKnowledge: knowledge.status === "fulfilled" ? knowledge.value.items.filter((item) => ["candidate", "needs_review", "proposed"].includes(item.status)).length : null,
           waitingRuns: runItems?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? runItems,
-          opportunities: opportunities.status === "fulfilled" ? opportunities.value.items.filter((item) => !["confirmed", "edited_confirmed", "rejected"].includes(item.status)) : null,
+          opportunities: opportunities.status === "fulfilled" ? opportunities.value.items : null,
+          pendingOpportunityCount: opportunities.status === "fulfilled" ? opportunities.value.total : null,
         } satisfies WorkspaceSummary;
       }));
       setSummaries(next);
@@ -82,7 +84,7 @@ export default function DashboardPage() {
           {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
           <Typography.Title level={4}>最近课题</Typography.Title>
           <Row gutter={[16, 16]}>
-            {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.papers === null ? "文献：暂不可用" : `文献 ${summary.papers} 篇`}</Tag><Tag>{summary.reviewKnowledge === null ? "知识：暂不可用" : `待审核知识 ${summary.reviewKnowledge}`}</Tag><Tag color={summary.opportunities?.length ? "orange" : "default"}>{summary.opportunities === null ? "机会：暂不可用" : `待处理机会 ${summary.opportunities.length}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}
+            {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.papers === null ? "文献：暂不可用" : `文献 ${summary.papers} 篇`}</Tag><Tag>{summary.reviewKnowledge === null ? "知识：暂不可用" : `待审核知识 ${summary.reviewKnowledge}`}</Tag><Tag color={summary.pendingOpportunityCount ? "orange" : "default"}>{summary.pendingOpportunityCount === null ? "机会：暂不可用" : `待处理机会 ${summary.pendingOpportunityCount}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}
           </Row>
         </>
       )}
