@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatErrorMessage, groupConversations, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
+import { chatConversationPath, chatErrorMessage, groupConversations, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
 
 const conversation = (id: string, date: string) => ({ id, title: id, model: null, last_message_at: date, created_at: date, updated_at: date });
 
@@ -24,5 +24,11 @@ describe("chat helpers", () => {
 
   it("turns API errors into friendly copy", () => {
     expect(chatErrorMessage({ response: { status: 502, data: { detail: { message: "上游错误" } } } })).toBe("操作失败，请稍后重试。");
+  });
+
+  it("routes grounded conversations back to their workspace", () => {
+    const date = new Date().toISOString();
+    expect(chatConversationPath({ ...conversation("grounded", date), workspace_id: "ws-1" })).toBe("/workspaces/ws-1/assistant/grounded");
+    expect(chatConversationPath({ ...conversation("general", date), workspace_id: null })).toBe("/chat/general");
   });
 });

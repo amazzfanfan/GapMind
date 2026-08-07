@@ -20,7 +20,7 @@ const globalNavigation = [
   { key: "/", icon: <DashboardOutlined />, label: "首页" },
   { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
   { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
-  { key: "/chat", icon: <MessageOutlined />, label: "AI 对话" },
+  { key: "/chat", icon: <MessageOutlined />, label: "AI 助手" },
 ];
 
 export default function AppLayout() {
@@ -31,7 +31,6 @@ export default function AppLayout() {
   const [mobile, setMobile] = useState(false);
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const currentWorkspaceName = useAppStore((state) => state.currentWorkspaceName);
-  const isWideGraphPage = /^\/workspaces\/[^/]+\/knowledge\/graph\/?$/.test(location.pathname);
 
   useEffect(() => {
     if (!mobile) setCollapsed(false);
@@ -103,7 +102,7 @@ export default function AppLayout() {
             </Button>
           </Space>
         </Header>
-        <Content className={`gm-content${isWideGraphPage ? " gm-content--graph" : ""}`}>
+        <Content className="gm-content">
           <Outlet />
         </Content>
       </Layout>

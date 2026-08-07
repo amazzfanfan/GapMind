@@ -47,9 +47,11 @@ export default function KnowledgePage({
             key: "graph",
             label: "知识图谱",
             children: (
-              <Suspense fallback={<div style={{ padding: 48, textAlign: "center" }}>Loading graph…</div>}>
-                <KnowledgeGraph workspaceId={workspace.id} />
-              </Suspense>
+              <div className="gm-knowledge-graph-bleed">
+                <Suspense fallback={<div style={{ padding: 48, textAlign: "center" }}>Loading graph…</div>}>
+                  <KnowledgeGraph workspaceId={workspace.id} />
+                </Suspense>
+              </div>
             ),
           },
         ]}

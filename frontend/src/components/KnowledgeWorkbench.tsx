@@ -14,11 +14,13 @@ import {
   Select,
   Space,
   Spin,
-  Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
+  AppstoreOutlined,
+  BarsOutlined,
   FileSearchOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -35,6 +37,8 @@ import EvidenceViewer from "./EvidenceViewer";
 import DiscoverOpportunity from "./DiscoverOpportunity";
 
 const { Paragraph, Text } = Typography;
+type WorkbenchLayout = "single" | "double";
+const LAYOUT_STORAGE_KEY = "gapmind.knowledge-workbench.layout";
 
 const TYPE_OPTIONS = [
   ["method", "Method"],
@@ -118,6 +122,9 @@ export default function KnowledgeWorkbench({
   const [editName, setEditName] = useState("");
   const [editContent, setEditContent] = useState("{}");
   const [reviewNote, setReviewNote] = useState("");
+  const [layout, setLayout] = useState<WorkbenchLayout>(() =>
+    window.localStorage.getItem(LAYOUT_STORAGE_KEY) === "double" ? "double" : "single",
+  );
 
   const paperMap = useMemo(
     () => new Map(papers.map((paper) => [paper.id, paper.title])),
@@ -212,12 +219,28 @@ export default function KnowledgeWorkbench({
     setMinConfidence(undefined);
   };
 
+  const toggleLayout = () => {
+    setLayout((current) => {
+      const next = current === "single" ? "double" : "single";
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, next);
+      return next;
+    });
+  };
+
   return (
     <Card
       title="Knowledge Workbench"
       extra={
         <Space>
           <Text type="secondary">{total} items</Text>
+          <Tooltip title={layout === "single" ? "Switch to two columns" : "Switch to one column"}>
+            <Button
+              icon={layout === "single" ? <AppstoreOutlined /> : <BarsOutlined />}
+              onClick={toggleLayout}
+            >
+              {layout === "single" ? "Two columns" : "Single column"}
+            </Button>
+          </Tooltip>
           <Button icon={<ReloadOutlined />} onClick={() => void loadItems()} loading={loading}>
             Refresh
           </Button>
@@ -277,62 +300,49 @@ export default function KnowledgeWorkbench({
       ) : items.length === 0 ? (
         <Empty description="No extracted knowledge matches these filters" />
       ) : (
-        <Table<KnowledgeItem>
-          rowKey="id"
-          dataSource={items}
-          loading={loading}
-          pagination={false}
-          scroll={{ x: 980 }}
-          onRow={(item) => ({ onClick: () => void openDetail(item), style: { cursor: "pointer" } })}
-          columns={[
-            {
-              title: "Type",
-              dataIndex: "type",
-              width: 110,
-              render: (value: string) => <Tag color={typeColor(value)}>{value}</Tag>,
-            },
-            {
-              title: "Name",
-              dataIndex: "canonical_name",
-              width: 220,
-              render: (value: string) => <Text strong>{value}</Text>,
-            },
-            {
-              title: "Content",
-              key: "content",
-              width: 360,
-              render: (_: unknown, item) => (
-                <Text type="secondary" ellipsis={{ tooltip: contentPreview(item.content) }}>
+        <div className={`gm-knowledge-card-grid is-${layout}`} aria-busy={loading}>
+          {items.map((item) => {
+            const sourcePaper = item.paper_id ? paperMap.get(item.paper_id) ?? item.paper_id : "No source paper";
+            return (
+              <article
+                key={item.id}
+                className="gm-knowledge-item-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => void openDetail(item)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    void openDetail(item);
+                  }
+                }}
+              >
+                <div className="gm-knowledge-item-meta">
+                  <Space size={[6, 6]} wrap>
+                    <Tag color={typeColor(item.type)}>{item.type}</Tag>
+                    <Tag color={statusColor(item.status)}>{item.status}</Tag>
+                  </Space>
+                  <Text type="secondary">{Math.round(item.confidence * 100)}%</Text>
+                </div>
+                <Typography.Title level={5} className="gm-knowledge-item-name">
+                  {item.canonical_name}
+                </Typography.Title>
+                <Paragraph type="secondary" className="gm-knowledge-item-content">
                   {contentPreview(item.content)}
-                </Text>
-              ),
-            },
-            {
-              title: "Source paper",
-              key: "paper",
-              width: 220,
-              render: (_: unknown, item) => item.paper_id ? paperMap.get(item.paper_id) ?? item.paper_id : "—",
-            },
-            {
-              title: "Confidence",
-              dataIndex: "confidence",
-              width: 110,
-              render: (value: number) => `${Math.round(value * 100)}%`,
-            },
-            {
-              title: "Status",
-              dataIndex: "status",
-              width: 190,
-              render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
-            },
-            {
-              title: "Details",
-              key: "details",
-              width: 90,
-              render: () => <FileSearchOutlined />,
-            },
-          ]}
-        />
+                </Paragraph>
+                <div className="gm-knowledge-item-footer">
+                  <div className="gm-knowledge-item-source">
+                    <Text type="secondary">Source paper</Text>
+                    <Text title={sourcePaper}>{sourcePaper}</Text>
+                  </div>
+                  <Tooltip title="Open details and review">
+                    <FileSearchOutlined className="gm-knowledge-item-detail-icon" />
+                  </Tooltip>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       )}
 
       <Drawer

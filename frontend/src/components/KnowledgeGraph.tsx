@@ -796,12 +796,12 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
 
   return (
     <div ref={canvasRef} style={{ background: "#f5f7fb", padding: isFullscreen ? 20 : 0 }}>
-      <Card styles={{ body: { padding: 20 } }}>
-        <Flex justify="space-between" align="flex-start" wrap gap={16}>
-          <div>
-            <Text type="secondary" style={{ letterSpacing: 0.4 }}>{VIEW_CONFIG[mode].eyebrow}</Text>
-            <Title level={4} style={{ margin: "2px 0 4px" }}>知识图谱探索</Title>
-            <Paragraph type="secondary" style={{ marginBottom: 0 }}>{VIEW_CONFIG[mode].description}</Paragraph>
+      <Card className="gm-graph-overview">
+        <Flex className="gm-graph-overview-header" justify="space-between" align="flex-start" wrap gap={12}>
+          <div className="gm-graph-overview-copy">
+            <Text type="secondary" className="gm-graph-overview-eyebrow">{VIEW_CONFIG[mode].eyebrow}</Text>
+            <Title level={4}>知识图谱探索</Title>
+            <Paragraph type="secondary">{VIEW_CONFIG[mode].description}</Paragraph>
           </div>
           <Segmented
             value={mode}
@@ -817,23 +817,22 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
           />
         </Flex>
 
-        <Row gutter={[12, 12]} style={{ marginTop: 18 }}>
-          <Col xs={12} md={6}><Card size="small"><Statistic title="论文" value={workspaceCounts.papers ?? 0} suffix="篇" /></Card></Col>
-          <Col xs={12} md={6}><Card size="small"><Statistic title="知识条目" value={workspaceCounts.knowledge_items ?? 0} suffix="条" /></Card></Col>
-          <Col xs={12} md={6}><Card size="small"><Statistic title="人工确认" value={workspaceCounts.confirmed_items ?? 0} suffix="条" /></Card></Col>
-          <Col xs={12} md={6}><Card size="small"><Statistic title="语义关系" value={workspaceCounts.relations ?? 0} suffix="条" /></Card></Col>
+        <Row className="gm-graph-overview-stats" gutter={[10, 10]}>
+          <Col xs={12} md={6}><Card className="gm-graph-stat-card" size="small"><Statistic title="论文" value={workspaceCounts.papers ?? 0} suffix="篇" /></Card></Col>
+          <Col xs={12} md={6}><Card className="gm-graph-stat-card" size="small"><Statistic title="知识条目" value={workspaceCounts.knowledge_items ?? 0} suffix="条" /></Card></Col>
+          <Col xs={12} md={6}><Card className="gm-graph-stat-card" size="small"><Statistic title="人工确认" value={workspaceCounts.confirmed_items ?? 0} suffix="条" /></Card></Col>
+          <Col xs={12} md={6}><Card className="gm-graph-stat-card" size="small"><Statistic title="语义关系" value={workspaceCounts.relations ?? 0} suffix="条" /></Card></Col>
         </Row>
 
         <Alert
+          className="gm-graph-overview-tip"
           type="info"
           showIcon
           closable
-          style={{ marginTop: 16 }}
-          message="如何探索"
-          description="单击节点查看一跳关系，双击展开邻居；三个视角会分别保留本次浏览状态。"
+          message="探索提示：单击节点查看一跳关系，双击展开邻居；三个视角会分别保留本次浏览状态。"
         />
 
-        <Flex gap={10} align="center" wrap style={{ marginTop: 16 }}>
+        <Flex className="gm-graph-overview-search" gap={10} align="center" wrap>
           <AutoComplete
             value={searchText}
             options={searchOptions}

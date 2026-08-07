@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
 import workspaceApi from "../api/workspace";
 import type { Workspace } from "../api/types/workspace";
-import { chatErrorMessage, sortChatMessages } from "../state/chatState";
+import { chatConversationPath, chatErrorMessage, sortChatMessages } from "../state/chatState";
 import ChatComposer from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
 import ChatHeader from "../components/chat/ChatHeader";
@@ -12,10 +12,6 @@ import ChatHistory from "../components/chat/ChatHistory";
 import ChatMessages from "../components/chat/ChatMessages";
 
 const localMessage = (conversationId: string, role: "user" | "assistant", content: string, sequence: number): ChatMessage => ({ id: `local-${role}-${Date.now()}-${sequence}`, conversation_id: conversationId, role, content, status: role === "assistant" ? "generating" : "completed", error_message: null, sequence, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, grounding_status: "not_requested", citations: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-
-const conversationPath = (item: ChatConversation) => item.workspace_id
-  ? `/workspaces/${item.workspace_id}/assistant/${item.id}`
-  : `/chat/${item.id}`;
 
 export default function ChatPage() {
   const { conversationId, id: routeWorkspaceId } = useParams<{ conversationId: string; id: string }>();
@@ -61,11 +57,12 @@ export default function ChatPage() {
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
 
-  const selectConversation = (item: ChatConversation) => { navigate(conversationPath(item)); setHistoryOpen(false); };
-  const newConversation = () => { navigate(routeWorkspaceId ? `/workspaces/${routeWorkspaceId}/assistant` : "/chat"); setInput(""); setHistoryOpen(false); };
+  const selectConversation = (item: ChatConversation) => { navigate(chatConversationPath(item)); setHistoryOpen(false); };
+  const newConversation = () => { navigate(routeWorkspaceId ? `/workspaces/${routeWorkspaceId}/assistant` : "/chat/new"); setInput(""); setHistoryOpen(false); };
   const changeWorkspace = (workspaceId?: string) => {
     setSelectedWorkspaceId(workspaceId);
-    if (routeWorkspaceId) navigate(workspaceId ? `/workspaces/${workspaceId}/assistant` : "/chat");
+    if (workspaceId) navigate(`/workspaces/${workspaceId}/assistant`);
+    else if (routeWorkspaceId) navigate("/chat/new");
   };
   const send = async (content: string) => {
     const targetId = conversationId;
@@ -76,7 +73,7 @@ export default function ChatPage() {
       const result = targetId ? await chatApi.sendMessage(targetId, content) : await chatApi.sendNew(content, selectedWorkspaceId);
       setConversation(result.conversation);
       setMessages((current) => [...current.filter((item) => !item.id.startsWith("local-")), result.user_message, result.assistant_message]);
-      if (!targetId) navigate(conversationPath(result.conversation), { replace: true });
+      if (!targetId) navigate(chatConversationPath(result.conversation), { replace: true });
       void loadHistory();
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: { conversation_id?: string } } } }).response?.data?.detail;

@@ -22,7 +22,7 @@ export default function WorkspaceLayout() {
   const setCurrentWorkspace = useAppStore((state) => state.setCurrentWorkspace);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(true);
-  const isWideGraphPage = /^\/workspaces\/[^/]+\/knowledge\/graph\/?$/.test(location.pathname);
+  const isAssistantPage = /^\/workspaces\/[^/]+\/assistant(?:\/[^/]+)?\/?$/.test(location.pathname);
 
   const reloadWorkspace = useCallback(async () => {
     if (!id) return;
@@ -45,7 +45,7 @@ export default function WorkspaceLayout() {
   }
 
   return (
-    <div className={`gm-workspace-shell${isWideGraphPage ? " gm-workspace-shell--graph" : ""}`}>
+    <div className={`gm-workspace-shell${isAssistantPage ? " gm-workspace-shell--assistant" : ""}`}>
       <Breadcrumb items={[{ title: <Link to="/">首页</Link> }, { title: <Link to="/workspaces">课题空间</Link> }, { title: workspace.name }]} />
       <div className="gm-workspace-heading">
         <div>
