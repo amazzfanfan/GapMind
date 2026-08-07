@@ -207,8 +207,153 @@ def test_graph_contains_layered_nodes_and_expands_entity_neighbors(
         "knowledge", "paper", "canonical_entity", "paper_mention"
     }
 
+    landscape = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph?projection_mode=landscape&limit=20"
+    )
+    assert landscape.status_code == 200, landscape.text
+    assert "paper_mention" not in {
+        node["node_kind"] for node in landscape.json()["nodes"]
+    }
+
+    evidence = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph?projection_mode=evidence&limit=20"
+    )
+    assert evidence.status_code == 200, evidence.text
+    assert "paper_mention" in {
+        node["node_kind"] for node in evidence.json()["nodes"]
+    }
+
     neighbors = client.get(
         f"/api/v1/workspaces/{ws['id']}/knowledge/graph/neighbors/entity:{entity.id}"
     )
     assert neighbors.status_code == 200, neighbors.text
     assert any(node["id"] == item.id for node in neighbors.json()["nodes"])
+
+
+def test_graph_projection_modes_and_append_metadata(client: TestClient, db_session) -> None:
+    ws = _create_workspace(client, "Projection modes")
+    paper = Paper(
+        workspace_id=ws["id"], title="Graph paper", authors=[], source="manual",
+        parse_status="parsed", is_deleted=False,
+    )
+    db_session.add(paper)
+    db_session.flush()
+    items = [
+        KnowledgeItem(
+            workspace_id=ws["id"], paper_id=paper.id, type=kind,
+            canonical_name=name, content={"statement": name}, source_provenance={},
+            created_by="agent", confidence=confidence,
+            status="human_confirmed" if kind == "claim" else "extracted_candidate",
+            is_deleted=False,
+        )
+        for kind, name, confidence in [
+            ("method", "Method node", 0.95),
+            ("task", "Task node", 0.90),
+            ("claim", "Claim node", 0.85),
+            ("limitation", "Limitation node", 0.80),
+        ]
+    ]
+    db_session.add_all(items)
+    db_session.flush()
+    db_session.add(KnowledgeRelation(
+        workspace_id=ws["id"], source_id=items[2].id, target_id=items[3].id,
+        relation_type="qualifies", confidence=0.8, payload={}, is_deleted=False,
+    ))
+    db_session.commit()
+
+    landscape = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph",
+        params={"projection_mode": "landscape", "limit": 1},
+    )
+    assert landscape.status_code == 200, landscape.text
+    landscape_body = landscape.json()
+    assert landscape_body["projection_mode"] == "landscape"
+    assert landscape_body["has_more"] is True
+    assert landscape_body["workspace_counts"]["knowledge_items"] == 4
+    assert landscape_body["workspace_counts"]["parsed_papers"] == 1
+    assert landscape_body["node_counts"]["method"] == 1
+    assert landscape_body["node_counts"]["task"] == 1
+    assert "claim" not in landscape_body["node_counts"]
+
+    second_batch = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph",
+        params={"projection_mode": "landscape", "limit": 1, "offset": 1},
+    )
+    assert second_batch.status_code == 200, second_batch.text
+    assert second_batch.json()["has_more"] is False
+    first_ids = {node["id"] for node in landscape_body["nodes"] if node["node_kind"] == "knowledge"}
+    second_ids = {node["id"] for node in second_batch.json()["nodes"] if node["node_kind"] == "knowledge"}
+    assert first_ids.isdisjoint(second_ids)
+
+    claims = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph",
+        params={"projection_mode": "claims", "limit": 20},
+    )
+    assert claims.status_code == 200, claims.text
+    claim_types = {
+        node["type"] for node in claims.json()["nodes"] if node["node_kind"] == "knowledge"
+    }
+    assert claim_types == {"claim", "limitation"}
+    assert claims.json()["relation_counts"]["qualifies"] == 1
+    assert all(edge["source_label"] and edge["target_label"] for edge in claims.json()["edges"])
+
+
+def test_graph_search_finds_unloaded_nodes_without_crossing_workspace(
+    client: TestClient, db_session
+) -> None:
+    ws = _create_workspace(client, "Search graph")
+    other = _create_workspace(client, "Other graph")
+    db_session.add_all([
+        KnowledgeItem(
+            workspace_id=ws["id"], type="method", canonical_name="Rare Transformer",
+            content={}, source_provenance={}, created_by="agent", confidence=0.7,
+            status="extracted_candidate", is_deleted=False,
+        ),
+        KnowledgeItem(
+            workspace_id=other["id"], type="method", canonical_name="Rare Private Method",
+            content={}, source_provenance={}, created_by="agent", confidence=0.99,
+            status="extracted_candidate", is_deleted=False,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph/search",
+        params={"q": "Rare", "projection_mode": "landscape"},
+    )
+    assert response.status_code == 200, response.text
+    assert [item["label"] for item in response.json()["items"]] == ["Rare Transformer"]
+
+
+def test_graph_edges_never_reference_missing_nodes(client: TestClient, db_session) -> None:
+    ws = _create_workspace(client, "Self contained")
+    items = [
+        KnowledgeItem(
+            workspace_id=ws["id"], type="claim", canonical_name=f"Claim {index}",
+            content={}, source_provenance={}, created_by="agent",
+            confidence=0.9 - index * 0.1, status="extracted_candidate", is_deleted=False,
+        )
+        for index in range(3)
+    ]
+    db_session.add_all(items)
+    db_session.flush()
+    db_session.add_all([
+        KnowledgeRelation(
+            workspace_id=ws["id"], source_id=items[0].id, target_id=items[1].id,
+            relation_type="supports", confidence=0.8, payload={}, is_deleted=False,
+        ),
+        KnowledgeRelation(
+            workspace_id=ws["id"], source_id=items[1].id, target_id=items[2].id,
+            relation_type="supports", confidence=0.7, payload={}, is_deleted=False,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/workspaces/{ws['id']}/knowledge/graph",
+        params={"projection_mode": "claims", "limit": 2},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    node_ids = {node["id"] for node in body["nodes"]}
+    assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in body["edges"])

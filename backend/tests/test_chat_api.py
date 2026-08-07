@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+
+from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 
 
 @dataclass
@@ -142,3 +146,131 @@ def test_validation_and_generating_conflict(client, db_session, fake_gateway):
         json={"content": "重复发送"},
     )
     assert response.status_code == 409
+
+
+def test_workspace_chat_retrieves_persists_citations_and_opens_source(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"name": "图学习", "topic": "图神经网络解释"},
+    ).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "Interpretable Graph Models", "authors": [], "year": 2024},
+    ).json()
+
+    from app.domains.artifact.service import ArtifactService
+
+    source_text = "Intro Evidence about graph explanations and robust evaluation."
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content=source_text.encode("utf-8"),
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+
+    def fake_search(**kwargs):
+        assert kwargs["workspace_id"] == workspace["id"]
+        assert kwargs["use_reranker"] is True
+        return RetrievalResponse(
+            workspace_id=workspace["id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-1",
+                    section="Methods",
+                    text="Evidence about graph explanations and robust evaluation.",
+                    score=0.91,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        )
+
+    monkeypatch.setattr("app.domains.chat.service.semantic_search", fake_search)
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(
+            source_artifact_id=artifact.id,
+            start_char=6,
+            end_char=source_text.index(".") + 1,
+        ),
+    )
+    fake_gateway.content = "该论文强调了稳健评估。[E1]"
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "这个工作区如何评估解释方法？", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["conversation"]["workspace_id"] == workspace["id"]
+    assistant = body["assistant_message"]
+    assert assistant["grounding_status"] == "grounded"
+    assert len(assistant["citations"]) == 1
+    citation = assistant["citations"][0]
+    assert citation["paper_title"] == "Interpretable Graph Models"
+    assert citation["start_char"] == 6
+    assert "[E1]" in fake_gateway.calls[-1][0]["content"]
+
+    context = client.get(
+        f"/api/v1/chat/conversations/{body['conversation']['id']}"
+        f"/messages/{assistant['id']}/evidence/{citation['id']}/context"
+    )
+    assert context.status_code == 200
+    assert context.json()["available"] is True
+    assert context.json()["content"] == source_text
+
+
+def test_workspace_chat_without_hits_does_not_ask_llm(client, fake_gateway, monkeypatch):
+    workspace = client.post("/api/v1/workspaces", json={"name": "空工作区"}).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[],
+            total=0,
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "总结工作区论文", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 200
+    assistant = response.json()["assistant_message"]
+    assert assistant["grounding_status"] == "no_evidence"
+    assert assistant["citations"] == []
+    assert "没有检索到" in assistant["content"]
+    assert fake_gateway.calls == []
+
+
+def test_conversation_workspace_is_immutable(client):
+    first = client.post("/api/v1/workspaces", json={"name": "课题 A"}).json()
+    second = client.post("/api/v1/workspaces", json={"name": "课题 B"}).json()
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"workspace_id": first["id"]},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages",
+        json={"content": "切换课题", "workspace_id": second["id"]},
+    )
+    assert response.status_code == 409
+
+    missing = client.post(
+        "/api/v1/chat/conversations",
+        json={"workspace_id": str(uuid4())},
+    )
+    assert missing.status_code == 404

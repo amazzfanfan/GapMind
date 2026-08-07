@@ -106,6 +106,13 @@ class KnowledgeGraphNodeRead(BaseModel):
     entity_type: str | None = None
     mention_text: str | None = None
     knowledge_item_id: str | None = None
+    display_label: str | None = None
+    display_type: str | None = None
+    importance_score: float = 0.0
+    relation_count: int = 0
+    evidence_count: int = 0
+    paper_count: int = 0
+    review_status: str | None = None
 
 
 class KnowledgeGraphEdgeRead(BaseModel):
@@ -117,6 +124,10 @@ class KnowledgeGraphEdgeRead(BaseModel):
     relation_type: str
     confidence: float
     payload: dict[str, Any] = Field(default_factory=dict)
+    display_label: str | None = None
+    source_label: str | None = None
+    target_label: str | None = None
+    relation_group: str | None = None
 
 
 class KnowledgeGraphResponse(BaseModel):
@@ -130,6 +141,28 @@ class KnowledgeGraphResponse(BaseModel):
     truncated: bool = False
     limit: int = 0
     offset: int = 0
+    projection_mode: str = "all"
+    loaded_nodes: int = 0
+    loaded_edges: int = 0
+    has_more: bool = False
+    node_counts: dict[str, int] = Field(default_factory=dict)
+    relation_counts: dict[str, int] = Field(default_factory=dict)
+    workspace_counts: dict[str, int] = Field(default_factory=dict)
+    seed_node_id: str | None = None
+    depth: int = 0
+
+
+class KnowledgeGraphSearchResult(BaseModel):
+    node_id: str
+    label: str
+    node_kind: str
+    type: str
+    paper_title: str | None = None
+    confidence: float = 0.0
+
+
+class KnowledgeGraphSearchResponse(BaseModel):
+    items: list[KnowledgeGraphSearchResult] = Field(default_factory=list)
 
 
 class EvidenceSpanRead(BaseModel):

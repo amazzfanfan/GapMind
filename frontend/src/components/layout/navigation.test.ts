@@ -10,6 +10,7 @@ describe("navigation helpers", () => {
   });
 
   it("keeps workspace navigation selected for graph and discover details", () => {
+    expect(selectedWorkspaceKey("/workspaces/ws-1/assistant/conversation-1")).toBe("assistant");
     expect(selectedWorkspaceKey("/workspaces/ws-1/knowledge/graph")).toBe("knowledge");
     expect(selectedWorkspaceKey("/workspaces/ws-1/discover/opportunities/op-1")).toBe("discover");
     expect(selectedWorkspaceKey("/workspaces/ws-1/settings")).toBe("settings");
@@ -18,5 +19,6 @@ describe("navigation helpers", () => {
   it("provides compatibility-safe workspace destinations", () => {
     expect(workspaceNavigationPath("ws-1", "overview")).toBe("/workspaces/ws-1/overview");
     expect(workspaceNavigationPath("ws-1", "papers")).toBe("/workspaces/ws-1/papers");
+    expect(workspaceNavigationPath("ws-1", "assistant")).toBe("/workspaces/ws-1/assistant");
   });
 });

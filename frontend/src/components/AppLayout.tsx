@@ -31,6 +31,7 @@ export default function AppLayout() {
   const [mobile, setMobile] = useState(false);
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const currentWorkspaceName = useAppStore((state) => state.currentWorkspaceName);
+  const isWideGraphPage = /^\/workspaces\/[^/]+\/knowledge\/graph\/?$/.test(location.pathname);
 
   useEffect(() => {
     if (!mobile) setCollapsed(false);
@@ -102,7 +103,7 @@ export default function AppLayout() {
             </Button>
           </Space>
         </Header>
-        <Content className="gm-content">
+        <Content className={`gm-content${isWideGraphPage ? " gm-content--graph" : ""}`}>
           <Outlet />
         </Content>
       </Layout>

@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     chat_history_message_limit: int = 20
     chat_history_char_limit: int = 60000
     chat_max_input_chars: int = 12000
+    chat_rag_top_k: int = 6
+    chat_rag_max_context_chars: int = 18000
 
     # ---- Embedding (SiliconFlow, BGE-m3) ----
     siliconflow_api_key: str = ""

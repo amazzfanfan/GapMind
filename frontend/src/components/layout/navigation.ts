@@ -1,6 +1,7 @@
 export const WORKSPACE_NAVIGATION = [
   { key: "overview", label: "概览" },
   { key: "papers", label: "文献" },
+  { key: "assistant", label: "AI 助手" },
   { key: "knowledge", label: "知识" },
   { key: "discover", label: "发现" },
   { key: "plans", label: "研究计划", disabled: true },
@@ -24,6 +25,7 @@ export function workspaceNavigationPath(workspaceId: string, key: string): strin
 }
 
 export function selectedWorkspaceKey(pathname: string): string {
+  if (pathname.includes("/assistant")) return "assistant";
   if (pathname.includes("/knowledge")) return "knowledge";
   if (pathname.includes("/discover")) return "discover";
   const matched = WORKSPACE_NAVIGATION.find((item) => pathname.includes(`/${item.key}`));

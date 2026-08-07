@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
+import workspaceApi from "../api/workspace";
+import type { Workspace } from "../api/types/workspace";
 import { chatErrorMessage, sortChatMessages } from "../state/chatState";
 import ChatComposer from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
@@ -9,15 +11,21 @@ import ChatHeader from "../components/chat/ChatHeader";
 import ChatHistory from "../components/chat/ChatHistory";
 import ChatMessages from "../components/chat/ChatMessages";
 
-const localMessage = (conversationId: string, role: "user" | "assistant", content: string, sequence: number): ChatMessage => ({ id: `local-${role}-${Date.now()}-${sequence}`, conversation_id: conversationId, role, content, status: role === "assistant" ? "generating" : "completed", error_message: null, sequence, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+const localMessage = (conversationId: string, role: "user" | "assistant", content: string, sequence: number): ChatMessage => ({ id: `local-${role}-${Date.now()}-${sequence}`, conversation_id: conversationId, role, content, status: role === "assistant" ? "generating" : "completed", error_message: null, sequence, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, grounding_status: "not_requested", citations: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+
+const conversationPath = (item: ChatConversation) => item.workspace_id
+  ? `/workspaces/${item.workspace_id}/assistant/${item.id}`
+  : `/chat/${item.id}`;
 
 export default function ChatPage() {
-  const { conversationId } = useParams<{ conversationId: string }>();
+  const { conversationId, id: routeWorkspaceId } = useParams<{ conversationId: string; id: string }>();
   const navigate = useNavigate();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<ChatConversation[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | undefined>(routeWorkspaceId);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyQuery, setHistoryQuery] = useState("");
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
@@ -28,6 +36,9 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
   const messagesRef = useRef<HTMLDivElement>(null);
+  const workspaceNames = Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.name]));
+  const activeWorkspaceId = conversation?.workspace_id ?? selectedWorkspaceId;
+  const activeWorkspaceName = activeWorkspaceId ? workspaceNames[activeWorkspaceId] : undefined;
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -44,26 +55,33 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => { const timer = window.setTimeout(() => void loadHistory(), 180); return () => window.clearTimeout(timer); }, [loadHistory]);
+  useEffect(() => { workspaceApi.list({ limit: 200 }).then((result) => setWorkspaces(result.items)).catch(() => setWorkspaces([])); }, []);
+  useEffect(() => { if (!conversationId) setSelectedWorkspaceId(routeWorkspaceId); }, [conversationId, routeWorkspaceId]);
   useEffect(() => { if (conversationId) void loadConversation(conversationId); else { setConversation(null); setMessages([]); setConversationError(null); } }, [conversationId, loadConversation]);
+  useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
 
-  const selectConversation = (id: string) => { navigate(`/chat/${id}`); setHistoryOpen(false); };
-  const newConversation = () => { navigate("/chat"); setInput(""); setHistoryOpen(false); };
+  const selectConversation = (item: ChatConversation) => { navigate(conversationPath(item)); setHistoryOpen(false); };
+  const newConversation = () => { navigate(routeWorkspaceId ? `/workspaces/${routeWorkspaceId}/assistant` : "/chat"); setInput(""); setHistoryOpen(false); };
+  const changeWorkspace = (workspaceId?: string) => {
+    setSelectedWorkspaceId(workspaceId);
+    if (routeWorkspaceId) navigate(workspaceId ? `/workspaces/${workspaceId}/assistant` : "/chat");
+  };
   const send = async (content: string) => {
     const targetId = conversationId;
     const optimisticUser = localMessage(targetId ?? "new", "user", content, messages.length + 1);
     const optimisticAssistant = localMessage(targetId ?? "new", "assistant", "", messages.length + 2);
     setInput(""); setSending(true); setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
     try {
-      const result = targetId ? await chatApi.sendMessage(targetId, content) : await chatApi.sendNew(content);
+      const result = targetId ? await chatApi.sendMessage(targetId, content) : await chatApi.sendNew(content, selectedWorkspaceId);
       setConversation(result.conversation);
       setMessages((current) => [...current.filter((item) => !item.id.startsWith("local-")), result.user_message, result.assistant_message]);
-      if (!targetId) navigate(`/chat/${result.conversation.id}`, { replace: true });
+      if (!targetId) navigate(conversationPath(result.conversation), { replace: true });
       void loadHistory();
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: { conversation_id?: string } } } }).response?.data?.detail;
       const failedConversationId = detail?.conversation_id;
-      if (!targetId && failedConversationId) navigate(`/chat/${failedConversationId}`, { replace: true });
+      if (!targetId && failedConversationId) navigate(selectedWorkspaceId ? `/workspaces/${selectedWorkspaceId}/assistant/${failedConversationId}` : `/chat/${failedConversationId}`, { replace: true });
       if (failedConversationId) void loadConversation(failedConversationId);
       else setMessages((current) => current.map((item) => item.id === optimisticAssistant.id ? { ...item, status: "failed" as const } : item));
       message.error(chatErrorMessage(error)); void loadHistory();
@@ -86,6 +104,6 @@ export default function ChatPage() {
     Modal.confirm({ title: "删除这段对话？", content: "删除后将从历史列表中移除，消息无法在界面中恢复。", okText: "删除", okButtonProps: { danger: true }, cancelText: "取消", onOk: async () => { try { await chatApi.deleteConversation(item.id); if (conversationId === item.id) newConversation(); void loadHistory(); message.success("已删除对话"); } catch (error) { message.error(chatErrorMessage(error)); } } });
   };
 
-  const historyPanel = <ChatHistory items={history} selectedId={conversationId} loading={historyLoading} query={historyQuery} onQueryChange={setHistoryQuery} onNew={newConversation} onSelect={selectConversation} onRename={rename} onDelete={remove} />;
-  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} /> : <ChatMessages messages={messages} onRetry={retry} retryingId={retryingId} />}</div>{conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="普通 AI 对话不会自动检索论文、知识库或 Discover。" />}{sending && <div className="gm-chat-sending-note">正在思考，请稍候…</div>}<ChatComposer value={input} onChange={setInput} onSend={send} loading={sending || Boolean(retryingId)} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
+  const historyPanel = <ChatHistory items={history} selectedId={conversationId} loading={historyLoading} query={historyQuery} workspaceNames={workspaceNames} onQueryChange={setHistoryQuery} onNew={newConversation} onSelect={selectConversation} onRename={rename} onDelete={remove} />;
+  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={activeWorkspaceName} /> : <ChatMessages conversationId={conversationId} messages={messages} onRetry={retry} retryingId={retryingId} />}</div>{activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">正在检索并组织回答，请稍候…</div>}<ChatComposer value={input} onChange={setInput} onSend={send} loading={sending || Boolean(retryingId)} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
 }

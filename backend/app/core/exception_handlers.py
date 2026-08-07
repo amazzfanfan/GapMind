@@ -24,6 +24,7 @@ from app.domains.chat.service import (
     ChatConflictError,
     ChatInputError,
     ChatNotFoundError,
+    ChatRetrievalError,
     ChatUpstreamError,
 )
 from app.domains.discover.service import (
@@ -75,7 +76,7 @@ EXCEPTION_REGISTRY: dict[type[Exception], tuple[int, str, bool]] = {
 }
 
 
-def _extras_for_chat(exc: ChatConfigurationError | ChatUpstreamError) -> dict[str, str]:
+def _extras_for_chat(exc: ChatConfigurationError | ChatUpstreamError | ChatRetrievalError) -> dict[str, str]:
     """Carry the chat context (conversation + assistant message IDs) into the envelope."""
     extras: dict[str, str] = {}
     if exc.conversation_id is not None:
@@ -101,6 +102,8 @@ def _resolve_status(exc: Exception) -> tuple[int, str, bool, dict[str, str]]:
         return 503, "deepseek_unavailable", False, _extras_for_chat(exc)
     if isinstance(exc, ChatUpstreamError):
         return 502, "deepseek_request_failed", True, _extras_for_chat(exc)
+    if isinstance(exc, ChatRetrievalError):
+        return 502, "workspace_retrieval_failed", True, _extras_for_chat(exc)
 
     # Discover gate errors expose their own `code` so the front-end can render
     # a precise remediation hint (e.g. "evidence_insufficient").
@@ -155,6 +158,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     for exc_cls in (
         ChatConfigurationError,
         ChatUpstreamError,
+        ChatRetrievalError,
         DiscoverGateError,
         SemanticScholarError,
         *EXCEPTION_REGISTRY.keys(),

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Button, Dropdown, Empty, Input, List, Spin, Typography } from "antd";
+import { Button, Dropdown, Empty, Input, List, Spin, Tag, Typography } from "antd";
 import { DeleteOutlined, EditOutlined, EllipsisOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import type { ChatConversation } from "../../api/chat";
 import { groupConversations, truncateChatTitle } from "../../state/chatState";
@@ -11,12 +11,13 @@ interface Props {
   query: string;
   onQueryChange: (value: string) => void;
   onNew: () => void;
-  onSelect: (id: string) => void;
+  workspaceNames: Record<string, string>;
+  onSelect: (conversation: ChatConversation) => void;
   onRename: (conversation: ChatConversation) => void;
   onDelete: (conversation: ChatConversation) => void;
 }
 
-export default function ChatHistory({ items, selectedId, loading, query, onQueryChange, onNew, onSelect, onRename, onDelete }: Props) {
+export default function ChatHistory({ items, selectedId, loading, query, workspaceNames, onQueryChange, onNew, onSelect, onRename, onDelete }: Props) {
   const groups = useMemo(() => groupConversations(items), [items]);
   return (
     <div className="gm-chat-history">
@@ -31,10 +32,13 @@ export default function ChatHistory({ items, selectedId, loading, query, onQuery
             renderItem={(conversation) => (
               <List.Item
                 className={`gm-chat-history-item ${selectedId === conversation.id ? "is-selected" : ""}`}
-                onClick={() => onSelect(conversation.id)}
+                onClick={() => onSelect(conversation)}
                 actions={[<ConversationActions key="actions" conversation={conversation} onRename={onRename} onDelete={onDelete} />]}
               >
-                <Typography.Text ellipsis={{ tooltip: conversation.title }}>{truncateChatTitle(conversation.title)}</Typography.Text>
+                <div className="gm-chat-history-content">
+                  <Typography.Text ellipsis={{ tooltip: conversation.title }}>{truncateChatTitle(conversation.title)}</Typography.Text>
+                  {conversation.workspace_id && <Tag bordered={false} color="blue">{workspaceNames[conversation.workspace_id] ?? "课题空间"}</Tag>}
+                </div>
               </List.Item>
             )}
           />

@@ -19,9 +19,13 @@ export default function KnowledgePage({
   const activeKey = initialTab;
   return (
     <div>
-      <Title level={3} style={{ marginBottom: 4 }}>知识工作台</Title>
+      <Title level={3} style={{ marginBottom: 4 }}>
+        {activeKey === "graph" ? "知识图谱" : "知识工作台"}
+      </Title>
       <Paragraph type="secondary">
-        审核 AI 从论文中提取的知识，回到证据原文，并探索课题内的关系。
+        {activeKey === "graph"
+          ? "从研究全景、观点关系和证据溯源三个视角探索课题知识。"
+          : "审核 AI 从论文中提取的知识，回到证据原文，并探索课题内的关系。"}
       </Paragraph>
 
       <Tabs

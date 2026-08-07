@@ -4,6 +4,7 @@ import type {
   EvidenceSpanListResponse,
   EvidenceContext,
   KnowledgeGraphResponse,
+  KnowledgeGraphSearchResponse,
   KnowledgeItemListResponse,
   KnowledgeRelationListResponse,
 } from "./types/knowledge";
@@ -26,6 +27,8 @@ export interface KnowledgeGraphParams {
   relation_type?: string;
   limit?: number;
   offset?: number;
+  status?: string;
+  projection_mode?: "all" | "landscape" | "claims" | "evidence";
 }
 
 export const knowledgeApi = {
@@ -80,6 +83,17 @@ export const knowledgeApi = {
     const resp = await apiClient.get<KnowledgeGraphResponse>(
       `/workspaces/${workspaceId}/knowledge/graph/neighbors/${encodeURIComponent(nodeId)}`,
       { params: { depth: 1, limit: 100, ...params } },
+    );
+    return resp.data;
+  },
+
+  async searchGraphNodes(
+    workspaceId: string,
+    params: { q: string; projection_mode?: "all" | "landscape" | "claims" | "evidence"; limit?: number },
+  ): Promise<KnowledgeGraphSearchResponse> {
+    const resp = await apiClient.get<KnowledgeGraphSearchResponse>(
+      `/workspaces/${workspaceId}/knowledge/graph/search`,
+      { params },
     );
     return resp.data;
   },

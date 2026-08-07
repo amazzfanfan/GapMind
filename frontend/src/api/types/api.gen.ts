@@ -575,6 +575,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/knowledge/graph/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Knowledge Graph Nodes */
+        get: operations["search_knowledge_graph_nodes_api_v1_workspaces__workspace_id__knowledge_graph_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/knowledge/graph/neighbors/{node_id}": {
         parameters: {
             query?: never;
@@ -1015,6 +1032,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/conversations/{conversation_id}/messages/{message_id}/evidence/{evidence_id}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence Context */
+        get: operations["get_evidence_context_api_v1_chat_conversations__conversation_id__messages__message_id__evidence__evidence_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -1106,6 +1140,8 @@ export interface components {
         ChatConversationCreate: {
             /** Title */
             title?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** ChatConversationDetail */
         ChatConversationDetail: {
@@ -1130,6 +1166,8 @@ export interface components {
             id: string;
             /** Title */
             title: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
             /** Model */
             model?: string | null;
             /** Last Message At */
@@ -1157,10 +1195,65 @@ export interface components {
             /** Deleted */
             deleted: boolean;
         };
+        /** ChatEvidenceContextRead */
+        ChatEvidenceContextRead: {
+            evidence: components["schemas"]["ChatMessageEvidenceRead"];
+            /** Available */
+            available: boolean;
+            /** Artifact Kind */
+            artifact_kind?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /** Content */
+            content?: string | null;
+            /** Message */
+            message?: string | null;
+        };
         /** ChatMessageCreate */
         ChatMessageCreate: {
             /** Content */
             content: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** ChatMessageEvidenceRead */
+        ChatMessageEvidenceRead: {
+            /** Id */
+            id: string;
+            /** Message Id */
+            message_id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Paper Id */
+            paper_id?: string | null;
+            /** Artifact Id */
+            artifact_id?: string | null;
+            /** Chunk Id */
+            chunk_id?: string | null;
+            /** Paper Title */
+            paper_title?: string | null;
+            /** Section */
+            section?: string | null;
+            /** Excerpt */
+            excerpt: string;
+            /** Start Char */
+            start_char?: number | null;
+            /** End Char */
+            end_char?: number | null;
+            /** Score */
+            score: number;
+            /** Rank */
+            rank: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** ChatMessageRead */
         ChatMessageRead: {
@@ -1186,6 +1279,13 @@ export interface components {
             completion_tokens?: number | null;
             /** Total Tokens */
             total_tokens?: number | null;
+            /**
+             * Grounding Status
+             * @default not_requested
+             */
+            grounding_status: string;
+            /** Citations */
+            citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             /**
              * Created At
              * Format: date-time
@@ -1689,6 +1789,14 @@ export interface components {
             confidence: number;
             /** Payload */
             payload?: Record<string, never>;
+            /** Display Label */
+            display_label?: string | null;
+            /** Source Label */
+            source_label?: string | null;
+            /** Target Label */
+            target_label?: string | null;
+            /** Relation Group */
+            relation_group?: string | null;
         };
         /**
          * KnowledgeGraphNodeRead
@@ -1726,6 +1834,32 @@ export interface components {
             mention_text?: string | null;
             /** Knowledge Item Id */
             knowledge_item_id?: string | null;
+            /** Display Label */
+            display_label?: string | null;
+            /** Display Type */
+            display_type?: string | null;
+            /**
+             * Importance Score
+             * @default 0
+             */
+            importance_score: number;
+            /**
+             * Relation Count
+             * @default 0
+             */
+            relation_count: number;
+            /**
+             * Evidence Count
+             * @default 0
+             */
+            evidence_count: number;
+            /**
+             * Paper Count
+             * @default 0
+             */
+            paper_count: number;
+            /** Review Status */
+            review_status?: string | null;
         };
         /**
          * KnowledgeGraphResponse
@@ -1763,6 +1897,68 @@ export interface components {
              * @default 0
              */
             offset: number;
+            /**
+             * Projection Mode
+             * @default all
+             */
+            projection_mode: string;
+            /**
+             * Loaded Nodes
+             * @default 0
+             */
+            loaded_nodes: number;
+            /**
+             * Loaded Edges
+             * @default 0
+             */
+            loaded_edges: number;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Node Counts */
+            node_counts?: {
+                [key: string]: number;
+            };
+            /** Relation Counts */
+            relation_counts?: {
+                [key: string]: number;
+            };
+            /** Workspace Counts */
+            workspace_counts?: {
+                [key: string]: number;
+            };
+            /** Seed Node Id */
+            seed_node_id?: string | null;
+            /**
+             * Depth
+             * @default 0
+             */
+            depth: number;
+        };
+        /** KnowledgeGraphSearchResponse */
+        KnowledgeGraphSearchResponse: {
+            /** Items */
+            items?: components["schemas"]["KnowledgeGraphSearchResult"][];
+        };
+        /** KnowledgeGraphSearchResult */
+        KnowledgeGraphSearchResult: {
+            /** Node Id */
+            node_id: string;
+            /** Label */
+            label: string;
+            /** Node Kind */
+            node_kind: string;
+            /** Type */
+            type: string;
+            /** Paper Title */
+            paper_title?: string | null;
+            /**
+             * Confidence
+             * @default 0
+             */
+            confidence: number;
         };
         /** KnowledgeItemListResponse */
         KnowledgeItemListResponse: {
@@ -3980,6 +4176,8 @@ export interface operations {
                 q?: string | null;
                 min_confidence?: number | null;
                 relation_type?: string | null;
+                status?: string | null;
+                projection_mode?: string;
                 limit?: number;
                 offset?: number;
             };
@@ -3998,6 +4196,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_knowledge_graph_nodes_api_v1_workspaces__workspace_id__knowledge_graph_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                projection_mode?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGraphSearchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4812,6 +5045,7 @@ export interface operations {
         parameters: {
             query?: {
                 query?: string | null;
+                workspace_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -5058,6 +5292,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatSendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_context_api_v1_chat_conversations__conversation_id__messages__message_id__evidence__evidence_id__context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                message_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatEvidenceContextRead"];
                 };
             };
             /** @description Validation Error */

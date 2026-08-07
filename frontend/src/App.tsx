@@ -33,6 +33,8 @@ export default function App() {
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<WorkspaceOverviewPage />} />
           <Route path="papers" element={<WorkspacePapersPage />} />
+          <Route path="assistant" element={<LazyPage label="AI 助手"><ChatPage /></LazyPage>} />
+          <Route path="assistant/:conversationId" element={<LazyPage label="AI 助手"><ChatPage /></LazyPage>} />
           <Route path="knowledge" element={<LazyPage label="知识"><KnowledgePage /></LazyPage>} />
           <Route path="knowledge/graph" element={<LazyPage label="知识图谱"><KnowledgePage initialTab="graph" /></LazyPage>} />
           <Route path="discover" element={<LazyPage label="Discover"><DiscoverPage /></LazyPage>} />

@@ -10,8 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx",
     "typecheck": "tsc --noEmit",
-    "gen:api-types": "cp ../backend/openapi.json ./openapi.json && openapi-typescript ./openapi.json -o src/api/types/api.gen.ts",
-    "gen:openapi": "cd ../backend && .venv/Scripts/python.exe scripts/export_openapi.py",
+    "gen:api-types": "node -e \"require('fs').copyFileSync('../backend/openapi.json','openapi.json')\" && openapi-typescript ./openapi.json -o src/api/types/api.gen.ts",
+    "gen:openapi": "cd ../backend && .venv\\Scripts\\python.exe scripts\\export_openapi.py",
     "gen:api": "npm run gen:openapi && npm run gen:api-types"
   },
   "dependencies": {

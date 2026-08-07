@@ -32,6 +32,8 @@ export type KnowledgeGraphNode = LooseDictField<_GraphNodeRaw, "content">;
 
 export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdgeRead"];
 export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphResponse"];
+export type KnowledgeGraphSearchResult = components["schemas"]["KnowledgeGraphSearchResult"];
+export type KnowledgeGraphSearchResponse = components["schemas"]["KnowledgeGraphSearchResponse"];
 
 export type EvidenceContext = components["schemas"]["EvidenceContextRead"];
 
