@@ -1723,6 +1723,7 @@ export interface components {
             grounding_status: string;
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
+            citation_check?: components["schemas"]["CitationCheckRead"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1739,6 +1740,26 @@ export interface components {
             conversation: components["schemas"]["ChatConversationRead"];
             user_message: components["schemas"]["ChatMessageRead"];
             assistant_message: components["schemas"]["ChatMessageRead"];
+        };
+        /**
+         * CitationCheckRead
+         * @description Result of validating [En] markers in an assistant message against its citations.
+         */
+        CitationCheckRead: {
+            /** Referenced */
+            referenced?: number[];
+            /** Broken */
+            broken?: number[];
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Grounded Without Citations
+             * @default false
+             */
+            grounded_without_citations: boolean;
         };
         /** ConfirmRequest */
         ConfirmRequest: {
@@ -2075,6 +2096,110 @@ export interface components {
             content: string;
             /** Spans */
             spans?: components["schemas"]["EvidenceSpanRead"][];
+        };
+        /**
+         * EvidenceManifest
+         * @description Unified evidence-credibility passport for an AI-generated research artifact.
+         *
+         *     Aggregates what the artifact can honestly claim: how much evidence, from
+         *     how many independent papers, full-text vs metadata, gate status, versions,
+         *     and human-review state — so a "confidence" number is never conflated with
+         *     evidence coverage. Reused across Opportunity / Plan / Chat / AgentArtifact.
+         */
+        EvidenceManifest: {
+            /** Source Type */
+            source_type: string;
+            /** Source Id */
+            source_id: string;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Supports
+             * @default 0
+             */
+            supports: number;
+            /**
+             * Similar
+             * @default 0
+             */
+            similar: number;
+            /**
+             * Counter
+             * @default 0
+             */
+            counter: number;
+            /**
+             * Independent Papers
+             * @default 0
+             */
+            independent_papers: number;
+            /**
+             * Full Text Papers
+             * @default 0
+             */
+            full_text_papers: number;
+            /**
+             * Metadata Only Papers
+             * @default 0
+             */
+            metadata_only_papers: number;
+            /**
+             * External Sources
+             * @default 0
+             */
+            external_sources: number;
+            /** Gate Verified */
+            gate_verified?: boolean | null;
+            /** Gate Confirmable */
+            gate_confirmable?: boolean | null;
+            /** Evidence Coverage */
+            evidence_coverage?: number | null;
+            /** Verification Status */
+            verification_status?: string | null;
+            /** Critic Verdict */
+            critic_verdict?: string | null;
+            /** Narrowing Outcome */
+            narrowing_outcome?: string | null;
+            /** Prompt Version */
+            prompt_version?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Corpus Version */
+            corpus_version?: string | null;
+            /** Human Status */
+            human_status?: string | null;
+            /** Items */
+            items?: components["schemas"]["EvidenceManifestItem"][];
+        };
+        /**
+         * EvidenceManifestItem
+         * @description One evidence row in the passport — a single support/similar/counter entry.
+         */
+        EvidenceManifestItem: {
+            /** Relation */
+            relation: string;
+            /** Source Scope */
+            source_scope: string;
+            /** Evidence Level */
+            evidence_level: string;
+            /** Paper Id */
+            paper_id?: string | null;
+            /** External Candidate Id */
+            external_candidate_id?: string | null;
+            /** Rank */
+            rank?: number | null;
+            /** Judgement */
+            judgement?: string | null;
+            /** Judgement Confidence */
+            judgement_confidence?: number | null;
+            /**
+             * Display Excerpt
+             * @default
+             */
+            display_excerpt: string;
         };
         /** EvidenceSpanListResponse */
         EvidenceSpanListResponse: {
@@ -2738,6 +2863,7 @@ export interface components {
             versions?: components["schemas"]["OpportunityVersionRead"][];
             /** Evidence */
             evidence?: components["schemas"]["OpportunityEvidenceRead"][];
+            evidence_manifest?: components["schemas"]["EvidenceManifest"] | null;
             /** Decisions */
             decisions?: components["schemas"]["HumanDecisionRead"][];
             plan?: components["schemas"]["ResearchPlanRead"] | null;

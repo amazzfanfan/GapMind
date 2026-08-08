@@ -206,8 +206,45 @@ export interface OpportunityDetail {
   current_version: OpportunityVersion | null;
   versions: OpportunityVersion[];
   evidence: OpportunityEvidence[];
+  evidence_manifest: EvidenceManifest | null;
   decisions: HumanDecision[];
   plan: ResearchPlan | null;
+}
+
+export interface EvidenceManifest {
+  source_type: string;
+  source_id: string;
+  total: number;
+  supports: number;
+  similar: number;
+  counter: number;
+  independent_papers: number;
+  full_text_papers: number;
+  metadata_only_papers: number;
+  external_sources: number;
+  gate_verified: boolean | null;
+  gate_confirmable: boolean | null;
+  evidence_coverage: number | null;
+  verification_status: string | null;
+  critic_verdict: string | null;
+  narrowing_outcome: string | null;
+  prompt_version: string | null;
+  model_name: string | null;
+  corpus_version: string | null;
+  human_status: string | null;
+  items: EvidenceManifestItem[];
+}
+
+export interface EvidenceManifestItem {
+  relation: string;
+  source_scope: string;
+  evidence_level: string;
+  paper_id: string | null;
+  external_candidate_id: string | null;
+  rank: number | null;
+  judgement: string | null;
+  judgement_confidence: number | null;
+  display_excerpt: string;
 }
 
 export interface OpportunityPortfolioItem {

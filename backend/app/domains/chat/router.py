@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
+from app.domains.chat.consistency import message_citation_check
+from app.domains.chat.models import ChatMessage
 from app.domains.chat.schemas import (
     ChatConversationCreate,
     ChatConversationDetail,
@@ -25,6 +27,7 @@ from app.domains.chat.schemas import (
     ChatMessageCreate,
     ChatMessageRead,
     ChatSendResponse,
+    CitationCheckRead,
 )
 from app.domains.chat.service import ChatService
 
@@ -35,12 +38,31 @@ def _service(db: Session = Depends(get_db)) -> ChatService:
     return ChatService(db)
 
 
+def _message_view(message: ChatMessage) -> ChatMessageRead:
+    """Build the message DTO and validate its [En] citation markers."""
+    read = ChatMessageRead.model_validate(message)
+    if read.role == "assistant":
+        ranks = [c.rank for c in read.citations if c.rank is not None]
+        check = message_citation_check(
+            read.content,
+            ranks,
+            grounded=read.grounding_status == "grounded",
+        )
+        read.citation_check = CitationCheckRead(
+            referenced=check.referenced,
+            broken=check.broken,
+            ok=check.ok,
+            grounded_without_citations=check.grounded_without_citations,
+        )
+    return read
+
+
 def _send_response(result: tuple) -> ChatSendResponse:
     conversation, user_message, assistant_message = result
     return ChatSendResponse(
         conversation=ChatConversationRead.model_validate(conversation),
-        user_message=ChatMessageRead.model_validate(user_message),
-        assistant_message=ChatMessageRead.model_validate(assistant_message),
+        user_message=_message_view(user_message),
+        assistant_message=_message_view(assistant_message),
     )
 
 
@@ -78,7 +100,7 @@ def get_conversation(conversation_id: str, service: ChatService = Depends(_servi
     conversation, messages = service.detail(conversation_id)
     return ChatConversationDetail(
         conversation=ChatConversationRead.model_validate(conversation),
-        messages=[ChatMessageRead.model_validate(item) for item in messages],
+        messages=[_message_view(item) for item in messages],
     )
 
 
