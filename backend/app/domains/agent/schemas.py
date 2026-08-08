@@ -8,7 +8,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-AgentType = Literal["research_plan", "code_generation"]
+AgentType = Literal[
+    "research_plan",
+    "code_generation",
+    "analyze",
+    "write",
+    "respond",
+]
 
 
 class AgentRunCreate(BaseModel):

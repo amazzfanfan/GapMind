@@ -59,6 +59,11 @@ logger = get_logger(__name__)
 S2_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf,url,publicationDate"
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 
+# W2: prompt version stamped on every DiscoverRun so the audit trail can tell
+# which generation of the synthesis/critic prompts produced an opportunity.
+# Bump this whenever the orchestration prompts change.
+DISCOVER_PROMPT_VERSION = "discover-v2"
+
 # LLM prompt for external candidate role judgement (Stage 3).
 EXTERNAL_ROLE_SYSTEM_PROMPT = """\
 You classify whether external research papers serve as counter-evidence for a \
@@ -81,6 +86,34 @@ Rules:
 Output a JSON object, nothing else:
 {"roles": [{"index": 0, "role": "similar|overlap|qualifies|contradicts|unknown", \
 "confidence": 0.0-1.0}, ...]}"""
+
+# W1: role re-judgement against an imported paper's FULL TEXT (once the
+# parse/extract/embed pipeline is ready). The metadata prompt above judges on
+# title+abstract; a full-text verdict is strictly stronger and can flip a
+# candidate from "similar" to "contradicts" once the paper is actually read.
+EXTERNAL_FULLTEXT_ROLE_SYSTEM_PROMPT = """\
+You classify whether an external research paper serves as counter-evidence for \
+a research question, based on its FULL TEXT.
+
+Categories:
+- similar: same research area, closely related approach
+- overlap: partially overlapping topic but different focus
+- qualifies: adds caveats or limitations that constrain the research question
+- contradicts: provides evidence against the research question
+- unknown: cannot determine from the text
+
+Rules:
+- Be conservative: use "unknown" if ambiguous
+- "contradicts" requires clear opposing evidence, not just a different focus
+- Base your judgement on the FULL TEXT (not just the abstract) — e.g. an
+  experiment that directly challenges the question's core assumption
+- A paper that merely resembles the question is "similar"; only call it
+  "qualifies" or "contradicts" when it explicitly challenges or constrains it
+
+Output a JSON object, nothing else:
+{"role": "similar|overlap|qualifies|contradicts|unknown", \
+"confidence": 0.0-1.0}"""
+
 WAITING_RUN_STATUSES = {"waiting_for_user", "waiting_for_fulltext"}
 PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
 
@@ -258,6 +291,8 @@ class DiscoverService(OpportunityWorkflow):
             model_provider="deepseek",
             model_name="deepseek-chat",
             model_parameters={"temperature": 0.1, "max_tokens": 2200},
+            prompt_version=DISCOVER_PROMPT_VERSION,
+            corpus_version=self._corpus_snapshot(workspace_id),
             stage_summaries={},
         )
         self.db.add(run)
@@ -538,6 +573,31 @@ class DiscoverService(OpportunityWorkflow):
         return {"ready": True, "failed": False, "error": None}
 
 
+    def _corpus_snapshot(self, workspace_id: str) -> str:
+        """Short corpus fingerprint for run audit (W2): papers + knowledge counts.
+
+        Lets a downstream auditor tell "which corpus produced this run" from the
+        run row alone, without re-querying counts at review time.
+        """
+        papers = int(
+            self.db.execute(
+                select(func.count()).select_from(Paper).where(
+                    Paper.workspace_id == workspace_id, Paper.is_deleted.is_(False)
+                )
+            ).scalar()
+            or 0
+        )
+        knowledge = int(
+            self.db.execute(
+                select(func.count()).select_from(KnowledgeItem).where(
+                    KnowledgeItem.workspace_id == workspace_id,
+                    KnowledgeItem.is_deleted.is_(False),
+                )
+            ).scalar()
+            or 0
+        )
+        return f"workspace-v1-{papers}p-{knowledge}k"
+
     # -------------------------------------------------------------- worker
     def execute_run(self, run_id: str) -> dict[str, Any]:
         run = self.db.get(DiscoverRun, run_id)
@@ -556,6 +616,9 @@ class DiscoverService(OpportunityWorkflow):
                 return self._cancelled_result(run)
         run.status = "running"
         run.started_at = run.started_at or datetime.now(timezone.utc)
+        # Refresh the corpus fingerprint - the workspace may have changed while
+        # the run sat in the queue.
+        run.corpus_version = self._corpus_snapshot(run.workspace_id)
         self._stage(run, "preflight", 0.05)
 
         claim = self._resolve_claim(run.workspace_id, run.input_claim_item_id)
@@ -664,6 +727,16 @@ class DiscoverService(OpportunityWorkflow):
             self._stage(run, "fulltext_verification", 0.68, {"selected": selected, "verified": candidate_state["verified"]})
         elif pending:
             return self._wait_for_fulltext(run, candidate_state)
+        elif verified:
+            # W1: full-text verification completed on a resume - refine the
+            # metadata-level roles against the imported papers' full text.
+            judged = self._judge_external_fulltext_roles(run, claim_text)
+            self._stage(
+                run,
+                "fulltext_verification",
+                0.70,
+                {"selected": selected, "verified": verified, "fulltext_roles_judged": judged},
+            )
 
         self._checkpoint(run)
         supporting = self._workspace_supporting(run, claim, claim_text, config)
@@ -714,6 +787,34 @@ class DiscoverService(OpportunityWorkflow):
                 "Critic reviewed candidates against the evidence ledger.",
                 {"reviews": critic_reviews, "verdicts": verdict_counts},
             )
+            # W2: inject critic challenges into a second synthesis pass so the
+            # refined opportunities explicitly respond to the critic's gaps.
+            challenges = self._critic_challenges(critic_reviews)
+            if challenges:
+                refined = self._synthesize_candidates(
+                    run,
+                    claim_text,
+                    supporting,
+                    similar,
+                    counter,
+                    external_fulltext,
+                    preliminary_gate,
+                    config.max_opportunities,
+                    critic_feedback=challenges,
+                )
+                existing_titles = {c["title"] for c in candidates}
+                for cand in refined:
+                    cand["critic_refined"] = True
+                    if cand["title"] not in existing_titles:
+                        candidates.append(cand)
+                        existing_titles.add(cand["title"])
+                self._agent_step(
+                    agent_run,
+                    "critic",
+                    "completed",
+                    f"Re-synthesized opportunities addressing {len(challenges)} critic challenge(s).",
+                    {"challenges": challenges, "refined": sum(1 for c in candidates if c.get("critic_refined"))},
+                )
             # Orchestrator narrowing loop (bounded): for "narrow" candidates,
             # run a focused counter-evidence pass on the suggested focus.
             narrowed = self._narrowing_pass(run, candidates, critic_reviews)
@@ -977,6 +1078,27 @@ class DiscoverService(OpportunityWorkflow):
             confidence = float(candidate.get("confidence") or 0.5)
             candidate["confidence"] = min(confidence, 0.3 if verdict == "reject" else (0.45 if verdict == "narrow" else confidence))
         return verdict_counts
+
+    @staticmethod
+    def _critic_challenges(critic_reviews: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
+        """Collect deduped challenges from narrow/reject verdicts (W2).
+
+        Fed back into the second synthesis pass as constraints so refined
+        opportunities explicitly respond to the critic's gaps.
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+        for review in critic_reviews:
+            if str(review.get("verdict") or "keep") not in {"narrow", "reject"}:
+                continue
+            for ch in review.get("challenges") or []:
+                s = str(ch).strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+                    if len(out) >= limit:
+                        return out
+        return out
 
     def _narrowing_pass(self, run: DiscoverRun, candidates: list[dict[str, Any]], critic_reviews: list[dict[str, Any]]) -> int:
         """One bounded narrowing pass for Critic-flagged "narrow" candidates.
@@ -1516,11 +1638,15 @@ class DiscoverService(OpportunityWorkflow):
                 if isinstance(arxiv_id, str) and arxiv_id.strip():
                     arxiv_id = arxiv_id.removeprefix("arXiv:").removesuffix(".pdf").strip()
                     pdf_url = f"https://arxiv.org/pdf/{quote(arxiv_id, safe='/')}"
-            if not isinstance(pdf_url, str) or not pdf_url.strip():
+            if not isinstance(pdf_url, str):
+                row.verification_status = "no_pdf"
+                continue
+            pdf_url = self._normalize_pdf_url(pdf_url)
+            if not pdf_url:
                 row.verification_status = "no_pdf"
                 continue
             try:
-                content = client.download_pdf(pdf_url.strip())
+                content = client.download_pdf(pdf_url)
                 paper_service = PaperService(self.db)
                 paper = paper_service.find_by_external_paper_id(workspace_id=run.workspace_id, external_paper_id=row.external_paper_id)
                 if paper is None:
@@ -1535,6 +1661,26 @@ class DiscoverService(OpportunityWorkflow):
                 row.verification_status = "import_failed"
                 row.snapshot_payload = {**raw, "import_error": str(exc)[:500]}
         self.db.commit()
+
+    @staticmethod
+    def _normalize_pdf_url(url: str) -> str:
+        """Normalize an open-access PDF URL for download (W1).
+
+        Semantic Scholar occasionally returns `http://` or scheme-relative
+        (`//host/...`) URLs, and arXiv `abs` pages are HTML, not PDFs.
+        ``download_pdf`` requires HTTPS, so normalize to a fetchable absolute
+        ``https://`` URL here; non-fetchable schemes fall through to ``no_pdf``.
+        """
+        url = (url or "").strip()
+        if not url:
+            return ""
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.lower().startswith("http://"):
+            url = "https://" + url[len("http://"):]
+        if url.startswith("https://arxiv.org/abs/"):
+            url = url.replace("https://arxiv.org/abs/", "https://arxiv.org/pdf/")
+        return url
 
     def _ensure_paper_pipeline(self, workspace_id: str, paper_id: str) -> None:
         """Safely restart only the missing/failed existing pipeline stage."""
@@ -1677,6 +1823,96 @@ class DiscoverService(OpportunityWorkflow):
                 # Keep the heuristic role (already set on the rows) on failure.
         # Persist refined roles once, after all batches.
         self.db.commit()
+
+    def _judge_external_fulltext_roles(self, run: DiscoverRun, query: str) -> int:
+        """Best-effort re-judge roles of verified full-text candidates (W1).
+
+        Metadata-level roles (title+abstract) are refined once the imported
+        paper's parsed text is available. Idempotent: rows already marked
+        ``fulltext_role_judged`` are skipped; an LLM failure keeps the
+        metadata role and marks ``fulltext_role_tried`` so a later resume can
+        retry without looping forever.
+        """
+        rows = list(
+            self.db.execute(
+                select(DiscoverExternalCandidate).where(
+                    DiscoverExternalCandidate.discover_run_id == run.id,
+                    DiscoverExternalCandidate.verification_status == "verified",
+                    DiscoverExternalCandidate.imported_paper_id.is_not(None),
+                )
+            ).scalars()
+        )
+        to_judge = [
+            row for row in rows if not (row.snapshot_payload or {}).get("fulltext_role_judged")
+        ]
+        if not to_judge:
+            return 0
+        role_map = {
+            "similar": "similar",
+            "overlap": "overlap",
+            "overlaps": "overlap",
+            "qualifies": "qualifies",
+            "qualify": "qualifies",
+            "contradicts": "contradicts",
+            "contradict": "contradicts",
+            "unknown": "unknown",
+        }
+        judged = 0
+        for row in to_judge:
+            paper = self.db.get(Paper, row.imported_paper_id)
+            if paper is None or not paper.parsed_text_artifact_id:
+                continue
+            text = self._read_paper_text(paper)[:4000]
+            if not text.strip():
+                continue
+            try:
+                resp = self.llm.chat_completion(
+                    [
+                        {"role": "system", "content": EXTERNAL_FULLTEXT_ROLE_SYSTEM_PROMPT},
+                        {
+                            "role": "user",
+                            "content": f"RESEARCH QUESTION: {query[:300]}\n\nFULL TEXT:\n{text}",
+                        },
+                    ],
+                    temperature=0.0,
+                    max_tokens=500,
+                    disable_thinking=True,
+                )
+                parsed = self._parse_json(resp.content)
+                role = str((parsed or {}).get("role", "unknown")).lower()
+                row.role = role_map.get(role, "unknown")
+                try:
+                    row.role_confidence = float((parsed or {}).get("confidence", 0.5))
+                except (TypeError, ValueError):
+                    row.role_confidence = 0.5
+                row.snapshot_payload = {
+                    **(row.snapshot_payload or {}),
+                    "fulltext_role_judged": True,
+                    "fulltext_role": row.role,
+                }
+                judged += 1
+            except Exception as exc:
+                logger.warning("discover.external_fulltext_role_failed", error=str(exc))
+                row.snapshot_payload = {
+                    **(row.snapshot_payload or {}),
+                    "fulltext_role_tried": True,
+                }
+        self.db.commit()
+        return judged
+
+    def _read_paper_text(self, paper: Paper) -> str:
+        """Read the imported paper's parsed plain text (best-effort)."""
+        if not paper.parsed_text_artifact_id:
+            return ""
+        artifact = self.db.get(Artifact, paper.parsed_text_artifact_id)
+        if artifact is None or artifact.is_deleted:
+            return ""
+        try:
+            return ArtifactService(self.db).resolve_abs_path(artifact).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            return ""
 
     def _workspace_supporting(
         self,
@@ -1930,6 +2166,8 @@ class DiscoverService(OpportunityWorkflow):
         external_fulltext: RetrievalResponse,
         gate: dict[str, Any],
         maximum: int,
+        *,
+        critic_feedback: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         evidence = {
             "supporting_evidence": [self._retrieval_payload(item) for item in supporting.items[:12]],
@@ -1938,6 +2176,7 @@ class DiscoverService(OpportunityWorkflow):
             "counter_evidence": [self._retrieval_payload(item) for item in counter.items[:12]],
             "gate": gate,
             "constraints": (run.input_payload or {}).get("constraints"),
+            "critic_feedback": critic_feedback or [],
         }
         prompt = (
             "You are a conservative research-discovery agent. Return ONLY JSON with an "
@@ -1948,7 +2187,10 @@ class DiscoverService(OpportunityWorkflow):
             "Keep supporting_evidence, similar_work, counter_evidence, and external_full_text "
             "as separate roles; similar_work is never supporting evidence. "
             "If evidence is incomplete, explicitly say verification is incomplete and keep "
-            "scores conservative. Write every generated proposal field in Simplified Chinese, "
+            "scores conservative. "
+            "If CRITIC_FEEDBACK is non-empty, address each listed challenge explicitly: "
+            "the proposal must respond to the critic's gaps rather than repeat the same "
+            "weakness. Write every generated proposal field in Simplified Chinese, "
             "including the title, problem statement, scope, insufficiency analysis, research "
             "question, hypothesis, validation steps, and risks. Keep paper titles, evidence "
             "excerpts, citations, identifiers, and JSON keys in their original form; do not "

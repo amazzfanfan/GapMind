@@ -1,6 +1,6 @@
 import apiClient from "./client";
 
-export type AgentType = "research_plan" | "code_generation";
+export type AgentType = "research_plan" | "code_generation" | "analyze" | "write" | "respond";
 
 export interface AgentStep {
   id: string;

@@ -3,11 +3,9 @@ import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "ant
 import { FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router-dom";
 import workspaceApi from "../api/workspace";
-import paperApi from "../api/paper";
 import taskApi from "../api/task";
-import knowledgeApi from "../api/knowledge";
 import { discoverApi, type DiscoverRun, type ResearchOpportunity } from "../api/discover";
-import type { Workspace } from "../api/types/workspace";
+import type { Workspace, WorkspaceReadiness } from "../api/types/workspace";
 import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
 import EmptyGuide from "../components/common/EmptyGuide";
@@ -15,9 +13,8 @@ import StatusBadge from "../components/common/StatusBadge";
 
 interface WorkspaceSummary {
   workspace: Workspace;
-  papers: number | null;
+  counts: WorkspaceReadiness["counts"] | null;
   pendingTasks: Task[] | null;
-  reviewKnowledge: number | null;
   waitingRuns: DiscoverRun[] | null;
   opportunities: ResearchOpportunity[] | null;
   pendingOpportunityCount: number | null;
@@ -33,10 +30,11 @@ export default function DashboardPage() {
     try {
       const workspaces = (await workspaceApi.list({ limit: 8 })).items;
       const next = await Promise.all(workspaces.map(async (workspace) => {
-        const [papers, tasks, knowledge, runs, opportunities] = await Promise.allSettled([
-          paperApi.list(workspace.id, { limit: 1 }),
+        // Single-source readiness gives exact counts; object-level requests
+        // stay only for the "needs attention" action list.
+        const [readiness, tasks, runs, opportunities] = await Promise.allSettled([
+          workspaceApi.readiness(workspace.id),
           taskApi.list(workspace.id, { limit: 100 }),
-          knowledgeApi.listItems(workspace.id, { limit: 200 }),
           discoverApi.listRuns(workspace.id),
           discoverApi.listOpportunities(workspace.id, { pendingOnly: true, limit: 100 }),
         ]);
@@ -44,9 +42,8 @@ export default function DashboardPage() {
         const runItems = runs.status === "fulfilled" ? runs.value.items : null;
         return {
           workspace,
-          papers: papers.status === "fulfilled" ? papers.value.total : null,
+          counts: readiness.status === "fulfilled" ? readiness.value.counts : null,
           pendingTasks: taskItems?.filter((task) => ["queued", "running", "waiting_for_user", "failed"].includes(task.status)) ?? taskItems,
-          reviewKnowledge: knowledge.status === "fulfilled" ? knowledge.value.items.filter((item) => ["candidate", "needs_review", "proposed"].includes(item.status)).length : null,
           waitingRuns: runItems?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? runItems,
           opportunities: opportunities.status === "fulfilled" ? opportunities.value.items : null,
           pendingOpportunityCount: opportunities.status === "fulfilled" ? opportunities.value.total : null,
@@ -84,7 +81,7 @@ export default function DashboardPage() {
           {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
           <Typography.Title level={4}>最近课题</Typography.Title>
           <Row gutter={[16, 16]}>
-            {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.papers === null ? "文献：暂不可用" : `文献 ${summary.papers} 篇`}</Tag><Tag>{summary.reviewKnowledge === null ? "知识：暂不可用" : `待审核知识 ${summary.reviewKnowledge}`}</Tag><Tag color={summary.pendingOpportunityCount ? "orange" : "default"}>{summary.pendingOpportunityCount === null ? "机会：暂不可用" : `待处理机会 ${summary.pendingOpportunityCount}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}
+            {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.counts ? `文献 ${summary.counts.papers} 篇` : "文献：暂不可用"}</Tag><Tag>{summary.counts ? `待审核知识 ${summary.counts.pending_knowledge}` : "知识：暂不可用"}</Tag><Tag color={(summary.counts?.pending_opportunities ?? summary.pendingOpportunityCount) ? "orange" : "default"}>{summary.counts ? `待处理机会 ${summary.counts.pending_opportunities}` : summary.pendingOpportunityCount === null ? "机会：暂不可用" : `待处理机会 ${summary.pendingOpportunityCount}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}
           </Row>
         </>
       )}

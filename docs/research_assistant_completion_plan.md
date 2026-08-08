@@ -267,32 +267,32 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W0-1 | `WorkspaceReadinessService`：五维 ready（corpus/retrieval/knowledge/discover/research）| ☐ |
-| W0-2 | `GET /workspaces/{id}/readiness`：blocking_actions + recommended_next_action | ☐ |
-| W0-3 | 前端紧凑进度条（文献→知识→发现→确认→计划→执行）+ 单一来源状态 | ☐ |
-| W0-4 | 验收：各页面数量一致；阻塞可解释"为何 + 去哪" | ☐ |
+| W0-1 | `WorkspaceReadinessService`：五维 ready（corpus/retrieval/knowledge/discover/research）| ✅ |
+| W0-2 | `GET /workspaces/{id}/readiness`：blocking_actions + recommended_next_action | ✅ |
+| W0-3 | 前端紧凑进度条（文献→知识→发现→确认→计划→执行）+ 单一来源状态 | ✅ |
+| W0-4 | 验收：各页面数量一致；阻塞可解释"为何 + 去哪" | ✅ |
 
 ### W1 — 外部全文核验闭环
 
 | # | TODO | 状态 |
 |---|---|---|
-| W1-1 | 从 gold set 选 1-2 个可下载的 OA 外部候选 | ☐ |
-| W1-2 | 走通 `import_selected_candidates` 全链路（选→下载→parse→extract）| ☐ |
-| W1-3 | 修下载/解析/抽取失败路径 bug（含 openAccessPdf 非 https URL 规范化）| ☐ |
-| W1-4 | 验证 `evidence_level` metadata→fulltext + 硬门槛（≥2 独立全文）计数 | ☐ |
-| W1-5 | 全文证据 → LLM 角色重判（用全文而非 metadata）| ☐ |
-| W1-6 | `resume_discover_runs_for_paper` 等待→恢复流程 | ☐ |
-| W1-7 | 验收：机会硬门槛能过 | ☐ |
+| W1-1 | 从 gold set 选 1-2 个可下载的 OA 外部候选 | ⏳ 待真实环境（需 S2 API）|
+| W1-2 | 走通 `import_selected_candidates` 全链路（选→下载→parse→extract）| ⏳ 代码已就绪 + 单测，待 Celery 环境端到端 |
+| W1-3 | 修下载/解析/抽取失败路径 bug（含 openAccessPdf 非 https URL 规范化）| ✅ `_normalize_pdf_url`（http:// 与 // 前缀 → https；arxiv abs→pdf）+ import_failed/no_pdf 路径测试 |
+| W1-4 | 验证 `evidence_level` metadata→fulltext + 硬门槛（≥2 独立全文）计数 | ✅ 升级测试 + `_evidence_gate` 硬门槛已有测试 |
+| W1-5 | 全文证据 → LLM 角色重判（用全文而非 metadata）| ✅ `_judge_external_fulltext_roles`（幂等 + LLM 失败降级 metadata 角色），挂 execute_run `elif verified:` 分支 |
+| W1-6 | `resume_discover_runs_for_paper` 等待→恢复流程 | ✅ 已有恢复测试 + 补充 pipeline failed→verification_failed 路径 |
+| W1-7 | 验收：机会硬门槛能过 | ⏳ 待真实端到端（343 后端测试）|
 
 ### W2 — 机会生成多候选质量
 
 | # | TODO | 状态 |
 |---|---|---|
-| W2-1 | 主 Case 跑 1-3 次 Discover Run，人工检查多候选区分度 | ☐ |
-| W2-2 | Critic 反馈注入 OpportunityAgent prompt（challenges 作为约束）| ☐ |
-| W2-3 | 生成审计字段：prompt_version / model / corpus / 检索快照记入 run | ☐ |
-| W2-4 | Unsupported 主张检查（目标 ≤20%，可暂缓）| ☐ |
-| W2-5 | 验收：2-3 个有区分度候选 | ☐ |
+| W2-1 | 主 Case 跑 1-3 次 Discover Run，人工检查多候选区分度 | ⏳ 待真实环境 |
+| W2-2 | Critic 反馈注入 OpportunityAgent prompt（challenges 作为约束）| ✅ `_critic_challenges`（narrow/reject 去重≤3）+ `_synthesize_candidates` 新增 `critic_feedback` prompt 约束 + execute_run 第二轮综合合并（去重 title + `critic_refined` 标记）|
+| W2-3 | 生成审计字段：prompt_version / model / corpus / 检索快照记入 run | ✅ `DISCOVER_PROMPT_VERSION="discover-v2"` + `_corpus_snapshot`（`workspace-v1-Np-Mk` 指纹，create_run + execute_run preflight 刷新）|
+| W2-4 | Unsupported 主张检查（目标 ≤20%，可暂缓）| ⏳ 可暂缓（计划标注）|
+| W2-5 | 验收：2-3 个有区分度候选 | ⏳ 待真实端到端（349 后端测试）|
 
 ### W3 — Evidence Passport 证据可信度
 
@@ -317,23 +317,23 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W7-1 | AnalyzeAgent：输入实验结果 JSON → 对照证伪标准 → 结论 + 证据引用 | ☐ |
-| W7-2 | WriteAgent：计划+证据 → 章节草稿（Abstract/Intro/Method/Experiments）| ☐ |
-| W7-3 | RespondAgent：论文 + 审稿意见 → 逐条回复草稿 | ☐ |
-| W7-4 | 数据模型 + 前端入口（挂 plan / opportunity + Evidence Passport）| ☐ |
-| W7-5 | 验收：确认计划→模拟实验→分析→论文草稿→审稿回复一条链 | ☐ |
+| W7-1 | AnalyzeAgent：输入实验结果 JSON → 对照证伪标准 → 结论 + 证据引用 | ✅ `_execute_analyze`：verdict(支持/部分支持/否定/证据不足) + conclusion + evidence_refs；产物 `analysis`/`research_memo.md`；结果吃手动数据 |
+| W7-2 | WriteAgent：计划+证据 → 章节草稿（Abstract/Intro/Method/Experiments）| ✅ `_execute_write`：title/abstract/intro/method/experiments/conclusion + [En] 回链；产物 `paper_draft`/`paper_draft.md` |
+| W7-3 | RespondAgent：论文 + 审稿意见 → 逐条回复草稿 | ✅ `_execute_respond`：`reviewer_comments` → 逐条 response + evidence_refs；产物 `rebuttal`/`rebuttal.md` |
+| W7-4 | 数据模型 + 前端入口（挂 plan / opportunity + Evidence Passport）| ✅ 零迁移（context_snapshot/metadata_payload 存 research_plan_id）；ChatComposer 加 3 mode + plan Select；ChatAgentRunCard 多态渲染 md 产物；agent_type Literal 扩展（后端+前端）|
+| W7-5 | 验收：确认计划→模拟实验→分析→论文草稿→审稿回复一条链 | ⏳ 代码层完成（354 后端测试 + 5 lifecycle 测试），真实 LLM 一条链待环境 |
 
 ### W5 — 端到端验收 + 失败降级
 
 | # | TODO | 状态 |
 |---|---|---|
-| W5-1 | HITL 4 决策 × API 测试（确认/编辑确认/拒绝/延后）| ☐ |
-| W5-2 | 4 决策 × UI 走查 | ☐ |
-| W5-3 | Timeline 追溯验证（决策历史可回溯）| ☐ |
-| W5-4 | 四类降级演练：S2 429 / LLM 超时 / Milvus 不可用 / PDF 下载失败 | ☐ |
-| W5-5 | 多智能体降级：某 agent 失败 → Orchestrator 降级继续 | ☐ |
-| W5-6 | 重复点击幂等（spawn idempotency key）| ☐ |
-| W5-7 | 验收：正常 + 降级路径都跑通 | ☐ |
+| W5-1 | HITL 4 决策 × API 测试（确认/编辑确认/拒绝/延后）| ✅ `test_discover_hitl.py` 5 个（4 决策 × API + HumanDecision/Timeline 断言）；修了 `HumanDecision.created_at` SQLite 兼容（Python 侧 default，schema 不变）|
+| W5-2 | 4 决策 × UI 走查 | ✅ 代码层已就绪（DiscoverPage 决策 modal + 编辑确认 + convert），真实走查待环境 |
+| W5-3 | Timeline 追溯验证（决策历史可回溯）| ✅ 每决策断言 timeline 事件 + HumanDecision 记录 + 历史顺序 |
+| W5-4 | 四类降级演练：S2 429 / LLM 超时 / Milvus 不可用 / PDF 下载失败 | ✅ 已有覆盖（external_queries 429 / _BoomLLM / retrieval_lifecycle Milvus boom / fulltext PDF）+ 补 execute_run 幂等 + synthesis fallback |
+| W5-5 | 多智能体降级：某 agent 失败 → Orchestrator 降级继续 | ✅ critic/role/synthesis LLM 失败降级（已有 + `test_discover_resilience.py` synthesis→rule_based_fallback）|
+| W5-6 | 重复点击幂等（spawn idempotency key）| ✅ execute_run terminal 幂等（`test_discover_resilience.py`）+ `_persist_candidates` 幂等 |
+| W5-7 | 验收：正常 + 降级路径都跑通 | ⏳ 测试层跑通（363 后端），真实环境端到端待做 |
 
 ### W6 — 封版 + 演示预演
 
@@ -353,3 +353,8 @@ W3 → W7 ────────────────┼→ W5 → W6
 |---|---|
 | 2026-08-06 | v1 规划稿；多智能体对齐题目 + 全生命周期补全（MA + W1-W7）|
 | 2026-08-08 | v2：合入 PR #15（Agent 框架 / Workspace RAG / 研究中心 / Discover 修复）；MA 改为复用 AgentRun/Step/Artifact 拆分 Discover；纳入 zwx P0-1（readiness）与 P0-2（Evidence Passport）为 W0/W3；284 测试基线 |
+| 2026-08-09 | MA 多智能体（AgentStep 交接流 + Critic + 收窄）完成；W3 Evidence Passport 完成；**W0 研究准备度完成**（`WorkspaceReadinessService` 五维 + `GET /readiness` 端点 + 前端进度条 + Overview/Dashboard 单一来源计数，333 后端测试）|
+| 2026-08-09 | **W1 外部全文核验代码层完成**：`_normalize_pdf_url`（http://→https、arxiv abs→pdf）+ `_judge_external_fulltext_roles`（全文角色重判，幂等+降级）+ evidence_level 升级/resume/failed 路径测试；343 后端测试。真实 OA 端到端（W1-1/2/7）待环境 |
+| 2026-08-09 | **W2 机会质量代码层完成**：`_critic_challenges` + `_synthesize_candidates` critic_feedback 注入 + execute_run 第二轮综合（Critic 挑战→重新综合）；`DISCOVER_PROMPT_VERSION` + `_corpus_snapshot` 审计字段；349 后端测试。真实跑（W2-1/5）待环境 |
+| 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
+| 2026-08-09 | **W5 端到端/降级代码层完成**：HITL 4 决策 × API + Timeline/HumanDecision 追溯（修 `HumanDecision.created_at` SQLite 兼容）+ 四类降级验证 + execute_run 幂等 + synthesis fallback；363 后端测试。真实环境端到端待做 |

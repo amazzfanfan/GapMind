@@ -104,6 +104,29 @@ export interface paths {
         patch: operations["update_workspace_api_v1_workspaces__workspace_id__patch"];
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Readiness
+         * @description Research readiness for one workspace (W0): five dimensions + next action.
+         *
+         *     Single source of truth for the overview progress bar and "why not /
+         *     where to go" explanations. Raises 404 if the workspace is missing.
+         */
+        get: operations["get_workspace_readiness_api_v1_workspaces__workspace_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/archive": {
         parameters: {
             query?: never;
@@ -1370,7 +1393,7 @@ export interface components {
              * Agent Type
              * @enum {string}
              */
-            agent_type: "research_plan" | "code_generation";
+            agent_type: "research_plan" | "code_generation" | "analyze" | "write" | "respond";
             /** Prompt */
             prompt: string;
             /** Conversation Id */
@@ -3139,6 +3162,54 @@ export interface components {
         PlanCreateResponse: {
             plan: components["schemas"]["ResearchPlanRead"];
         };
+        /**
+         * ReadinessBlockingAction
+         * @description One explainable blocking step: what to do, why, and where.
+         */
+        ReadinessBlockingAction: {
+            /** Action */
+            action: string;
+            /** Reason */
+            reason: string;
+            /** Href */
+            href: string;
+        };
+        /**
+         * ReadinessDimension
+         * @description One readiness dimension (corpus / retrieval / knowledge / discover / research).
+         *
+         *     ``ready`` means usable; ``waiting`` means a background pipeline task is
+         *     still running (not a user action); otherwise the dimension is blocked and
+         *     ``blocking_actions`` explains what to do and where.
+         */
+        ReadinessDimension: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Ready */
+            ready: boolean;
+            /** Waiting */
+            waiting: boolean;
+            /** Summary */
+            summary: string;
+            /** Blocking Actions */
+            blocking_actions?: components["schemas"]["ReadinessBlockingAction"][];
+        };
+        /**
+         * ReadinessRecommendedAction
+         * @description The single next step the user should take.
+         */
+        ReadinessRecommendedAction: {
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Href */
+            href: string;
+            /** Label */
+            label: string;
+        };
         /** ResearchOpportunityRead */
         ResearchOpportunityRead: {
             /** Id */
@@ -3715,6 +3786,94 @@ export interface components {
             updated_at: string;
         };
         /**
+         * WorkspaceReadiness
+         * @description Full readiness document returned by GET /workspaces/{id}/readiness.
+         */
+        WorkspaceReadiness: {
+            /** Workspace Id */
+            workspace_id: string;
+            counts: components["schemas"]["WorkspaceReadinessCounts"];
+            /** Dimensions */
+            dimensions: components["schemas"]["ReadinessDimension"][];
+            recommended_next_action: components["schemas"]["ReadinessRecommendedAction"];
+        };
+        /**
+         * WorkspaceReadinessCounts
+         * @description Single-source counts used by the overview progress bar and stats.
+         */
+        WorkspaceReadinessCounts: {
+            /**
+             * Papers
+             * @default 0
+             */
+            papers: number;
+            /**
+             * Papers With Pdf
+             * @default 0
+             */
+            papers_with_pdf: number;
+            /**
+             * Parsed Papers
+             * @default 0
+             */
+            parsed_papers: number;
+            /**
+             * Extracted Papers
+             * @default 0
+             */
+            extracted_papers: number;
+            /**
+             * Knowledge Items
+             * @default 0
+             */
+            knowledge_items: number;
+            /**
+             * Confirmed Items
+             * @default 0
+             */
+            confirmed_items: number;
+            /**
+             * Pending Knowledge
+             * @default 0
+             */
+            pending_knowledge: number;
+            /**
+             * Runs
+             * @default 0
+             */
+            runs: number;
+            /**
+             * Pending Runs
+             * @default 0
+             */
+            pending_runs: number;
+            /**
+             * Active Tasks
+             * @default 0
+             */
+            active_tasks: number;
+            /**
+             * Opportunities
+             * @default 0
+             */
+            opportunities: number;
+            /**
+             * Pending Opportunities
+             * @default 0
+             */
+            pending_opportunities: number;
+            /**
+             * Confirmed Opportunities
+             * @default 0
+             */
+            confirmed_opportunities: number;
+            /**
+             * Research Plans
+             * @default 0
+             */
+            research_plans: number;
+        };
+        /**
          * WorkspaceUpdate
          * @description Body for PATCH /api/v1/workspaces/{id}.
          *
@@ -3963,6 +4122,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_readiness_api_v1_workspaces__workspace_id__readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReadiness"];
                 };
             };
             /** @description Validation Error */
