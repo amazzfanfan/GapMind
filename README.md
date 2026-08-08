@@ -95,6 +95,10 @@ The workspace AI assistant supports evidence-grounded Q&A, research-plan generat
 
 Generated code is previewed and downloaded by default; it is never executed automatically. Optional Python syntax validation runs in a network-disabled, resource-limited Docker container and must be enabled explicitly with `AGENT_CODE_EXECUTION_ENABLED=true`. Pull the configured image once (`docker pull python:3.11-slim`) before validation; the validator itself uses `--pull never`.
 
+### Fine-tuned Research Gap Board
+
+GapMind can call the fine-tuned Qwen3 Schema 3.0 extractor through Ollama, build a deterministic method-by-problem board, and hand unverified cells to Discover for external novelty and counter-evidence checks. See [`docs/fine_tuned_gap_board_integration.md`](docs/fine_tuned_gap_board_integration.md) for configuration, migration, workflow, and safety boundaries.
+
 ## Development Phases
 
 - **Phase 0** - Infrastructure + project skeleton (current)
