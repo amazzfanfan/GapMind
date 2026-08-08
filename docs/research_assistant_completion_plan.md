@@ -267,22 +267,22 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W0-1 | `WorkspaceReadinessService`：五维 ready（corpus/retrieval/knowledge/discover/research）| ☐ |
-| W0-2 | `GET /workspaces/{id}/readiness`：blocking_actions + recommended_next_action | ☐ |
-| W0-3 | 前端紧凑进度条（文献→知识→发现→确认→计划→执行）+ 单一来源状态 | ☐ |
-| W0-4 | 验收：各页面数量一致；阻塞可解释"为何 + 去哪" | ☐ |
+| W0-1 | `WorkspaceReadinessService`：五维 ready（corpus/retrieval/knowledge/discover/research）| ✅ |
+| W0-2 | `GET /workspaces/{id}/readiness`：blocking_actions + recommended_next_action | ✅ |
+| W0-3 | 前端紧凑进度条（文献→知识→发现→确认→计划→执行）+ 单一来源状态 | ✅ |
+| W0-4 | 验收：各页面数量一致；阻塞可解释"为何 + 去哪" | ✅ |
 
 ### W1 — 外部全文核验闭环
 
 | # | TODO | 状态 |
 |---|---|---|
-| W1-1 | 从 gold set 选 1-2 个可下载的 OA 外部候选 | ☐ |
-| W1-2 | 走通 `import_selected_candidates` 全链路（选→下载→parse→extract）| ☐ |
-| W1-3 | 修下载/解析/抽取失败路径 bug（含 openAccessPdf 非 https URL 规范化）| ☐ |
-| W1-4 | 验证 `evidence_level` metadata→fulltext + 硬门槛（≥2 独立全文）计数 | ☐ |
-| W1-5 | 全文证据 → LLM 角色重判（用全文而非 metadata）| ☐ |
-| W1-6 | `resume_discover_runs_for_paper` 等待→恢复流程 | ☐ |
-| W1-7 | 验收：机会硬门槛能过 | ☐ |
+| W1-1 | 从 gold set 选 1-2 个可下载的 OA 外部候选 | ⏳ 待真实环境（需 S2 API）|
+| W1-2 | 走通 `import_selected_candidates` 全链路（选→下载→parse→extract）| ⏳ 代码已就绪 + 单测，待 Celery 环境端到端 |
+| W1-3 | 修下载/解析/抽取失败路径 bug（含 openAccessPdf 非 https URL 规范化）| ✅ `_normalize_pdf_url`（http:// 与 // 前缀 → https；arxiv abs→pdf）+ import_failed/no_pdf 路径测试 |
+| W1-4 | 验证 `evidence_level` metadata→fulltext + 硬门槛（≥2 独立全文）计数 | ✅ 升级测试 + `_evidence_gate` 硬门槛已有测试 |
+| W1-5 | 全文证据 → LLM 角色重判（用全文而非 metadata）| ✅ `_judge_external_fulltext_roles`（幂等 + LLM 失败降级 metadata 角色），挂 execute_run `elif verified:` 分支 |
+| W1-6 | `resume_discover_runs_for_paper` 等待→恢复流程 | ✅ 已有恢复测试 + 补充 pipeline failed→verification_failed 路径 |
+| W1-7 | 验收：机会硬门槛能过 | ⏳ 待真实端到端（343 后端测试）|
 
 ### W2 — 机会生成多候选质量
 
@@ -353,3 +353,5 @@ W3 → W7 ────────────────┼→ W5 → W6
 |---|---|
 | 2026-08-06 | v1 规划稿；多智能体对齐题目 + 全生命周期补全（MA + W1-W7）|
 | 2026-08-08 | v2：合入 PR #15（Agent 框架 / Workspace RAG / 研究中心 / Discover 修复）；MA 改为复用 AgentRun/Step/Artifact 拆分 Discover；纳入 zwx P0-1（readiness）与 P0-2（Evidence Passport）为 W0/W3；284 测试基线 |
+| 2026-08-09 | MA 多智能体（AgentStep 交接流 + Critic + 收窄）完成；W3 Evidence Passport 完成；**W0 研究准备度完成**（`WorkspaceReadinessService` 五维 + `GET /readiness` 端点 + 前端进度条 + Overview/Dashboard 单一来源计数，333 后端测试）|
+| 2026-08-09 | **W1 外部全文核验代码层完成**：`_normalize_pdf_url`（http://→https、arxiv abs→pdf）+ `_judge_external_fulltext_roles`（全文角色重判，幂等+降级）+ evidence_level 升级/resume/failed 路径测试；343 后端测试。真实 OA 端到端（W1-1/2/7）待环境 |
