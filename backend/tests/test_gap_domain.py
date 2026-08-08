@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.domains.artifact.models import Artifact
 from app.domains.gap.markdown import compact_markdown
 from app.domains.gap.models import PaperGapAnnotation
+from app.domains.gap.normalization import canonical_axis_label
 from app.domains.gap.service import GapService
 from app.domains.gap.validation import validate_annotation
 from app.domains.paper.models import Paper
@@ -22,6 +23,8 @@ def _output(
     problem_label: str = "解释稳定性不足",
     problem_type: str = "prior_work_gap",
     relation_type: str = "ADDRESSES",
+    method_label: str = "子图扰动式解释",
+    method_mechanism: str = "通过扰动定位关键子图",
 ) -> dict:
     return {
         "schema_version": "3.0",
@@ -58,8 +61,8 @@ def _output(
             {
                 "method_id": "M1",
                 "corresponding_entity_id": "E1",
-                "method_strategy_zh": "子图扰动式解释",
-                "mechanism_zh": "通过扰动定位关键子图",
+                "method_strategy_zh": method_label,
+                "mechanism_zh": method_mechanism,
             }
         ],
         "problems": [
@@ -103,6 +106,30 @@ Extra tables.
     assert "Dataset and scores" not in compacted
     assert "remaining limitation" in compacted
     assert "Extra tables" not in compacted
+
+
+def test_audited_taxonomy_normalizes_only_supported_families() -> None:
+    diffusion = canonical_axis_label(
+        "method",
+        "离散去噪扩散生成式解释",
+        "生成图反事实样本",
+    )
+    vae = canonical_axis_label(
+        "method",
+        "图变分自编码器反事实生成",
+        "在潜在空间生成反事实图",
+    )
+    problem = canonical_axis_label(
+        "problem",
+        "缺乏图神经网络的反事实解释方法",
+        "现有研究对反事实生成探索不足",
+    )
+
+    assert diffusion is not None and diffusion.label == "生成式反事实解释"
+    assert vae is not None and vae.label == "生成式反事实解释"
+    assert problem is not None and problem.label == "反事实解释覆盖不足"
+    assert max(len(diffusion.rule_id), len(vae.rule_id), len(problem.rule_id)) <= 32
+    assert canonical_axis_label("method", "完全未知的新方法", "无受控词") is None
 
 
 class _Response:
@@ -234,9 +261,101 @@ def test_deterministic_board_marks_coverage_and_explicit_limitation(
     candidate = next(item for item in board.cells if not item["addressed"])
     assert covered["addressed_paper_ids"] == [papers[0].id]
     assert candidate["explicit_limitation"] is True
+    assert candidate["eligible_for_discovery"] is True
+    assert candidate["candidate_tier"] == "explicit_limitation"
     assert candidate["limitation_paper_ids"] == [papers[1].id]
     assert board.candidate_count == 1
 
     response = client.get(f"/api/v1/workspaces/{workspace.id}/gap/board")
     assert response.status_code == 200, response.text
     assert response.json()["version"] == 1
+
+
+def test_board_collapses_taxonomy_and_suppresses_cartesian_only_cells(
+    db_session: Session,
+    client: TestClient,
+) -> None:
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Taxonomy WS",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    db_session.add(workspace)
+    db_session.flush()
+    outputs = [
+        _output(
+            method_label="离散去噪扩散生成式解释",
+            method_mechanism="生成图反事实样本",
+            problem_label="缺乏图神经网络的反事实解释方法",
+        ),
+        _output(
+            method_label="图变分自编码器反事实生成",
+            method_mechanism="在潜在空间生成反事实图",
+            problem_label="反事实与模型级解释探索不足",
+        ),
+        _output(
+            method_label="因果结构建模与神经因果推断解释",
+            method_mechanism="通过因果推断生成解释",
+            problem_label="缺乏真实标签时GNN解释评估困难",
+        ),
+    ]
+    for index, output in enumerate(outputs):
+        artifact = Artifact(
+            id=str(uuid4()),
+            workspace_id=workspace.id,
+            kind="parsed_markdown",
+            file_path=f"taxonomy-{index}.md",
+            size_bytes=10,
+            is_deleted=False,
+        )
+        paper = Paper(
+            id=str(uuid4()),
+            workspace_id=workspace.id,
+            title=f"Taxonomy Paper {index}",
+            authors=[],
+            source="manual",
+            parse_status="parsed",
+            chunk_count=0,
+            extract_status="not_applicable",
+            is_deleted=False,
+        )
+        db_session.add_all([artifact, paper])
+        db_session.flush()
+        _annotation(db_session, workspace, artifact, paper, output)
+
+    board = GapService(db_session).rebuild_board(workspace.id)
+
+    assert len(board.method_axes) == 2
+    assert len(board.problem_axes) == 2
+    assert (
+        next(item for item in board.method_axes if item["label"] == "生成式反事实解释")[
+            "paper_count"
+        ]
+        == 2
+    )
+    assert (
+        next(item for item in board.problem_axes if item["label"] == "反事实解释覆盖不足")[
+            "paper_count"
+        ]
+        == 2
+    )
+    low_evidence = [
+        item for item in board.cells if not item["addressed"] and not item["eligible_for_discovery"]
+    ]
+    assert len(low_evidence) == 2
+    assert {item["candidate_tier"] for item in low_evidence} == {"corpus_only"}
+    assert board.candidate_count == 0
+
+    rejected = client.post(
+        f"/api/v1/workspaces/{workspace.id}/gap/candidates/discover",
+        json={
+            "method_concept_id": low_evidence[0]["method_concept_id"],
+            "problem_concept_id": low_evidence[0]["problem_concept_id"],
+            "max_opportunities": 3,
+        },
+    )
+    assert rejected.status_code == 409
+    assert "low-evidence" in rejected.json()["detail"]

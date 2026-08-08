@@ -1220,6 +1220,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/gap/extractions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Extract Papers */
+        post: operations["extract_papers_api_v1_workspaces__workspace_id__gap_extractions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/gap/annotations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Annotations */
+        get: operations["list_annotations_api_v1_workspaces__workspace_id__gap_annotations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/gap/board/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild Board */
+        post: operations["rebuild_board_api_v1_workspaces__workspace_id__gap_board_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/gap/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Board */
+        get: operations["get_board_api_v1_workspaces__workspace_id__gap_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/gap/candidates/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discover Candidate */
+        post: operations["discover_candidate_api_v1_workspaces__workspace_id__gap_candidates_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -2094,6 +2179,197 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** GapAnnotationListResponse */
+        GapAnnotationListResponse: {
+            /** Items */
+            items: components["schemas"]["GapAnnotationRead"][];
+            /** Total */
+            total: number;
+        };
+        /** GapAnnotationRead */
+        GapAnnotationRead: {
+            /** Id */
+            id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Paper Id */
+            paper_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Input Sha256 */
+            input_sha256: string;
+            /** Schema Version */
+            schema_version: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Model Provider */
+            model_provider: string;
+            /** Model Name */
+            model_name: string;
+            /** Model Digest */
+            model_digest?: string | null;
+            /** Model Parameters */
+            model_parameters?: Record<string, never>;
+            /** Status */
+            status: string;
+            /** Attempts */
+            attempts: number;
+            /** Output */
+            output?: Record<string, never> | null;
+            /** Validation Errors */
+            validation_errors?: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** GapBoardAxis */
+        GapBoardAxis: {
+            /** Concept Id */
+            concept_id: string;
+            /** Label */
+            label: string;
+            /** Aliases */
+            aliases?: string[];
+            /**
+             * Paper Count
+             * @default 0
+             */
+            paper_count: number;
+            /** Paper Ids */
+            paper_ids?: string[];
+        };
+        /** GapBoardCell */
+        GapBoardCell: {
+            /** Method Concept Id */
+            method_concept_id: string;
+            /** Problem Concept Id */
+            problem_concept_id: string;
+            /** Addressed */
+            addressed: boolean;
+            /** Addressed Paper Ids */
+            addressed_paper_ids?: string[];
+            /** Limitation Paper Ids */
+            limitation_paper_ids?: string[];
+            /** Cooccurrence Paper Ids */
+            cooccurrence_paper_ids?: string[];
+            /**
+             * Explicit Limitation
+             * @default false
+             */
+            explicit_limitation: boolean;
+            /**
+             * Candidate Score
+             * @default 0
+             */
+            candidate_score: number;
+            /**
+             * Candidate Tier
+             * @default corpus_only
+             */
+            candidate_tier: string;
+            /** Candidate Reasons */
+            candidate_reasons?: string[];
+            /**
+             * Eligible For Discovery
+             * @default false
+             */
+            eligible_for_discovery: boolean;
+            /**
+             * Verification Status
+             * @default unverified
+             */
+            verification_status: string;
+        };
+        /** GapBoardRead */
+        GapBoardRead: {
+            /** Id */
+            id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Version */
+            version: number;
+            /** Filters */
+            filters?: Record<string, never>;
+            /** Method Axes */
+            method_axes?: components["schemas"]["GapBoardAxis"][];
+            /** Problem Axes */
+            problem_axes?: components["schemas"]["GapBoardAxis"][];
+            /** Cells */
+            cells?: components["schemas"]["GapBoardCell"][];
+            /** Source Annotation Ids */
+            source_annotation_ids?: string[];
+            /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** GapBoardRebuildRequest */
+        GapBoardRebuildRequest: {
+            /** Paper Ids */
+            paper_ids?: string[];
+        };
+        /** GapCandidateDiscoverRequest */
+        GapCandidateDiscoverRequest: {
+            /** Method Concept Id */
+            method_concept_id: string;
+            /** Problem Concept Id */
+            problem_concept_id: string;
+            /** Constraints */
+            constraints?: string | null;
+            /**
+             * Max Opportunities
+             * @default 3
+             */
+            max_opportunities: number;
+        };
+        /** GapCandidateDiscoverResponse */
+        GapCandidateDiscoverResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Status */
+            status: string;
+        };
+        /** GapExtractionRequest */
+        GapExtractionRequest: {
+            /** Paper Ids */
+            paper_ids: string[];
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** GapExtractionResponse */
+        GapExtractionResponse: {
+            /** Tasks */
+            tasks: components["schemas"]["GapExtractionTask"][];
+        };
+        /** GapExtractionTask */
+        GapExtractionTask: {
+            /** Paper Id */
+            paper_id: string;
+            /** Task Id */
+            task_id: string;
+            /** Status */
+            status: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -6078,6 +6354,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_papers_api_v1_workspaces__workspace_id__gap_extractions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapExtractionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapExtractionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_annotations_api_v1_workspaces__workspace_id__gap_annotations_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapAnnotationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_board_api_v1_workspaces__workspace_id__gap_board_rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapBoardRebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapBoardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_board_api_v1_workspaces__workspace_id__gap_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapBoardRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_candidate_api_v1_workspaces__workspace_id__gap_candidates_discover_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapCandidateDiscoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapCandidateDiscoverResponse"];
                 };
             };
             /** @description Validation Error */
