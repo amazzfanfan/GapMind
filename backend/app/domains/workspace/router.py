@@ -19,10 +19,12 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
+from app.domains.workspace.readiness import WorkspaceReadinessService
 from app.domains.workspace.schemas import (
     WorkspaceCreate,
     WorkspaceListResponse,
     WorkspaceRead,
+    WorkspaceReadiness,
     WorkspaceUpdate,
 )
 from app.domains.workspace.service import WorkspaceService
@@ -80,6 +82,27 @@ def get_workspace(
     service: WorkspaceService = Depends(_get_service),
 ) -> WorkspaceRead:
     return WorkspaceRead.model_validate(service.get(workspace_id))
+
+
+@router.get(
+    "/{workspace_id}/readiness",
+    response_model=WorkspaceReadiness,
+    response_model_exclude_unset=True,
+)
+def get_workspace_readiness(
+    workspace_id: str,
+    workspace_service: WorkspaceService = Depends(_get_service),
+    db: Session = Depends(get_db),
+) -> WorkspaceReadiness:
+    """Research readiness for one workspace (W0): five dimensions + next action.
+
+    Single source of truth for the overview progress bar and "why not /
+    where to go" explanations. Raises 404 if the workspace is missing.
+    """
+    workspace = workspace_service.get(workspace_id)
+    return WorkspaceReadiness.model_validate(
+        WorkspaceReadinessService(db).get_readiness(workspace)
+    )
 
 
 @router.patch(
