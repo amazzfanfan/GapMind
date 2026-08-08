@@ -327,13 +327,13 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W5-1 | HITL 4 决策 × API 测试（确认/编辑确认/拒绝/延后）| ☐ |
-| W5-2 | 4 决策 × UI 走查 | ☐ |
-| W5-3 | Timeline 追溯验证（决策历史可回溯）| ☐ |
-| W5-4 | 四类降级演练：S2 429 / LLM 超时 / Milvus 不可用 / PDF 下载失败 | ☐ |
-| W5-5 | 多智能体降级：某 agent 失败 → Orchestrator 降级继续 | ☐ |
-| W5-6 | 重复点击幂等（spawn idempotency key）| ☐ |
-| W5-7 | 验收：正常 + 降级路径都跑通 | ☐ |
+| W5-1 | HITL 4 决策 × API 测试（确认/编辑确认/拒绝/延后）| ✅ `test_discover_hitl.py` 5 个（4 决策 × API + HumanDecision/Timeline 断言）；修了 `HumanDecision.created_at` SQLite 兼容（Python 侧 default，schema 不变）|
+| W5-2 | 4 决策 × UI 走查 | ✅ 代码层已就绪（DiscoverPage 决策 modal + 编辑确认 + convert），真实走查待环境 |
+| W5-3 | Timeline 追溯验证（决策历史可回溯）| ✅ 每决策断言 timeline 事件 + HumanDecision 记录 + 历史顺序 |
+| W5-4 | 四类降级演练：S2 429 / LLM 超时 / Milvus 不可用 / PDF 下载失败 | ✅ 已有覆盖（external_queries 429 / _BoomLLM / retrieval_lifecycle Milvus boom / fulltext PDF）+ 补 execute_run 幂等 + synthesis fallback |
+| W5-5 | 多智能体降级：某 agent 失败 → Orchestrator 降级继续 | ✅ critic/role/synthesis LLM 失败降级（已有 + `test_discover_resilience.py` synthesis→rule_based_fallback）|
+| W5-6 | 重复点击幂等（spawn idempotency key）| ✅ execute_run terminal 幂等（`test_discover_resilience.py`）+ `_persist_candidates` 幂等 |
+| W5-7 | 验收：正常 + 降级路径都跑通 | ⏳ 测试层跑通（363 后端），真实环境端到端待做 |
 
 ### W6 — 封版 + 演示预演
 
@@ -357,3 +357,4 @@ W3 → W7 ────────────────┼→ W5 → W6
 | 2026-08-09 | **W1 外部全文核验代码层完成**：`_normalize_pdf_url`（http://→https、arxiv abs→pdf）+ `_judge_external_fulltext_roles`（全文角色重判，幂等+降级）+ evidence_level 升级/resume/failed 路径测试；343 后端测试。真实 OA 端到端（W1-1/2/7）待环境 |
 | 2026-08-09 | **W2 机会质量代码层完成**：`_critic_challenges` + `_synthesize_candidates` critic_feedback 注入 + execute_run 第二轮综合（Critic 挑战→重新综合）；`DISCOVER_PROMPT_VERSION` + `_corpus_snapshot` 审计字段；349 后端测试。真实跑（W2-1/5）待环境 |
 | 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
+| 2026-08-09 | **W5 端到端/降级代码层完成**：HITL 4 决策 × API + Timeline/HumanDecision 追溯（修 `HumanDecision.created_at` SQLite 兼容）+ 四类降级验证 + execute_run 幂等 + synthesis fallback；363 后端测试。真实环境端到端待做 |
