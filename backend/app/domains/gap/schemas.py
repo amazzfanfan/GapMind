@@ -188,6 +188,7 @@ class GapCandidateDiscoverRequest(BaseModel):
     problem_concept_id: str
     constraints: str | None = Field(default=None, max_length=4000)
     max_opportunities: int = Field(default=3, ge=1, le=5)
+    exploratory: bool = False
 
 
 class GapCandidateDiscoverResponse(BaseModel):

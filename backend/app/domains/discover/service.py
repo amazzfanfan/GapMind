@@ -713,6 +713,7 @@ class DiscoverService(OpportunityWorkflow):
             external_summary = (run.stage_summaries or {}).get("external_search")
             if not isinstance(external_summary, dict) or external_summary.get("status") not in {
                 "succeeded",
+                "succeeded_partial",
                 "succeeded_empty",
             }:
                 run.stage_summaries = {
@@ -739,9 +740,10 @@ class DiscoverService(OpportunityWorkflow):
         year = None
         if scope.year_from is not None or scope.year_to is not None:
             year = f"{scope.year_from or ''}-{scope.year_to or ''}"
-        per_query: list[list[tuple[str, dict[str, Any]]]] = []
-        try:
-            for position, query in enumerate(queries):
+        per_query: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = []
+        query_failures: list[dict[str, Any]] = []
+        for position, query in enumerate(queries):
+            try:
                 limit = top_k if position == 0 else max(3, top_k // 2)
                 raw = self.external_search.search(
                     query=query[:200],
@@ -759,12 +761,45 @@ class DiscoverService(OpportunityWorkflow):
                     if pid not in seen_in_query:
                         seen_in_query.add(pid)
                         q_results.append((pid, item))
-                per_query.append(q_results)
-        except SemanticScholarError as exc:
+                per_query.append((query, q_results))
+            except SemanticScholarError as exc:
+                query_failures.append(
+                    {
+                        "query": query[:120],
+                        "error": str(exc),
+                        "status_code": exc.status_code,
+                        "retryable": exc.status_code in {429, 502, 504},
+                    }
+                )
+                logger.warning(
+                    "discover.external_query_failed",
+                    run_id=run.id,
+                    query=query[:120],
+                    error=str(exc),
+                )
+
+        if not per_query:
+            last_failure = query_failures[-1] if query_failures else {}
             run.verification_status = "failed"
-            run.stage_summaries = {**(run.stage_summaries or {}), "external_search": {"status": "failed", "error": str(exc), "retryable": exc.status_code in {429, 502, 504}, "executed": False, "queries": [q[:120] for q in queries]}}
+            run.stage_summaries = {
+                **(run.stage_summaries or {}),
+                "external_search": {
+                    "status": "failed",
+                    "error": last_failure.get("error", "all external search queries failed"),
+                    "retryable": any(item["retryable"] for item in query_failures),
+                    "executed": False,
+                    "queries": [q[:120] for q in queries],
+                    "successful_query_count": 0,
+                    "failed_query_count": len(query_failures),
+                    "query_failures": query_failures,
+                },
+            }
             self.db.commit()
-            logger.warning("discover.external_search_failed", run_id=run.id, error=str(exc))
+            logger.warning(
+                "discover.external_search_failed",
+                run_id=run.id,
+                error=last_failure.get("error", "all external search queries failed"),
+            )
             return 0
 
         # Exact-title lookups for LLM-selected method names (title-verified).
@@ -806,12 +841,12 @@ class DiscoverService(OpportunityWorkflow):
         round_index = 0
         while True:
             added_this_round = False
-            for position, q_results in enumerate(per_query):
+            for source_query, q_results in per_query:
                 if round_index < len(q_results):
                     pid, item = q_results[round_index]
                     if pid not in seen:
                         seen.add(pid)
-                        merged.append((pid, item, queries[position][:200]))
+                        merged.append((pid, item, source_query[:200]))
                     added_this_round = True
             if not added_this_round:
                 break
@@ -832,13 +867,21 @@ class DiscoverService(OpportunityWorkflow):
             rows.append(row)
         self.db.add_all(rows)
         run.verification_status = "in_progress" if rows else "incomplete"
+        search_status = (
+            "succeeded_partial"
+            if query_failures
+            else ("succeeded" if rows else "succeeded_empty")
+        )
         run.stage_summaries = {
             **(run.stage_summaries or {}),
             "external_search": {
-                "status": "succeeded" if rows else "succeeded_empty",
+                "status": search_status,
                 "executed": True,
                 "candidate_count": len(rows),
                 "queries": [q[:120] for q in queries],
+                "successful_query_count": len(per_query),
+                "failed_query_count": len(query_failures),
+                "query_failures": query_failures,
             },
         }
         self.db.commit()
@@ -1399,7 +1442,11 @@ class DiscoverService(OpportunityWorkflow):
             seen_papers.add(item.paper_id or "")
 
         external_summary = (run.stage_summaries or {}).get("external_search") or {}
-        external_executed = external_summary.get("status") in {"succeeded", "succeeded_empty"}
+        external_executed = external_summary.get("status") in {
+            "succeeded",
+            "succeeded_partial",
+            "succeeded_empty",
+        }
         external_verification_completed = external_executed and not self._external_selection_skipped(run)
         supporting_checked = supporting.status == "succeeded"
         counter_checked = counter.status == "succeeded"
@@ -1515,12 +1562,16 @@ class DiscoverService(OpportunityWorkflow):
             "Keep supporting_evidence, similar_work, counter_evidence, and external_full_text "
             "as separate roles; similar_work is never supporting evidence. "
             "If evidence is incomplete, explicitly say verification is incomplete and keep "
-            "scores conservative.\n\nCLAIM_OR_TOPIC:\n" + claim_text[:3000] +
+            "scores conservative. Write every generated proposal field in Simplified Chinese, "
+            "including the title, problem statement, scope, insufficiency analysis, research "
+            "question, hypothesis, validation steps, and risks. Keep paper titles, evidence "
+            "excerpts, citations, identifiers, and JSON keys in their original form; do not "
+            "translate or rewrite quoted evidence.\n\nCLAIM_OR_TOPIC:\n" + claim_text[:3000] +
             "\n\nEVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
         )
         try:
             response = self.llm.chat_completion(
-                [{"role": "system", "content": "You produce auditable research opportunity proposals."}, {"role": "user", "content": prompt}],
+                [{"role": "system", "content": "你负责生成可审计的中文研究机会方案；证据原文必须保持不变。"}, {"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=2200,
                 disable_thinking=True,  # structured JSON — avoid CoT burning the budget
             )
@@ -1549,18 +1600,18 @@ class DiscoverService(OpportunityWorkflow):
                 return 0.35
         plan = value.get("candidate_validation_plan")
         if not isinstance(plan, dict):
-            plan = {"steps": ["Select datasets and baselines", "Compare against the strongest similar-work setting", "Run an ablation for the suspected boundary condition"]}
+            plan = {"steps": ["选择数据集与基线方法", "与最强的相似工作设置进行比较", "针对推测的边界条件开展消融实验"]}
         risks = value.get("open_risks")
         if not isinstance(risks, list):
-            risks = ["External full-text verification is incomplete."]
+            risks = ["外部论文全文核验尚未完成。"]
         confidence = score("confidence")
         return {
-            "title": str(value.get("title") or "Investigate the boundary conditions of the topic")[:512],
-            "problem_statement": str(value.get("problem_statement") or "The current evidence does not establish where the observed behavior generalizes."),
-            "research_scope": str(value.get("research_scope") or "The scope should be narrowed to the datasets, models, and constraints available in this workspace."),
-            "why_existing_work_is_insufficient": str(value.get("why_existing_work_is_insufficient") or "Existing work has not yet been compared under the same conditions."),
-            "candidate_research_question": str(value.get("candidate_research_question") or "Under which conditions does the observed behavior remain reliable?"),
-            "candidate_hypothesis": str(value.get("candidate_hypothesis") or "The behavior is strongest under the assumptions represented by the workspace evidence."),
+            "title": str(value.get("title") or "研究该主题成立与失效的边界条件")[:512],
+            "problem_statement": str(value.get("problem_statement") or "现有证据尚不足以确定该现象可推广到哪些条件。"),
+            "research_scope": str(value.get("research_scope") or "研究范围应限定在当前工作区已有的数据集、模型与约束条件内。"),
+            "why_existing_work_is_insufficient": str(value.get("why_existing_work_is_insufficient") or "现有工作尚未在统一条件下进行充分比较。"),
+            "candidate_research_question": str(value.get("candidate_research_question") or "在什么条件下，该现象仍然可靠？"),
+            "candidate_hypothesis": str(value.get("candidate_hypothesis") or "在工作区证据所覆盖的假设条件下，该现象预计最为显著。"),
             "candidate_validation_plan": plan,
             "open_risks": [str(item) for item in risks[:8]],
             "novelty_score": score("novelty_score"), "feasibility_score": score("feasibility_score"), "significance_score": score("significance_score"),
@@ -1573,12 +1624,12 @@ class DiscoverService(OpportunityWorkflow):
     @staticmethod
     def _fallback_candidate(claim_text: str, supporting: RetrievalResponse, similar: RetrievalResponse, counter: RetrievalResponse, gate: dict[str, Any]) -> dict[str, Any]:
         return DiscoverService._normalize_candidate({
-            "title": "Investigate the boundary conditions of the claim",
-            "problem_statement": "The claim is plausible but its boundary conditions are not yet established.",
-            "why_existing_work_is_insufficient": f"The workspace returned {len(supporting.items)} supporting, {len(similar.items)} similar-work, and {len(counter.items)} counter-evidence passages, but the final evidence gate is incomplete.",
-            "candidate_research_question": f"When does the following claim hold, and when does it fail? {claim_text[:500]}",
-            "candidate_hypothesis": "The effect depends on a measurable data or model condition that can be isolated with an ablation.",
-            "open_risks": ["External metadata is not a substitute for full-text evidence.", "The current retrieval set may be incomplete."],
+            "title": "研究该论断成立与失效的边界条件",
+            "problem_statement": "该论断具有一定合理性，但其成立的边界条件尚未明确。",
+            "why_existing_work_is_insufficient": f"工作区检索到 {len(supporting.items)} 条支持证据、{len(similar.items)} 条相似工作证据和 {len(counter.items)} 条反证，但最终证据门槛尚未满足。",
+            "candidate_research_question": f"以下论断在什么条件下成立，又会在什么条件下失效？{claim_text[:500]}",
+            "candidate_hypothesis": "该效应取决于某个可测量的数据或模型条件，并可通过消融实验加以分离验证。",
+            "open_risks": ["外部元数据不能替代全文证据。", "当前检索结果可能不完整。"],
         }, gate, provider="rule_based_fallback")
 
     def _persist_candidates(
@@ -1735,9 +1786,10 @@ def resume_discover_runs_for_paper(db: Session, paper_id: str, workspace_id: str
         if run is None or run.workspace_id != workspace_id or run.status != "waiting_for_fulltext":
             continue
         state = service._external_candidate_state(run)
-        if state["pending"] or state["failed"] or not state["verified"]:
-            if state["failed"] and not state["pending"]:
-                service._wait_for_fulltext(run, state)
+        if state["pending"]:
+            continue
+        if not state["verified"]:
+            service._wait_for_fulltext(run, state)
             continue
         run.status = "queued"
         run.stage = "fulltext_verification"
@@ -1748,6 +1800,7 @@ def resume_discover_runs_for_paper(db: Session, paper_id: str, workspace_id: str
             "fulltext_verification": {
                 "status": "succeeded",
                 "verified": state["verified"],
+                "failed": state["failed"],
                 "resumed": True,
             },
         }

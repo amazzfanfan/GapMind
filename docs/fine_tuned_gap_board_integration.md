@@ -50,7 +50,7 @@
 - 方法族与问题族在同一论文中共现，但没有形成 `ADDRESSES`；
 - 方法族与问题族分别都获得至少两篇论文支持，构成跨论文迁移假设。
 
-其余仅由“方法 × 问题”笛卡尔积产生的空格标记为低证据，暂不允许直接发起 Discover。`candidate_score` 改为“外部核验优先级”，综合显式局限、同篇共现、跨论文支持、语料频率和已有覆盖度；它不是研究成功概率，也不是真实研究空白概率。
+其余仅由“方法 × 问题”笛卡尔积产生的空格标记为低证据。它们不会进入推荐候选计数，但用户可以显式选择“探索性核验”；该路径会要求 Discover 先验证机制兼容性与相似工作，证据不足时只能返回 `needs_more_evidence`。`candidate_score` 是“外部核验优先级”，综合显式局限、同篇共现、跨论文支持、语料频率和已有覆盖度；它不是研究成功概率，也不是真实研究空白概率。
 
 ## Ollama 配置
 
@@ -68,6 +68,10 @@ GAP_EXTRACTOR_TEMPERATURE=0.01
 GAP_EXTRACTOR_TOP_P=1
 GAP_EXTRACTOR_REPEAT_PENALTY=1.05
 GAP_EXTRACTOR_SEED=42
+
+# Discover 查询扩展、工作区语义检索与机会综合；真实值只写 backend/.env，禁止提交
+DEEPSEEK_API_KEY=
+SILICONFLOW_API_KEY=
 ```
 
 当 FastAPI/Celery 在 Docker 中而 Ollama 运行在宿主机时，将地址改为：
@@ -112,8 +116,12 @@ npm run dev
 2. 点击“抽取已解析论文”。重复提交会按论文、输入哈希、模型名和 Prompt 版本复用有效结果。
 3. 在任务页面确认批处理完成；无效结果会保留错误，但不会进入棋盘。
 4. 点击“重建棋盘”。
-5. 对有证据基础的推荐候选格点击“交给 Discover 核验”；低证据空格只保留观察。
+5. 对有证据基础的推荐候选格点击“交给 Discover 核验”；低证据格如确有探索价值，可在风险确认后点击“探索性核验”。
 6. 在 Discover 页面审核相似工作、外部候选、证据与最终研究机会。
+
+Discover 的外部检索按查询隔离失败：单个 Semantic Scholar 查询出现 `429/502/504` 时，已经成功返回的论文会被保留，阶段标记为 `succeeded_partial`；只有全部查询失败才标记为 `failed`。前端阶段条会显示每个阶段的真实状态及失败/部分成功原因。
+
+外部论文核验支持在 `waiting_for_user / external_selection` 阶段勾选多篇候选并一次提交。提交后任务立即进入全文核验阶段，其他候选操作会被锁定；任务完成或保存后也不能在旧运行上继续导入。批量任务允许部分候选下载或解析失败，只要至少一篇论文完成全文解析、知识抽取和向量索引，Discover 就会携带成功全文继续综合，并保留失败候选的状态供人工查看。
 
 ## API
 
@@ -121,7 +129,7 @@ npm run dev
 - `GET /api/v1/workspaces/{workspace_id}/gap/annotations`：查看有效与隔离标注。
 - `POST /api/v1/workspaces/{workspace_id}/gap/board/rebuild`：重建版本化棋盘。
 - `GET /api/v1/workspaces/{workspace_id}/gap/board`：读取最新棋盘。
-- `POST /api/v1/workspaces/{workspace_id}/gap/candidates/discover`：把候选格交给 Discover。
+- `POST /api/v1/workspaces/{workspace_id}/gap/candidates/discover`：把候选格交给 Discover。低证据格必须显式传入 `exploratory: true`。
 
 ## 边界与后续优化
 

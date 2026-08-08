@@ -27,15 +27,18 @@ import { BulbOutlined, CloseCircleOutlined, DeleteOutlined, PlusOutlined, Reload
 import { useParams, useSearchParams } from "react-router-dom";
 import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
 import { OpportunityEvidenceViewer } from "../components/EvidenceViewer";
-import { currentRunStage, currentRunStatus, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, TERMINAL_RUN_STATUSES } from "../state/discoverState";
+import { getStatusMeta } from "../components/common/StatusBadge";
+import { currentRunStage, currentRunStatus, DISCOVER_STAGE_LABELS, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, stageSummaryMessage, stageSummaryStatus, TERMINAL_RUN_STATUSES } from "../state/discoverState";
+import { canSelectExternalCandidate, externalCandidateActionLabel, externalSelectionIsOpen } from "../state/externalSelection";
+import { discoverStageLabel, evidenceLevelDisplayLabel, evidenceRelationLabel, evidenceSourceScopeLabel, gateMessageLabel, localizedGeneratedText, opportunityStatusLabel, verificationStatusLabel as verificationDisplayLabel } from "../state/discoverLabels";
 
 const { Text, Title, Paragraph } = Typography;
 
 function errorMessage(error: unknown): string {
   const response = error as { response?: { status?: number; data?: { detail?: { message?: string; error?: string } } } };
   const detail = response.response?.data?.detail;
-  if (response.response?.status === 409) return detail?.message || "This item changed elsewhere. Refresh and try again.";
-  return detail?.message || (error as Error).message || "Request failed";
+  if (response.response?.status === 409) return detail?.message || "该内容已在其他位置发生变化，请刷新后重试。";
+  return detail?.message || (error as Error).message || "请求失败";
 }
 
 function statusColor(status: string): string {
@@ -45,36 +48,33 @@ function statusColor(status: string): string {
   return "blue";
 }
 
-function externalSearchHasNoResults(run: DiscoverRun | null): boolean {
-  const rawSummary = run?.stage_summaries?.external_search;
-  if (!rawSummary || typeof rawSummary !== "object" || Array.isArray(rawSummary)) return false;
-  const summary = rawSummary as { status?: unknown; candidate_count?: unknown };
-  if (summary.status === "failed" || summary.status === "succeeded_empty") return true;
-  return summary.status === "succeeded" && Number(summary.candidate_count ?? 0) === 0;
-}
-
 function verificationStatusLabel(status: string): string {
   switch (status) {
-    case "selected": return "Selected · starting verification";
-    case "imported_pending_parse": return "PDF downloaded · pipeline running";
-    case "verified": return "Full text verified";
-    case "no_pdf": return "No PDF available";
-    case "import_failed": return "PDF download failed";
-    case "verification_failed": return "Full-text verification failed";
-    default: return "Not selected";
+    case "selected": return "已选择，正在启动核验";
+    case "imported_pending_parse": return "PDF 已下载，解析流程运行中";
+    case "verified": return "全文核验完成";
+    case "no_pdf": return "没有可用 PDF";
+    case "import_failed": return "PDF 下载失败";
+    case "verification_failed": return "全文核验失败";
+    default: return "未选择";
   }
 }
 
-function verificationActionLabel(status: string): string {
-  if (status === "selected") return "Starting...";
-  if (status === "imported_pending_parse") return "Processing...";
-  if (status === "verified") return "Verified";
-  if (["no_pdf", "import_failed", "verification_failed"].includes(status)) return "Retry verification";
-  return "Import and verify";
+function evidenceLevelLabel(level: string): string {
+  if (level === "full_text") return "全文证据";
+  if (level === "metadata_only") return "仅有元数据";
+  return level;
 }
 
-function verificationActionDisabled(status: string): boolean {
-  return ["selected", "imported_pending_parse", "verified"].includes(status);
+function externalRoleLabel(role: string): string {
+  switch (role) {
+    case "similar": return "相似工作";
+    case "overlap": return "部分重合";
+    case "qualifies": return "限定／反证线索";
+    case "contradicts": return "可能反驳";
+    case "supporting": return "可能支持";
+    default: return "关系未确定";
+  }
 }
 
 function gateDetails(sourcePayload: Record<string, unknown>): { verified: boolean; confirmable: boolean; blockingMissing: string[]; warnings: string[]; missing: string[]; reason?: string } | null {
@@ -123,6 +123,7 @@ export default function DiscoverPage() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [selectedExternalCandidateIds, setSelectedExternalCandidateIds] = useState<string[]>([]);
   const selectedRunId = searchParams.get("run") ?? runId ?? null;
   const selectedOpportunityId = searchParams.get("opportunity") ?? opportunityId ?? null;
   const selectedRun = useMemo(() => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null, [runs, selectedRunId]);
@@ -155,7 +156,7 @@ export default function DiscoverPage() {
       }
       if (current) mergeDetail(await discoverApi.getRun(workspaceId, current.id));
     } catch (error) {
-      message.error(`Failed to load Discover: ${errorMessage(error)}`);
+      message.error(`加载研究机会发现任务失败：${errorMessage(error)}`);
     } finally {
       setLoading(false);
     }
@@ -164,12 +165,17 @@ export default function DiscoverPage() {
   useEffect(() => { void load(); }, [load]);
 
   const currentStatus = currentRunStatus(runDetail, selectedRun);
+  const currentStage = currentRunStage(runDetail, selectedRun);
   useEffect(() => {
     const interval = pollingInterval(currentStatus);
     if (!interval) return undefined;
     const timer = window.setInterval(() => { void load(); }, interval);
     return () => window.clearInterval(timer);
   }, [currentStatus, load]);
+
+  useEffect(() => {
+    setSelectedExternalCandidateIds([]);
+  }, [selectedRunId, currentStatus, currentStage]);
 
   useEffect(() => {
     const claimText = searchParams.get("claim_text");
@@ -201,21 +207,21 @@ export default function DiscoverPage() {
         scope: { year_from: values.year_from ? Number(values.year_from) : undefined, year_to: values.year_to ? Number(values.year_to) : undefined, open_access_preferred: Boolean(values.open_access_preferred) },
         config: { max_opportunities: Number(values.max_opportunities || 3), top_k: 10, include_counter_evidence: true, use_reranker: true, use_judge: true },
       });
-      message.success(`Discover run started (${response.run_id.slice(0, 8)})`);
+      message.success(`研究机会发现任务已启动（${response.run_id.slice(0, 8)}）`);
       setRunModalOpen(false);
       form.resetFields();
       const next = new URLSearchParams(searchParams);
       next.delete("claim_item_id"); next.delete("claim_text"); next.delete("source_paper_id"); next.set("run", response.run_id);
       setSearchParams(next);
       await load();
-    } catch (error) { message.error(`Could not start Discover: ${errorMessage(error)}`); }
+    } catch (error) { message.error(`无法启动研究机会发现任务：${errorMessage(error)}`); }
     finally { setSubmitting(false); }
   };
 
   const openOpportunity = async (opportunityId: string) => {
     if (!workspaceId) return;
     try { setSelectedOpportunity(await discoverApi.getOpportunity(workspaceId, opportunityId)); }
-    catch (error) { message.error(`Failed to load opportunity: ${errorMessage(error)}`); }
+    catch (error) { message.error(`加载研究机会候选失败：${errorMessage(error)}`); }
   };
 
   useEffect(() => {
@@ -237,9 +243,9 @@ export default function DiscoverPage() {
       if (decisionAction === "reject") await discoverApi.reject(workspaceId, item.id, values.note);
       if (decisionAction === "defer") await discoverApi.defer(workspaceId, item.id, values.note, values.defer_condition);
       setDecisionModalOpen(false);
-      message.success(`Opportunity ${decisionAction}ed`);
+      message.success(decisionAction === "confirm" ? "研究机会已确认" : decisionAction === "reject" ? "研究机会已驳回" : "研究机会已暂缓");
       await openOpportunity(item.id); await load();
-    } catch (error) { message.error(`Action failed: ${errorMessage(error)}`); }
+    } catch (error) { message.error(`操作失败：${errorMessage(error)}`); }
     finally { setActionLoading(false); }
   };
 
@@ -251,41 +257,65 @@ export default function DiscoverPage() {
       const { note, ...changes } = values;
       await discoverApi.editConfirm(workspaceId, item.id, { base_version_id: selectedOpportunity.current_version.id, changes, note: String(note || "") || undefined });
       setEditModalOpen(false);
-      message.success("Opportunity edited and confirmed");
+      message.success("研究机会已编辑并确认");
       await openOpportunity(item.id); await load();
-    } catch (error) { message.error(`Edit failed: ${errorMessage(error)}`); }
+    } catch (error) { message.error(`编辑失败：${errorMessage(error)}`); }
     finally { setActionLoading(false); }
   };
 
   const convert = async () => {
     if (!workspaceId || !selectedOpportunity) return;
     setActionLoading(true);
-    try { await discoverApi.convert(workspaceId, selectedOpportunity.opportunity.id); message.success("Research plan created"); await openOpportunity(selectedOpportunity.opportunity.id); await load(); }
-    catch (error) { message.error(`Plan generation failed: ${errorMessage(error)}`); }
+    try { await discoverApi.convert(workspaceId, selectedOpportunity.opportunity.id); message.success("研究计划已生成"); await openOpportunity(selectedOpportunity.opportunity.id); await load(); }
+    catch (error) { message.error(`研究计划生成失败：${errorMessage(error)}`); }
     finally { setActionLoading(false); }
   };
 
+  const submitExternalSelection = async (candidateIds: string[]) => {
+    if (!workspaceId || !runDetail || candidateIds.length === 0) return;
+    if (!externalSelectionIsOpen(currentStatus, currentStage)) {
+      message.warning("当前任务已不处于外部论文选择阶段，请刷新页面查看最新进度。");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await discoverApi.selectExternal(workspaceId, runDetail.id, candidateIds);
+      setSelectedExternalCandidateIds([]);
+      message.success(`已提交 ${candidateIds.length} 篇论文，正在下载并执行全文核验`);
+      await load();
+    } catch (error) {
+      message.error(`外部论文提交失败：${errorMessage(error)}`);
+      await load();
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const selectExternal = async (candidate: DiscoverExternalCandidate) => {
-    if (!workspaceId || !runDetail) return;
-    try { await discoverApi.selectExternal(workspaceId, runDetail.id, [candidate.id]); message.success("Paper selected; Discover is waiting for full-text processing"); await load(); }
-    catch (error) { message.error(`Selection failed: ${errorMessage(error)}`); }
+    await submitExternalSelection([candidate.id]);
+  };
+
+  const toggleExternalCandidate = (candidateId: string, checked: boolean) => {
+    setSelectedExternalCandidateIds((current) => checked
+      ? Array.from(new Set([...current, candidateId]))
+      : current.filter((id) => id !== candidateId));
   };
 
   const skipExternalSelection = () => {
     if (!workspaceId || !runDetail) return;
     modal.confirm({
-      title: "Skip external paper verification?",
-      content: "Discover will continue using only evidence already available in this workspace. External candidates will not be imported or parsed, so novelty verification may be less complete.",
-      okText: "Skip and continue",
-      cancelText: "Keep selecting",
+      title: "是否跳过外部论文核验？",
+      content: "系统将只使用当前工作区已有的证据继续运行。外部候选论文不会被导入或解析，因此对创新性和已有工作的核验可能不够完整。",
+      okText: "跳过并继续",
+      cancelText: "继续选择",
       onOk: async () => {
         setActionLoading(true);
         try {
           await discoverApi.skipExternalSelection(workspaceId, runDetail.id);
-          message.success("External selection skipped; Discover is continuing with workspace knowledge");
+          message.success("已跳过外部论文选择，系统将使用工作区现有证据继续运行");
           await load();
         } catch (error) {
-          message.error(`Could not skip selection: ${errorMessage(error)}`);
+          message.error(`无法跳过外部论文选择：${errorMessage(error)}`);
         } finally {
           setActionLoading(false);
         }
@@ -295,8 +325,8 @@ export default function DiscoverPage() {
 
   const cancelRun = async () => {
     if (!workspaceId || !selectedRun) return;
-    try { await discoverApi.cancelRun(workspaceId, selectedRun.id); message.success("Discover run cancelled"); await load(); }
-    catch (error) { message.error(`Cancel failed: ${errorMessage(error)}`); }
+    try { await discoverApi.cancelRun(workspaceId, selectedRun.id); message.success("研究机会发现任务已取消"); await load(); }
+    catch (error) { message.error(`取消失败：${errorMessage(error)}`); }
   };
   const deleteRun = async (run: DiscoverRun) => {
     if (!workspaceId) return;
@@ -308,71 +338,143 @@ export default function DiscoverPage() {
         setSearchParams(next, { replace: true });
         setRunDetail(null);
       }
-      message.success("Discover run deleted from history");
+      message.success("该任务已从运行历史中删除");
       await load();
     } catch (error) {
-      message.error(`Delete failed: ${errorMessage(error)}`);
+      message.error(`删除失败：${errorMessage(error)}`);
     }
   };
 
-  if (!workspaceId) return <Empty description="Workspace not found" />;
-  const stage = currentRunStage(runDetail, selectedRun);
+  if (!workspaceId) return <Empty description="未找到课题空间" />;
+  const stage = currentStage;
   const stagePosition = stageIndex(stage);
   const activeRun = runDetail?.id === selectedRun?.id ? runDetail : selectedRun;
-  const externalSearchError = externalSearchHasNoResults(activeRun);
+  const externalSelectionOpen = externalSelectionIsOpen(currentStatus, stage);
+  const stageIssues = DISCOVER_STAGES.flatMap((item) => {
+    const status = stageSummaryStatus(activeRun?.stage_summaries, item);
+    const detail = stageSummaryMessage(activeRun?.stage_summaries, item);
+    return status && detail && ["failed", "succeeded_partial", "succeeded_empty"].includes(status)
+      ? [{ stage: item, status, detail }]
+      : [];
+  });
   const selectedOpportunities = opportunities.filter((item) => !selectedRun || item.discover_run_id === selectedRun.id);
 
   return (
     <div style={{ padding: screens.md ? 24 : 12 }}>
       <Space direction="vertical" size={20} style={{ width: "100%" }}>
         <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-          <div><Title level={2} style={{ margin: 0 }}>Discover Workbench</Title><Text type="secondary">Evidence-grounded research opportunity discovery</Text></div>
-          <Space wrap><Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>Refresh</Button>{selectedRun && !TERMINAL_RUN_STATUSES.has(selectedRun.status) && <Button danger icon={<CloseCircleOutlined />} onClick={() => void cancelRun()}>Cancel Run</Button>}<Button type="primary" icon={<PlusOutlined />} onClick={() => setRunModalOpen(true)}>New Discover Run</Button></Space>
+          <div><Title level={2} style={{ margin: 0 }}>研究机会发现工作台</Title><Text type="secondary">基于证据的研究机会发现与核验</Text></div>
+          <Space wrap><Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新</Button>{selectedRun && !TERMINAL_RUN_STATUSES.has(selectedRun.status) && <Button danger icon={<CloseCircleOutlined />} onClick={() => void cancelRun()}>取消本次运行</Button>}<Button type="primary" icon={<PlusOutlined />} onClick={() => setRunModalOpen(true)}>新建发现任务</Button></Space>
         </Space>
         <div style={{ display: "grid", gridTemplateColumns: screens.md ? "minmax(230px, 0.28fr) minmax(0, 0.72fr)" : "minmax(0, 1fr)", gap: 20 }}>
-          <Card title={`Run history (${runs.length})`} bodyStyle={{ padding: 0 }}>
-            <List dataSource={runs} locale={{ emptyText: "No Discover runs yet" }} renderItem={(run) => <List.Item onClick={() => openRun(run.id)} actions={[<Popconfirm key="delete" title="Delete this Discover run?" description="The run will be hidden from history. Workspace papers, PDFs, opportunities, and plans will be preserved." okText="Delete" cancelText="Cancel" okButtonProps={{ danger: true }} onConfirm={() => void deleteRun(run)}><Button type="text" danger disabled={!TERMINAL_RUN_STATUSES.has(run.status)} title={TERMINAL_RUN_STATUSES.has(run.status) ? "Delete run" : "Cancel the run before deleting"} aria-label={`Delete ${run.input_topic || "Discover run"}`} icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} /></Popconfirm>]} style={{ cursor: "pointer", padding: "14px 16px", background: selectedRun?.id === run.id ? "#f0f5ff" : undefined }}><List.Item.Meta avatar={<BulbOutlined />} title={<Text ellipsis>{run.input_topic || "Claim-driven discovery"}</Text>} description={<Space wrap><Tag color={statusColor(run.status)}>{run.status}</Tag><Text type="secondary">{Math.round(run.progress * 100)}%</Text><Text type="secondary">{run.stage.replaceAll("_", " ")}</Text></Space>} /></List.Item>} />
+          <Card title={`运行历史（${runs.length}）`} bodyStyle={{ padding: 0 }}>
+            <List dataSource={runs} locale={{ emptyText: "暂无发现任务" }} renderItem={(run) => <List.Item onClick={() => openRun(run.id)} actions={[<Popconfirm key="delete" title="删除这次发现任务？" description="该任务将从运行历史中隐藏；工作区论文、PDF、研究机会和研究计划均会保留。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteRun(run)}><Button type="text" danger disabled={!TERMINAL_RUN_STATUSES.has(run.status)} title={TERMINAL_RUN_STATUSES.has(run.status) ? "删除任务" : "请先取消任务再删除"} aria-label={`删除 ${run.input_topic || "发现任务"}`} icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} /></Popconfirm>]} style={{ cursor: "pointer", padding: "14px 16px", background: selectedRun?.id === run.id ? "#f0f5ff" : undefined }}><List.Item.Meta avatar={<BulbOutlined />} title={<Text ellipsis>{run.input_topic || "基于论断的研究机会发现"}</Text>} description={<Space wrap><Tag color={statusColor(run.status)}>{getStatusMeta(run.status).label}</Tag><Text type="secondary">{Math.round(run.progress * 100)}%</Text><Text type="secondary">{discoverStageLabel(run.stage)}</Text></Space>} /></List.Item>} />
           </Card>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Card title="Run overview" extra={selectedRun && <Space wrap><Tag color={statusColor(selectedRun.status)}>{selectedRun.status}</Tag>{selectedRun.status === "waiting_for_fulltext" && <Tag color="orange">Waiting for PDF pipeline</Tag>}</Space>}>
-              {!selectedRun ? <Empty description="Start a run to inspect its progress and candidates" /> : <>
-                <Descriptions size="small" column={{ xs: 1, sm: 2 }}><Descriptions.Item label="Topic">{selectedRun.input_topic || "Claim-driven"}</Descriptions.Item><Descriptions.Item label="Verification">{selectedRun.verification_status}</Descriptions.Item><Descriptions.Item label="Stage">{stage || "Unknown"}</Descriptions.Item><Descriptions.Item label="Selected opportunities">{selectedOpportunityCount(opportunities, selectedRun.id)}</Descriptions.Item></Descriptions>
+            <Card title="运行概览" extra={selectedRun && <Space wrap><Tag color={statusColor(selectedRun.status)}>{getStatusMeta(selectedRun.status).label}</Tag>{selectedRun.status === "waiting_for_fulltext" && <Tag color="orange">等待 PDF 流水线</Tag>}</Space>}>
+              {!selectedRun ? <Empty description="新建任务后可在这里查看进度和候选结果" /> : <>
+                <Descriptions size="small" column={{ xs: 1, sm: 2 }}><Descriptions.Item label="研究主题">{selectedRun.input_topic || "基于论断的发现任务"}</Descriptions.Item><Descriptions.Item label="核验状态">{verificationDisplayLabel(selectedRun.verification_status)}</Descriptions.Item><Descriptions.Item label="当前阶段">{discoverStageLabel(stage)}</Descriptions.Item><Descriptions.Item label="研究机会候选数">{selectedOpportunityCount(opportunities, selectedRun.id)}</Descriptions.Item></Descriptions>
                 <Progress percent={Math.round((runDetail?.id === selectedRun.id ? runDetail.progress : selectedRun.progress) * 100)} status={selectedRun.status === "failed" ? "exception" : undefined} />
-                {stagePosition < 0 ? <Tag color="red">Unknown stage: {stage || "missing"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item) => { const label = item.replaceAll("_", " "); const failed = item === "external_search" && externalSearchError; return { status: failed ? "error" : undefined, title: <Tooltip title={failed ? "No papers found or external search failed" : label}><span>{label}</span></Tooltip> }; })} />}
-                {selectedRun.status === "waiting_for_fulltext" && <Paragraph type="warning" style={{ marginTop: 16 }}>The selected paper is being parsed, indexed, and checked for EvidenceSpan. Synthesis is paused until the pipeline is ready.</Paragraph>}
-                {selectedRun.status === "waiting_for_user" && stage === "external_selection" && <Alert style={{ marginTop: 16 }} type="info" showIcon message="External papers are ready for review" description={<Space direction="vertical" size={8}><Text>Select a paper for full-text verification, or continue with evidence already available in this workspace.</Text><Button onClick={skipExternalSelection} loading={actionLoading}>Skip external selection and continue</Button></Space>} />}
+                {stagePosition < 0 ? <Tag color="red">未知阶段：{stage || "未提供"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item, index) => { const summaryStatus = stageSummaryStatus(activeRun?.stage_summaries, item); const detail = stageSummaryMessage(activeRun?.stage_summaries, item); const failed = summaryStatus === "failed"; const partial = summaryStatus === "succeeded_partial" || summaryStatus === "succeeded_empty"; const visualStatus = failed ? "error" : index < stagePosition || (index === stagePosition && TERMINAL_RUN_STATUSES.has(activeRun?.status || "")) ? "finish" : index === stagePosition ? "process" : "wait"; return { status: visualStatus as "error" | "finish" | "process" | "wait", title: <Tooltip title={detail || DISCOVER_STAGE_LABELS[item]}><span style={partial ? { color: "#d48806" } : undefined}>{DISCOVER_STAGE_LABELS[item]}{partial ? " ⚠" : ""}</span></Tooltip> }; })} />}
+                {stageIssues.length > 0 && <Alert style={{ marginTop: 16 }} type={stageIssues.some((item) => item.status === "failed") ? "error" : "warning"} showIcon message="部分核验阶段未完整完成" description={<Space direction="vertical" size={2}>{stageIssues.map((item) => <Text key={item.stage}><Text strong>{DISCOVER_STAGE_LABELS[item.stage]}：</Text>{item.detail}</Text>)}</Space>} />}
+                {selectedRun.status === "waiting_for_fulltext" && <Paragraph type="warning" style={{ marginTop: 16 }}>已选论文正在进行 PDF 解析、知识抽取和向量索引。流水线完成前，候选综合将暂停。</Paragraph>}
+                {externalSelectionOpen && <Alert style={{ marginTop: 16 }} type="info" showIcon message="外部候选论文已准备好" description={<Space direction="vertical" size={8}><Text>可以勾选一篇或多篇论文统一导入并执行全文核验，也可以只使用当前工作区已有证据继续。</Text><Button onClick={skipExternalSelection} loading={actionLoading}>跳过外部论文核验并继续</Button></Space>} />}
                 {selectedRun.error_message && <Paragraph type="danger" style={{ marginTop: 16 }}>{selectedRun.error_message}</Paragraph>}
               </>}
             </Card>
-            <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
-      {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(displayStatus)}>{displayStatus}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>; }} />}
+            <Card title={`本次运行的研究机会候选（${selectedOpportunities.length}）`}>
+      {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "完成全文核验后将生成候选结果" : "候选综合完成后将在这里显示结果"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>查看详情</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{localizedGeneratedText(item.title)}</Text><Tag color={statusColor(displayStatus)}>{opportunityStatusLabel(displayStatus)}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{localizedGeneratedText(item.summary)}</Paragraph>} /><Tag>智能体置信度 {Math.round(item.confidence * 100)}%</Tag></List.Item>; }} />}
             </Card>
-            {runDetail?.external_candidates?.length ? <Card title="External candidates for verification" extra={selectedRun?.status === "waiting_for_user" && stage === "external_selection" ? <Button size="small" onClick={skipExternalSelection} loading={actionLoading}>Skip selection</Button> : null}><List size="small" dataSource={runDetail.external_candidates} renderItem={(candidate) => <List.Item actions={[<Button key="select" size="small" onClick={() => void selectExternal(candidate)} disabled={verificationActionDisabled(candidate.verification_status)}>{verificationActionLabel(candidate.verification_status)}</Button>]}><List.Item.Meta title={`${candidate.rank}. ${candidate.title}`} description={<Space wrap><Tag>{candidate.year || "Year unknown"}</Tag><Tag>{candidate.evidence_level}</Tag><Tag color={candidate.verification_status === "verified" ? "green" : candidate.verification_status === "verification_failed" ? "red" : "processing"}>{verificationStatusLabel(candidate.verification_status)}</Tag><Tag>{candidate.role}</Tag></Space>} /></List.Item>} /></Card> : null}
+            {runDetail?.external_candidates?.length ? (
+              <Card
+                title="待核验的外部候选论文"
+                extra={externalSelectionOpen ? (
+                  <Space wrap>
+                    <Text type="secondary">已选 {selectedExternalCandidateIds.length} 篇</Text>
+                    <Button
+                      type="primary"
+                      size="small"
+                      disabled={selectedExternalCandidateIds.length === 0}
+                      loading={actionLoading}
+                      onClick={() => void submitExternalSelection(selectedExternalCandidateIds)}
+                    >
+                      导入并核验所选论文
+                    </Button>
+                    <Button size="small" onClick={skipExternalSelection} loading={actionLoading}>跳过选择</Button>
+                  </Space>
+                ) : <Text type="secondary">当前阶段不可再选择论文</Text>}
+              >
+                <List
+                  size="small"
+                  dataSource={runDetail.external_candidates}
+                  renderItem={(candidate) => {
+                    const selectable = canSelectExternalCandidate(currentStatus, stage, candidate.verification_status);
+                    return (
+                      <List.Item
+                        actions={[
+                          <Button
+                            key="select"
+                            size="small"
+                            onClick={() => void selectExternal(candidate)}
+                            disabled={!selectable || actionLoading || selectedExternalCandidateIds.length > 0}
+                            title={selectedExternalCandidateIds.length > 0 ? "已进入批量选择，请使用上方按钮统一提交" : undefined}
+                          >
+                            {externalCandidateActionLabel(currentStatus, stage, candidate.verification_status)}
+                          </Button>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          avatar={(
+                            <Checkbox
+                              checked={selectedExternalCandidateIds.includes(candidate.id)}
+                              disabled={!selectable || actionLoading}
+                              onChange={(event) => toggleExternalCandidate(candidate.id, event.target.checked)}
+                              aria-label={`选择外部论文 ${candidate.title}`}
+                            />
+                          )}
+                          title={`${candidate.rank}. ${candidate.title}`}
+                          description={(
+                            <Space wrap>
+                              <Tag>{candidate.year || "年份未知"}</Tag>
+                              <Tag>{evidenceLevelLabel(candidate.evidence_level)}</Tag>
+                              <Tag color={candidate.verification_status === "verified" ? "green" : ["verification_failed", "import_failed", "no_pdf"].includes(candidate.verification_status) ? "red" : "processing"}>
+                                {verificationStatusLabel(candidate.verification_status)}
+                              </Tag>
+                              <Tag>{externalRoleLabel(candidate.role)}</Tag>
+                            </Space>
+                          )}
+                        />
+                      </List.Item>
+                    );
+                  }}
+                />
+              </Card>
+            ) : null}
           </Space>
         </div>
       </Space>
 
-      <Modal title="Run Discover" open={runModalOpen} onCancel={() => setRunModalOpen(false)} onOk={() => void form.submit()} okText="Run Discover" confirmLoading={submitting} width={640}>
+      <Modal title="新建研究机会发现任务" open={runModalOpen} onCancel={() => setRunModalOpen(false)} onOk={() => void form.submit()} okText="开始运行" cancelText="取消" confirmLoading={submitting} width={640}>
         <Form form={form} layout="vertical" onFinish={(values) => void submitRun(values)} initialValues={{ max_opportunities: 3, topic: searchParams.get("claim_text") || undefined }}>
-          {searchParams.get("claim_item_id") && <AlertText text={`Seed Claim: ${searchParams.get("claim_text") || "selected claim"}. Its source paper will be excluded from counter evidence.`} />}
-          <Form.Item name="topic" label="Research topic or question" rules={[{ required: true, message: "Enter a topic or question" }]}><Input.TextArea rows={4} placeholder="e.g. Robust self-interpretable GNNs under distribution shift" /></Form.Item>
-          <Form.Item name="keywords" label="Keywords"><Input placeholder="Separate keywords with commas" /></Form.Item>
-          <Space wrap style={{ width: "100%" }}><Form.Item name="year_from" label="From"><Input type="number" placeholder="2020" /></Form.Item><Form.Item name="year_to" label="To"><Input type="number" placeholder="2026" /></Form.Item><Form.Item name="max_opportunities" label="Max candidates"><Select options={[1, 2, 3, 5].map((value) => ({ value, label: String(value) }))} /></Form.Item></Space>
-          <Form.Item name="constraints" label="Constraints"><Input.TextArea rows={3} placeholder="Datasets, compute, time, or domain constraints" /></Form.Item>
-          <Form.Item name="open_access_preferred" valuePropName="checked"><Checkbox>Prefer open-access papers for verification</Checkbox></Form.Item>
-          <Text type="secondary">The run is asynchronous. Metadata-only evidence never counts as full-text support.</Text>
+          {searchParams.get("claim_item_id") && <AlertText text={`种子论断：${searchParams.get("claim_text") || "已选择的论断"}。其来源论文将不会被当作反证。`} />}
+          <Form.Item name="topic" label="研究主题或问题" rules={[{ required: true, message: "请输入研究主题或问题" }]}><Input.TextArea rows={4} placeholder="例如：分布偏移条件下稳健的自解释图神经网络" /></Form.Item>
+          <Form.Item name="keywords" label="关键词"><Input placeholder="多个关键词请用逗号分隔" /></Form.Item>
+          <Space wrap style={{ width: "100%" }}><Form.Item name="year_from" label="起始年份"><Input type="number" placeholder="2020" /></Form.Item><Form.Item name="year_to" label="截止年份"><Input type="number" placeholder="2026" /></Form.Item><Form.Item name="max_opportunities" label="最大候选数"><Select options={[1, 2, 3, 5].map((value) => ({ value, label: String(value) }))} /></Form.Item></Space>
+          <Form.Item name="constraints" label="研究约束"><Input.TextArea rows={3} placeholder="数据集、算力、时间或领域约束" /></Form.Item>
+          <Form.Item name="open_access_preferred" valuePropName="checked"><Checkbox>优先选择可开放获取的论文进行核验</Checkbox></Form.Item>
+          <Text type="secondary">任务将在后台异步运行；仅有元数据的论文不能计为全文支持证据。</Text>
         </Form>
       </Modal>
 
-      <Drawer title={selectedOpportunity?.opportunity.title} open={selectedOpportunity !== null} width="min(760px, 100vw)" onClose={() => setSelectedOpportunity(null)}>
+      <Drawer title={localizedGeneratedText(selectedOpportunity?.opportunity.title)} open={selectedOpportunity !== null} width="min(760px, 100vw)" onClose={() => setSelectedOpportunity(null)}>
         {selectedOpportunity && <OpportunityPanel workspaceId={workspaceId} detail={selectedOpportunity} loading={actionLoading} onAction={openDecision} onEdit={() => { const version = selectedOpportunity.current_version; if (version) { editForm.setFieldsValue({ ...version, note: "" }); setEditModalOpen(true); } }} onConvert={() => void convert()} />}
       </Drawer>
 
-      <Modal title={`${decisionAction[0].toUpperCase()}${decisionAction.slice(1)} opportunity`} open={decisionModalOpen} confirmLoading={actionLoading} onCancel={() => setDecisionModalOpen(false)} onOk={() => void decisionForm.submit()}>
-        <Form form={decisionForm} layout="vertical" onFinish={(values) => void submitDecision(values)}><Form.Item name="note" label={decisionAction === "confirm" ? "Review note" : "Reason"}><Input.TextArea rows={3} placeholder={decisionAction === "confirm" ? "Optional note" : "Explain this decision"} /></Form.Item>{decisionAction === "defer" && <Form.Item name="defer_condition" label="Review condition" rules={[{ required: true, message: "Describe when this should be reviewed again" }]}><Input.TextArea rows={3} placeholder="e.g. Revisit after importing two more full-text papers" /></Form.Item>}</Form>
+      <Modal title={decisionAction === "confirm" ? "确认研究机会" : decisionAction === "reject" ? "驳回研究机会" : "暂缓研究机会"} open={decisionModalOpen} confirmLoading={actionLoading} okText="提交" cancelText="取消" onCancel={() => setDecisionModalOpen(false)} onOk={() => void decisionForm.submit()}>
+        <Form form={decisionForm} layout="vertical" onFinish={(values) => void submitDecision(values)}><Form.Item name="note" label={decisionAction === "confirm" ? "审阅备注" : "处理原因"}><Input.TextArea rows={3} placeholder={decisionAction === "confirm" ? "可选备注" : "请说明本次决定的原因"} /></Form.Item>{decisionAction === "defer" && <Form.Item name="defer_condition" label="重新审阅条件" rules={[{ required: true, message: "请说明何时应再次审阅" }]}><Input.TextArea rows={3} placeholder="例如：再导入两篇全文论文后重新审阅" /></Form.Item>}</Form>
       </Modal>
-      <Modal title="Edit & Confirm opportunity" open={editModalOpen} width={720} confirmLoading={actionLoading} onCancel={() => setEditModalOpen(false)} onOk={() => void editForm.submit()}>
-        <Form form={editForm} layout="vertical" onFinish={(values) => void submitEditConfirm(values)}><Form.Item name="title" label="Title" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="problem_statement" label="Problem statement" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item><Form.Item name="research_scope" label="Research scope"><Input.TextArea rows={2} /></Form.Item><Form.Item name="why_existing_work_is_insufficient" label="Why existing work is insufficient"><Input.TextArea rows={3} /></Form.Item><Form.Item name="candidate_research_question" label="Research question"><Input.TextArea rows={2} /></Form.Item><Form.Item name="candidate_hypothesis" label="Falsifiable hypothesis"><Input.TextArea rows={2} /></Form.Item><Form.Item name="note" label="Edit note"><Input.TextArea rows={2} /></Form.Item></Form>
+      <Modal title="编辑并确认研究机会" open={editModalOpen} width={720} confirmLoading={actionLoading} okText="保存并确认" cancelText="取消" onCancel={() => setEditModalOpen(false)} onOk={() => void editForm.submit()}>
+        <Form form={editForm} layout="vertical" onFinish={(values) => void submitEditConfirm(values)}><Form.Item name="title" label="标题" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="problem_statement" label="问题陈述" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item><Form.Item name="research_scope" label="研究范围"><Input.TextArea rows={2} /></Form.Item><Form.Item name="why_existing_work_is_insufficient" label="现有工作为何不足"><Input.TextArea rows={3} /></Form.Item><Form.Item name="candidate_research_question" label="研究问题"><Input.TextArea rows={2} /></Form.Item><Form.Item name="candidate_hypothesis" label="可证伪假设"><Input.TextArea rows={2} /></Form.Item><Form.Item name="note" label="编辑备注"><Input.TextArea rows={2} /></Form.Item></Form>
       </Modal>
     </div>
   );
@@ -390,20 +492,20 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
   const similar = detail.evidence.filter((item) => item.relation === "similar");
   const counter = detail.evidence.filter((item) => ["contradicts", "qualifies", "overlaps", "unknown"].includes(item.relation));
   return <Space direction="vertical" style={{ width: "100%" }}>
-    <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatus(detail.opportunity)}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{version?.verification_status || "unverified"}</Tag><Tag>Coverage {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>Agent confidence {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
-    {!confirmable && <Alert type="warning" showIcon message="This opportunity cannot be confirmed yet" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{item}</List.Item>} /> : gate?.reason || "The core Evidence Gate has not been satisfied."} />}
-    {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="Confirmable with verification warnings" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{item}</List.Item>} />} /> : null}
-    <Divider orientation="left">Overview</Divider><Paragraph>{version?.problem_statement || detail.opportunity.summary}</Paragraph>
-    <Descriptions column={1} size="small"><Descriptions.Item label="Scope">{version?.research_scope || "—"}</Descriptions.Item><Descriptions.Item label="Why existing work is insufficient">{version?.why_existing_work_is_insufficient || detail.opportunity.rationale}</Descriptions.Item><Descriptions.Item label="Research question">{version?.candidate_research_question || "—"}</Descriptions.Item><Descriptions.Item label="Hypothesis">{version?.candidate_hypothesis || "—"}</Descriptions.Item></Descriptions>
-    <EvidenceGroup workspaceId={workspaceId} title={`Supporting evidence (${supporting.length})`} items={supporting} empty="No span-backed supporting evidence" />
-    <EvidenceGroup workspaceId={workspaceId} title={`Similar work (${similar.length})`} items={similar} empty="No similar work saved" />
-    <EvidenceGroup workspaceId={workspaceId} title={`Counter / qualifying evidence (${counter.length})`} items={counter} empty="No counter evidence saved" />
-    <Divider orientation="left">Validation plan</Divider><List size="small" dataSource={(version?.candidate_validation_plan?.steps as string[]) || []} renderItem={(step) => <List.Item>{step}</List.Item>} locale={{ emptyText: "No structured validation steps" }} />
-    <Divider orientation="left">Human decision</Divider><Space wrap><Button danger onClick={() => onAction("reject")} loading={loading}>Reject</Button><Button onClick={() => onAction("defer")} loading={loading}>Defer</Button><Button onClick={onEdit} loading={loading} disabled={!confirmable}>Edit & Confirm</Button><Button type="primary" onClick={() => onAction("confirm")} loading={loading} disabled={!confirmable}>Confirm</Button>{["confirmed", "edited_confirmed"].includes(detail.opportunity.status) && <Button onClick={onConvert} loading={loading}>Generate Research Plan</Button>}</Space>
-    {detail.plan && <Card size="small" title="Research Plan created"><Paragraph>{detail.plan.research_question}</Paragraph></Card>}
+    <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatusLabel(opportunityStatus(detail.opportunity))}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{verificationDisplayLabel(version?.verification_status)}</Tag><Tag>证据覆盖率 {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>智能体置信度 {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
+    {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } />}
+    {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="可以确认，但仍有核验警告" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} />} /> : null}
+    <Divider orientation="left">概述</Divider><Paragraph>{localizedGeneratedText(version?.problem_statement || detail.opportunity.summary)}</Paragraph>
+    <Descriptions column={1} size="small"><Descriptions.Item label="研究范围">{localizedGeneratedText(version?.research_scope)}</Descriptions.Item><Descriptions.Item label="现有工作为何不足">{localizedGeneratedText(version?.why_existing_work_is_insufficient || detail.opportunity.rationale)}</Descriptions.Item><Descriptions.Item label="研究问题">{localizedGeneratedText(version?.candidate_research_question)}</Descriptions.Item><Descriptions.Item label="候选假设">{localizedGeneratedText(version?.candidate_hypothesis)}</Descriptions.Item></Descriptions>
+    <EvidenceGroup workspaceId={workspaceId} title={`支持证据（${supporting.length}）`} items={supporting} empty="暂无可定位到原文的支持证据" />
+    <EvidenceGroup workspaceId={workspaceId} title={`相似工作（${similar.length}）`} items={similar} empty="暂无已保存的相似工作" />
+    <EvidenceGroup workspaceId={workspaceId} title={`反证／限定性证据（${counter.length}）`} items={counter} empty="暂无已保存的反证或限定性证据" />
+    <Divider orientation="left">验证方案</Divider><List size="small" dataSource={(version?.candidate_validation_plan?.steps as string[]) || []} renderItem={(step) => <List.Item>{localizedGeneratedText(step)}</List.Item>} locale={{ emptyText: "暂无结构化验证步骤" }} />
+    <Divider orientation="left">人工决策</Divider><Space wrap><Button danger onClick={() => onAction("reject")} loading={loading}>驳回</Button><Button onClick={() => onAction("defer")} loading={loading}>暂缓</Button><Button onClick={onEdit} loading={loading} disabled={!confirmable}>编辑并确认</Button><Button type="primary" onClick={() => onAction("confirm")} loading={loading} disabled={!confirmable}>确认</Button>{["confirmed", "edited_confirmed"].includes(detail.opportunity.status) && <Button onClick={onConvert} loading={loading}>生成研究计划</Button>}</Space>
+    {detail.plan && <Card size="small" title="已生成研究计划"><Paragraph>{detail.plan.research_question}</Paragraph></Card>}
   </Space>;
 }
 
 function EvidenceGroup({ workspaceId, title, items, empty }: { workspaceId: string; title: string; items: OpportunityDetail["evidence"]; empty: string }) {
-  return <Card size="small" title={title}><List size="small" dataSource={items} locale={{ emptyText: empty }} renderItem={(evidence) => <List.Item><Space direction="vertical" style={{ width: "100%" }}><Space wrap><Tag color={evidence.relation === "contradicts" ? "red" : evidence.relation === "supports" ? "green" : "blue"}>{evidence.relation}</Tag><Tag>{evidence.source_scope}</Tag><Tag color={evidence.evidence_level === "full_text" ? "green" : "orange"}>{evidence.evidence_level}</Tag></Space><Text>{evidence.display_excerpt || "No excerpt"}</Text><OpportunityEvidenceViewer workspaceId={workspaceId} evidence={evidence} /></Space></List.Item>} /></Card>;
+  return <Card size="small" title={title}><List size="small" dataSource={items} locale={{ emptyText: empty }} renderItem={(evidence) => <List.Item><Space direction="vertical" style={{ width: "100%" }}><Space wrap><Tag color={evidence.relation === "contradicts" ? "red" : evidence.relation === "supports" ? "green" : "blue"}>{evidenceRelationLabel(evidence.relation)}</Tag><Tag>{evidenceSourceScopeLabel(evidence.source_scope)}</Tag><Tag color={evidence.evidence_level === "full_text" ? "green" : "orange"}>{evidenceLevelDisplayLabel(evidence.evidence_level)}</Tag></Space><Text>{evidence.display_excerpt || "暂无证据摘录"}</Text><OpportunityEvidenceViewer workspaceId={workspaceId} evidence={evidence} /></Space></List.Item>} /></Card>;
 }

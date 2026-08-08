@@ -10,6 +10,7 @@ from app.domains.artifact.models import Artifact
 from app.domains.gap.markdown import compact_markdown
 from app.domains.gap.models import PaperGapAnnotation
 from app.domains.gap.normalization import canonical_axis_label
+from app.domains.gap.schemas import GapCandidateDiscoverRequest
 from app.domains.gap.service import GapService
 from app.domains.gap.validation import validate_annotation
 from app.domains.paper.models import Paper
@@ -359,3 +360,9 @@ def test_board_collapses_taxonomy_and_suppresses_cartesian_only_cells(
     )
     assert rejected.status_code == 409
     assert "low-evidence" in rejected.json()["detail"]
+    exploratory = GapCandidateDiscoverRequest(
+        method_concept_id=low_evidence[0]["method_concept_id"],
+        problem_concept_id=low_evidence[0]["problem_concept_id"],
+        exploratory=True,
+    )
+    assert exploratory.exploratory is True

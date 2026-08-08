@@ -134,12 +134,14 @@ def discover_candidate(
             status_code=409,
             detail="the selected method-problem pair is already covered",
         )
-    if not cell.get("eligible_for_discovery", False):
+    exploratory = bool(payload.exploratory)
+    if not cell.get("eligible_for_discovery", False) and not exploratory:
         raise HTTPException(
             status_code=409,
             detail=(
                 "the selected cell is only a low-evidence corpus absence; "
-                "rebuild the board with more papers or select a recommended candidate"
+                "set exploratory=true to verify it as a speculative transfer hypothesis, "
+                "or select a recommended candidate"
             ),
         )
     method_label = context["method"]["label"]
@@ -147,17 +149,29 @@ def discover_candidate(
     limitation_note = (
         f"该组合有 {len(cell['limitation_paper_ids'])} 篇论文提供显式剩余局限信号。"
         if cell["explicit_limitation"]
-        else "该组合当前仅表现为语料库中的未覆盖单元格，尚不能视为真实研究空白。"
+        else (
+            "该组合来自方法族与问题族的跨论文迁移信号，需要核验二者的机制兼容性。"
+            if cell.get("eligible_for_discovery", False)
+            else "该组合仅由棋盘横纵轴笛卡尔积产生，当前没有直接关联证据。"
+        )
     )
+    topic_prefix = "探索性核验潜在方法迁移" if exploratory else "核验候选研究空白"
     topic = (
-        f"核验候选研究空白：是否可以使用‘{method_label}’解决‘{problem_label}’？"
+        f"{topic_prefix}：是否可以使用‘{method_label}’解决‘{problem_label}’？"
         f"{limitation_note} 必须检索相似工作、外部论文和反证后再判断。"
+    )
+    exploratory_constraint = (
+        "这是低证据探索性假设。必须先验证方法机制与问题成因是否兼容，再核验是否已有相似工作；"
+        "若缺乏支持证据，只能输出 needs_more_evidence，不得包装成已确认研究空白。"
+        if exploratory
+        else None
     )
     constraints = "\n".join(
         part
         for part in [
             payload.constraints,
             "棋盘空格只表示当前语料未发现 ADDRESSES，不得直接宣称学术界无人研究。",
+            exploratory_constraint,
         ]
         if part
     )

@@ -88,12 +88,14 @@ export const gapApi = {
     workspaceId: string,
     methodConceptId: string,
     problemConceptId: string,
+    exploratory = false,
   ): Promise<{ run_id: string; task_id?: string; status: string }> {
     return (
       await apiClient.post(`/workspaces/${workspaceId}/gap/candidates/discover`, {
         method_concept_id: methodConceptId,
         problem_concept_id: problemConceptId,
         max_opportunities: 3,
+        exploratory,
       })
     ).data;
   },
