@@ -6,11 +6,31 @@ via `Base.metadata`. Add new models here as they are created.
 
 from __future__ import annotations
 
-# Phase 1a: Workspace domain
-from app.domains.workspace.models import Workspace  # noqa: F401
+from app.db.base import Base  # noqa: F401
+from app.domains.agent.models import AgentArtifact, AgentRun, AgentStep  # noqa: F401
 
 # Phase 1b: Artifact, Paper, Task, Timeline, Knowledge
 from app.domains.artifact.models import Artifact  # noqa: F401
+from app.domains.chat.models import (  # noqa: F401
+    ChatConversation,
+    ChatMessage,
+    ChatMessageEvidence,
+)
+from app.domains.discover.models import (  # noqa: F401
+    DiscoverExternalCandidate,
+    DiscoverRun,
+    HumanDecision,
+    OpportunityEvidence,
+    OpportunityVersion,
+    ResearchOpportunity,
+    ResearchPlan,
+)
+from app.domains.gap.models import (  # noqa: F401
+    GapBoardSnapshot,
+    GapCanonicalConcept,
+    GapConceptAssignment,
+    PaperGapAnnotation,
+)
 from app.domains.knowledge.models import (  # noqa: F401
     CanonicalEntity,
     EvidenceSpan,
@@ -27,20 +47,6 @@ from app.domains.paper.search_models import (  # noqa: F401
 )
 from app.domains.task.models import Task  # noqa: F401
 from app.domains.timeline.models import TimelineEvent  # noqa: F401
-from app.domains.discover.models import (  # noqa: F401
-    DiscoverExternalCandidate,
-    DiscoverRun,
-    HumanDecision,
-    OpportunityEvidence,
-    OpportunityVersion,
-    ResearchOpportunity,
-    ResearchPlan,
-)
-from app.domains.chat.models import (  # noqa: F401
-    ChatConversation,
-    ChatMessage,
-    ChatMessageEvidence,
-)
-from app.domains.agent.models import AgentArtifact, AgentRun, AgentStep  # noqa: F401
 
-from app.db.base import Base  # noqa: F401
+# Phase 1a: Workspace domain
+from app.domains.workspace.models import Workspace  # noqa: F401

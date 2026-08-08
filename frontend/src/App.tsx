@@ -14,6 +14,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const DiscoverPage = lazy(() => import("./pages/DiscoverPage"));
+const GapBoardPage = lazy(() => import("./pages/GapBoardPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
 const ChatHubPage = lazy(() => import("./pages/ChatHubPage"));
 
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="knowledge" element={<LazyPage label="知识"><KnowledgePage /></LazyPage>} />
           <Route path="knowledge/graph" element={<LazyPage label="知识图谱"><KnowledgePage initialTab="graph" /></LazyPage>} />
           <Route path="discover" element={<LazyPage label="Discover"><DiscoverPage /></LazyPage>} />
+          <Route path="gap-board" element={<LazyPage label="研究空白棋盘"><GapBoardPage /></LazyPage>} />
           <Route path="discover/runs/:runId" element={<LazyPage label="Discover 运行"><DiscoverPage /></LazyPage>} />
           <Route path="discover/opportunities/:opportunityId" element={<LazyPage label="研究机会"><DiscoverPage /></LazyPage>} />
           <Route path="plans" element={<ResearchPlansPage />} />

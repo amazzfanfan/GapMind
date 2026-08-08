@@ -172,6 +172,58 @@ def test_pending_opportunity_filter_returns_authoritative_workspace_count(
     assert body["items"][0]["status"] in {"candidate", "needs_more_evidence"}
 
 
+def test_user_can_select_multiple_external_papers_in_one_batch(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    workspace = client.post("/api/v1/workspaces", json={"name": "Batch Selection WS"}).json()
+    with patch("app.domains.discover.router.spawn_discover_task", return_value="initial-celery-id"):
+        created = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/discover/runs",
+            json={"input": {"topic": "Batch external verification"}},
+        )
+    run = db_session.get(DiscoverRun, created.json()["run_id"])
+    assert run is not None and run.task_id
+    task = db_session.get(Task, run.task_id)
+    assert task is not None
+    run.status = "waiting_for_user"
+    run.stage = "external_selection"
+    run.progress = 0.62
+    task.status = "waiting_for_user"
+    candidates = [
+        DiscoverExternalCandidate(
+            discover_run_id=run.id,
+            query="batch verification",
+            rank=index,
+            external_paper_id=f"S2-batch-{index}",
+            title=f"External candidate {index}",
+            authors=[],
+            snapshot_payload={},
+        )
+        for index in (1, 2)
+    ]
+    db_session.add_all(candidates)
+    db_session.commit()
+
+    with patch("app.domains.discover.router.spawn_discover_task", return_value="batch-celery-id"):
+        response = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/discover/runs/{run.id}/external-selection",
+            json={"candidate_ids": [candidate.id for candidate in candidates], "action": "import_and_verify"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["stage"] == "fulltext_verification"
+    assert body["stage_summaries"]["external_selection"]["selected"] == 2
+    for candidate in candidates:
+        db_session.refresh(candidate)
+        assert candidate.verification_status == "selected"
+    db_session.refresh(task)
+    assert task.status == "running"
+    assert task.celery_task_id == "batch-celery-id"
+
+
 def test_user_can_skip_external_selection_and_resume_run(
     client: TestClient,
     db_session: Session,

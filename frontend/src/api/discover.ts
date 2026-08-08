@@ -94,6 +94,19 @@ export interface DiscoverRun {
 export interface DiscoverRunDetail extends DiscoverRun {
   external_candidates: DiscoverExternalCandidate[];
   opportunities: ResearchOpportunity[];
+  agent_steps: AgentStep[];
+}
+
+export interface AgentStep {
+  id: string;
+  run_id: string;
+  sequence: number;
+  stage: string;
+  status: string;
+  summary: string;
+  details: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OpportunityVersion {

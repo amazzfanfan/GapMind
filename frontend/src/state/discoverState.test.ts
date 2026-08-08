@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentRunStage, currentRunStatus, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex } from "./discoverState";
+import { currentRunStage, currentRunStatus, DISCOVER_STAGE_LABELS, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, stageSummaryMessage, stageSummaryStatus } from "./discoverState";
 
 describe("Discover state helpers", () => {
   it("keeps the complete stage order and unknown stages visible", () => {
@@ -7,6 +7,21 @@ describe("Discover state helpers", () => {
     expect(DISCOVER_STAGES).toContain("saved");
     expect(stageIndex("fulltext_verification")).toBe(6);
     expect(stageIndex("unexpected_stage")).toBe(-1);
+  });
+
+  it("describes partial external-search results without discarding them", () => {
+    expect(DISCOVER_STAGE_LABELS.external_search).toBe("外部检索");
+    const summaries = {
+      external_search: {
+        status: "succeeded_partial",
+        successful_query_count: 3,
+        failed_query_count: 2,
+        query_failures: [{ status_code: 429 }, { status_code: 429 }],
+      },
+    };
+    expect(stageSummaryStatus(summaries, "external_search")).toBe("succeeded_partial");
+    expect(stageSummaryMessage(summaries, "external_search")).toContain("3 个查询成功");
+    expect(stageSummaryMessage(summaries, "external_search")).toContain("2 个因 Semantic Scholar 请求频率受限");
   });
 
   it("uses low-frequency polling for waiting states and stops at terminal states", () => {
