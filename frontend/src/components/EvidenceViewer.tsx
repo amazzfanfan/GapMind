@@ -5,6 +5,7 @@ import apiClient from "../api/client";
 import knowledgeApi from "../api/knowledge";
 import type { EvidenceContext, EvidenceSpan } from "../api/types/knowledge";
 import { discoverApi, type OpportunityEvidence } from "../api/discover";
+import { evidenceLevelDisplayLabel, evidenceRelationLabel, gateMessageLabel } from "../state/discoverLabels";
 
 const { Text } = Typography;
 
@@ -49,7 +50,7 @@ export default function EvidenceViewer({
     knowledgeApi
       .evidenceContext(workspaceId, itemId)
       .then(setContext)
-      .catch((error) => message.error(`Failed to load source: ${(error as Error).message}`))
+      .catch((error) => message.error(`加载证据原文失败：${(error as Error).message}`))
       .finally(() => setLoading(false));
   }, [itemId, message, open, workspaceId]);
 
@@ -63,17 +64,17 @@ export default function EvidenceViewer({
 
   return <>
     <Button size="small" icon={<FileSearchOutlined />} onClick={() => setOpen(true)}>定位原文</Button>
-    <Drawer title="Evidence source" open={open} width="760px" onClose={() => setOpen(false)}>
-      {loading ? <div style={{ textAlign: "center", padding: 48 }}><Spin /></div> : !context ? <Empty description="No parsed markdown source" /> : <>
+    <Drawer title="证据原文" open={open} width="760px" onClose={() => setOpen(false)}>
+      {loading ? <div style={{ textAlign: "center", padding: 48 }}><Spin /></div> : !context ? <Empty description="没有可用的 Markdown 解析原文" /> : <>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-          <Text type="secondary">{context.filename ?? "parsed_markdown"} · highlighted span {span.start_char ?? "—"}–{span.end_char ?? "—"}</Text>
-          <Button icon={<DownloadOutlined />} href={downloadUrl} target="_blank">Download parsed_markdown</Button>
+          <Text type="secondary">{context.filename ?? "parsed_markdown"} · 高亮字符范围 {span.start_char ?? "—"}–{span.end_char ?? "—"}</Text>
+          <Button icon={<DownloadOutlined />} href={downloadUrl} target="_blank">下载解析后的 Markdown</Button>
         </div>
         <Alert type="info" showIcon message="证据偏移对应 parsed_markdown 字符位置；黄色区域为当前 Knowledge Item 的证据原文。" style={{ marginBottom: 12 }} />
         <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "#fafafa", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
-          {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
+          {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation ? evidenceRelationLabel(segment.relation) : undefined}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
         </pre>
-        <Tag color={span.relation === "contradicts" ? "red" : "gold"}>{span.relation}</Tag>
+        <Tag color={span.relation === "contradicts" ? "red" : "gold"}>{evidenceRelationLabel(span.relation)}</Tag>
       </>}
     </Drawer>
   </>;
@@ -97,7 +98,7 @@ export function OpportunityEvidenceViewer({
     discoverApi
       .getEvidenceContext(workspaceId, evidence.id)
       .then(setContext)
-      .catch((error) => message.error(`Failed to load evidence source: ${(error as Error).message}`))
+      .catch((error) => message.error(`加载研究机会证据原文失败：${(error as Error).message}`))
       .finally(() => setLoading(false));
   }, [evidence.id, message, open, workspaceId]);
 
@@ -126,19 +127,19 @@ export function OpportunityEvidenceViewer({
   return (
     <>
       <Button size="small" icon={<FileSearchOutlined />} onClick={() => setOpen(true)}>
-        Open evidence
+        查看证据原文
       </Button>
-      <Drawer title="Opportunity evidence" open={open} width="min(760px, 100vw)" onClose={() => setOpen(false)}>
-        {loading ? <div style={{ textAlign: "center", padding: 48 }}><Spin /></div> : !context ? <Empty description="No evidence loaded" /> : !context.available ? (
-          <Alert type="warning" showIcon message="Metadata-only evidence" description={context.message ?? "No local full-text anchor is available."} />
+      <Drawer title="研究机会证据" open={open} width="min(760px, 100vw)" onClose={() => setOpen(false)}>
+        {loading ? <div style={{ textAlign: "center", padding: 48 }}><Spin /></div> : !context ? <Empty description="尚未加载证据" /> : !context.available ? (
+          <Alert type="warning" showIcon message="仅有元数据" description={gateMessageLabel(context.message ?? "本地没有可定位的全文证据。")} />
         ) : (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
               <Text type="secondary">{context.filename ?? "parsed_markdown"} · {context.start_char ?? "—"}–{context.end_char ?? "—"}</Text>
-              <Tag color="green">full_text · {evidence.relation}</Tag>
+              <Tag color="green">{evidenceLevelDisplayLabel("full_text")} · {evidenceRelationLabel(evidence.relation)}</Tag>
             </div>
             <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "#fafafa", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
-              {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
+              {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation ? evidenceRelationLabel(segment.relation) : undefined}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
             </pre>
           </>
         )}

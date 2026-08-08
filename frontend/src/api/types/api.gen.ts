@@ -2339,6 +2339,11 @@ export interface components {
              * @default 3
              */
             max_opportunities: number;
+            /**
+             * Exploratory
+             * @default false
+             */
+            exploratory: boolean;
         };
         /** GapCandidateDiscoverResponse */
         GapCandidateDiscoverResponse: {

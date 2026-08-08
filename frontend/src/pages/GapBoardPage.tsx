@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Alert, Button, Card, Empty, Space, Statistic, Table, Tag, Typography } from "antd";
+import { App, Alert, Button, Card, Empty, Popconfirm, Space, Statistic, Table, Tag, Typography } from "antd";
 import { ExperimentOutlined, ReloadOutlined, RobotOutlined } from "@ant-design/icons";
 import { useNavigate, useParams } from "react-router-dom";
 import gapApi, { type GapAnnotation, type GapBoard, type GapBoardCell } from "../api/gap";
@@ -111,7 +111,7 @@ export default function GapBoardPage() {
     }
   };
 
-  const verifyCandidate = async (cell: GapBoardCell) => {
+  const verifyCandidate = async (cell: GapBoardCell, exploratory = false) => {
     if (!workspaceId) return;
     const key = `${cell.method_concept_id}:${cell.problem_concept_id}`;
     setDiscovering(key);
@@ -120,8 +120,13 @@ export default function GapBoardPage() {
         workspaceId,
         cell.method_concept_id,
         cell.problem_concept_id,
+        exploratory,
       );
-      message.success("已交给 Discover 进行相似工作、外部论文与反证核验。");
+      message.success(
+        exploratory
+          ? "已发起探索性核验；系统会先检查机制兼容性与已有工作，不会直接认定研究空白。"
+          : "已交给 Discover 进行相似工作、外部论文与反证核验。",
+      );
       navigate(`/workspaces/${workspaceId}/discover?run=${result.run_id}`);
     } catch (error) {
       message.error(`启动候选核验失败：${errorMessage(error)}`);
@@ -198,9 +203,17 @@ export default function GapBoardPage() {
                   交给 Discover 核验
                 </Button>
               ) : (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  暂不推荐核验
-                </Text>
+                <Popconfirm
+                  title="发起低证据探索性核验？"
+                  description="该组合目前仅来自横纵轴配对。Discover 会检索机制兼容性、相似工作和反证，但不会把空格直接当作研究空白。"
+                  okText="继续核验"
+                  cancelText="取消"
+                  onConfirm={() => void verifyCandidate(cell, true)}
+                >
+                  <Button size="small" type="link" loading={discovering === key}>
+                    探索性核验
+                  </Button>
+                </Popconfirm>
               )}
             </Space>
           );

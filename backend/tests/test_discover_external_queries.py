@@ -358,6 +358,35 @@ def test_external_verify_semantic_scholar_failure(db_session) -> None:
     assert run.stage_summaries["external_search"]["retryable"] is True
 
 
+def test_external_verify_preserves_successes_when_a_later_query_fails(db_session) -> None:
+    workspace_id = str(uuid4())
+    primary = "GNN interpretability"
+
+    class _PartialS2:
+        def search(self, query: str, *, fields: str, **kw: Any):
+            if query == "rate limited query":
+                raise SemanticScholarError(status_code=429, message="rate limited")
+            return {"data": [_s2_paper("p1", "Paper One")], "total": 1}
+
+        def get_paper(self, paper_id: str, *, fields: str):
+            return {"paperId": paper_id}
+
+    service = _service(db_session, _PartialS2())
+    run = _run(workspace_id)
+    db_session.add_all([Workspace(id=workspace_id, name="Partial search", is_archived=False), run])
+    db_session.commit()
+
+    count = service._external_verify(run, [primary, "rate limited query"])
+
+    assert count == 1
+    summary = run.stage_summaries["external_search"]
+    assert summary["status"] == "succeeded_partial"
+    assert summary["executed"] is True
+    assert summary["successful_query_count"] == 1
+    assert summary["failed_query_count"] == 1
+    assert summary["query_failures"][0]["status_code"] == 429
+
+
 # ------------------------------------------------------------------ exact-name lookup
 def test_title_verified_matches_words(db_session) -> None:
     service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())

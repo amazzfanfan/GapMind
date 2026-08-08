@@ -179,6 +179,30 @@ def test_skipped_external_selection_is_a_non_blocking_verification_warning(db_se
     assert "external verification did not complete" in gate["warnings"]
 
 
+def test_partial_external_search_counts_as_executed(db_session) -> None:
+    run = _run(str(uuid4()))
+    run.stage_summaries = {
+        "external_search": {
+            "status": "succeeded_partial",
+            "successful_query_count": 2,
+            "failed_query_count": 1,
+        }
+    }
+    gate = DiscoverService(db_session)._evidence_gate(
+        run,
+        candidate=None,
+        supporting=_supporting_response([]),
+        counter=RetrievalResponse(
+            workspace_id=run.workspace_id,
+            purpose="counter_evidence",
+            status="succeeded",
+        ),
+    )
+
+    assert gate["external_search_executed"] is True
+    assert gate["external_search_status"] == "succeeded_partial"
+
+
 def test_incomplete_gate_does_not_cap_agent_confidence() -> None:
     candidate = DiscoverService._normalize_candidate(
         {"confidence": 0.82},
@@ -306,7 +330,7 @@ def test_stage_stops_when_run_was_cancelled(db_session) -> None:
         DiscoverService(db_session)._stage(run, "synthesis", 0.8)
 
 
-def test_fulltext_pipeline_resumes_waiting_run_once_and_marks_candidate_verified(db_session) -> None:
+def test_fulltext_pipeline_resumes_when_at_least_one_batch_candidate_is_verified(db_session) -> None:
     workspace_id = str(uuid4())
     paper_id = str(uuid4())
     artifact_id = str(uuid4())
@@ -322,8 +346,9 @@ def test_fulltext_pipeline_resumes_waiting_run_once_and_marks_candidate_verified
     task = Task(id=task_id, workspace_id=workspace_id, task_type="discover_agent", status="waiting_for_user", progress=0.68, payload={"run_id": run_id}, is_deleted=False)
     run = DiscoverRun(id=run_id, workspace_id=workspace_id, task_id=task_id, input_topic="topic", input_payload={}, scope={}, config={}, status="waiting_for_fulltext", stage="fulltext_verification", progress=0.68, verification_status="in_progress", stage_summaries={"external_search": {"status": "succeeded"}})
     candidate = DiscoverExternalCandidate(id=str(uuid4()), discover_run_id=run_id, query="topic", rank=1, external_paper_id="S2-1", title="Imported", authors=[], evidence_level="metadata_only", verification_status="imported_pending_parse", imported_paper_id=paper_id, snapshot_payload={})
+    failed_candidate = DiscoverExternalCandidate(id=str(uuid4()), discover_run_id=run_id, query="topic", rank=2, external_paper_id="S2-2", title="No open PDF", authors=[], evidence_level="metadata_only", verification_status="no_pdf", snapshot_payload={})
     embed_task = Task(id=str(uuid4()), workspace_id=workspace_id, task_type="embed_chunks", status="succeeded", progress=1.0, payload={"paper_id": paper_id}, result={"indexed_count": 3}, is_deleted=False)
-    db_session.add_all([task, run, candidate, embed_task])
+    db_session.add_all([task, run, candidate, failed_candidate, embed_task])
     db_session.commit()
 
     with patch("app.workers.tasks.run_discover.spawn_discover_task", return_value="resumed-celery-id"):
@@ -333,5 +358,8 @@ def test_fulltext_pipeline_resumes_waiting_run_once_and_marks_candidate_verified
     db_session.refresh(candidate)
     assert run.status == "queued"
     assert candidate.verification_status == "verified"
+    assert failed_candidate.verification_status == "no_pdf"
+    assert run.stage_summaries["fulltext_verification"]["verified"] == 1
+    assert run.stage_summaries["fulltext_verification"]["failed"] == 1
     assert db_session.get(Task, task_id).status == "running"
     assert db_session.get(Task, task_id).celery_task_id == "resumed-celery-id"
