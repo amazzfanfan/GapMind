@@ -1,0 +1,98 @@
+import apiClient from "./client";
+
+export interface GapExtractionTask {
+  paper_id: string;
+  task_id: string;
+  status: string;
+}
+
+export interface GapAnnotation {
+  id: string;
+  paper_id: string;
+  status: string;
+  attempts: number;
+  model_name: string;
+  validation_errors: string[];
+  updated_at: string;
+}
+
+export interface GapBoardAxis {
+  concept_id: string;
+  label: string;
+  aliases: string[];
+  paper_count: number;
+  paper_ids: string[];
+}
+
+export interface GapBoardCell {
+  method_concept_id: string;
+  problem_concept_id: string;
+  addressed: boolean;
+  addressed_paper_ids: string[];
+  limitation_paper_ids: string[];
+  explicit_limitation: boolean;
+  candidate_score: number;
+  verification_status: string;
+}
+
+export interface GapBoard {
+  id: string;
+  workspace_id: string;
+  version: number;
+  filters: Record<string, unknown>;
+  method_axes: GapBoardAxis[];
+  problem_axes: GapBoardAxis[];
+  cells: GapBoardCell[];
+  source_annotation_ids: string[];
+  candidate_count: number;
+  created_at: string;
+}
+
+export const gapApi = {
+  async extract(
+    workspaceId: string,
+    paperIds: string[],
+    force = false,
+  ): Promise<{ tasks: GapExtractionTask[] }> {
+    return (
+      await apiClient.post(`/workspaces/${workspaceId}/gap/extractions`, {
+        paper_ids: paperIds,
+        force,
+      })
+    ).data;
+  },
+
+  async listAnnotations(
+    workspaceId: string,
+  ): Promise<{ items: GapAnnotation[]; total: number }> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/gap/annotations`)).data;
+  },
+
+  async rebuildBoard(workspaceId: string, paperIds: string[] = []): Promise<GapBoard> {
+    return (
+      await apiClient.post(`/workspaces/${workspaceId}/gap/board/rebuild`, {
+        paper_ids: paperIds,
+      })
+    ).data;
+  },
+
+  async getBoard(workspaceId: string): Promise<GapBoard> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/gap/board`)).data;
+  },
+
+  async discoverCandidate(
+    workspaceId: string,
+    methodConceptId: string,
+    problemConceptId: string,
+  ): Promise<{ run_id: string; task_id?: string; status: string }> {
+    return (
+      await apiClient.post(`/workspaces/${workspaceId}/gap/candidates/discover`, {
+        method_concept_id: methodConceptId,
+        problem_concept_id: problemConceptId,
+        max_opportunities: 3,
+      })
+    ).data;
+  },
+};
+
+export default gapApi;

@@ -43,6 +43,7 @@ export function taskTypeLabel(taskType: string): string {
     extract_knowledge: "知识提取",
     embed_chunks: "全文索引",
     discover_agent: "研究机会发现",
+    extract_gap_annotation: "研究空白抽取",
     semantic_scholar_search: "论文检索",
   };
   return labels[taskType] ?? "后台处理";
