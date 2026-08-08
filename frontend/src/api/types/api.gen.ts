@@ -1866,6 +1866,8 @@ export interface components {
             external_candidates?: components["schemas"]["DiscoverExternalCandidateRead"][];
             /** Opportunities */
             opportunities?: components["schemas"]["ResearchOpportunityRead"][];
+            /** Agent Steps */
+            agent_steps?: components["schemas"]["AgentStepRead"][];
         };
         /**
          * DiscoverRunListResponse

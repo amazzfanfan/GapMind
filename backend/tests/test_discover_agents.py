@@ -182,6 +182,26 @@ def test_agent_step_does_not_overwrite_terminal_status(db_session) -> None:
     assert agent_run.current_stage == "complete"
 
 
+def test_run_agent_steps_returns_handoff_for_task(db_session) -> None:
+    workspace_id = str(uuid4())
+    _workspace(db_session, workspace_id)
+    task = Task(id=str(uuid4()), workspace_id=workspace_id, task_type="discover_agent", status="succeeded", payload={})
+    run = _run(workspace_id, task_id=task.id)
+    db_session.add_all([task, run])
+    db_session.commit()
+    service = _service(db_session)
+    assert service._run_agent_steps(run) == []
+
+    agent_run = service._discover_agent_run(run)
+    service._agent_step(agent_run, "planner", "completed", "Planned")
+    service._agent_step(agent_run, "critic", "completed", "Critic reviewed")
+
+    steps = service._run_agent_steps(run)
+    assert [s.stage for s in steps] == ["planner", "critic"]
+    assert steps[0].sequence == 1
+    assert steps[1].sequence == 2
+
+
 # ------------------------------------------------------------------ CriticAgent
 def test_critic_review_parses_verdicts(db_session) -> None:
     workspace_id = str(uuid4())
