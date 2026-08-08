@@ -215,7 +215,7 @@ class OpportunityWorkflow:
     ) -> ResearchOpportunity:
         item = self.get_opportunity(workspace_id, opportunity_id)
         version = self._current_version(item, version_id)
-        self._require_confirmable(version)
+        self._require_confirmable(item, version)
         item.status = "confirmed"
         self._decision(item, version, version, "confirm", note, None, actor=actor)
         self.db.commit()
@@ -242,7 +242,7 @@ class OpportunityWorkflow:
         base = self._current_version(item, base_version_id)
         if item.current_version_id != base_version_id:
             raise OpportunityVersionConflict("Opportunity has changed; refresh before editing")
-        self._require_confirmable(base)
+        self._require_confirmable(item, base)
         data = {
             key: getattr(base, key)
             for key in (
@@ -462,7 +462,7 @@ class OpportunityWorkflow:
             raise OpportunityVersionConflict("Requested version is not part of this opportunity")
         return version
 
-    def _require_confirmable(self, version: OpportunityVersion) -> None:
+    def _require_confirmable(self, item: ResearchOpportunity, version: OpportunityVersion) -> None:
         evidence_rows = list(
             self.db.execute(
                 select(OpportunityEvidence).where(
@@ -478,11 +478,23 @@ class OpportunityWorkflow:
             for ev in evidence_rows
             if ev.paper_id and ev.evidence_span_id and ev.artifact_id
         }
-        if (
-            version.verification_status != "verified"
-            or version.evidence_coverage < 0.6
-            or len(independent_papers) < 2
-        ):
+        gate = (item.source_payload or {}).get("gate")
+        blocking_missing: list[str] = []
+        if isinstance(gate, dict):
+            raw_blocking = gate.get("blocking_missing")
+            if isinstance(raw_blocking, list):
+                blocking_missing = [value for value in raw_blocking if isinstance(value, str)]
+            else:
+                raw_missing = gate.get("missing")
+                if isinstance(raw_missing, list):
+                    blocking_missing = [
+                        value
+                        for value in raw_missing
+                        if isinstance(value, str) and value != "external verification did not complete"
+                    ]
+        elif version.verification_status not in {"verified", "verified_with_warnings"}:
+            blocking_missing = [f"verification status is {version.verification_status}"]
+        if version.evidence_coverage < 0.6 or len(independent_papers) < 2 or blocking_missing:
             raise DiscoverGateError(
                 "insufficient_full_text_evidence",
                 "At least two independent full-text evidence papers are required before confirmation",

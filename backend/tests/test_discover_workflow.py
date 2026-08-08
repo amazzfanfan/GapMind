@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch
@@ -6,6 +7,8 @@ import pytest
 
 from app.domains.artifact.models import Artifact
 from app.domains.discover.models import DiscoverExternalCandidate, DiscoverRun
+from app.domains.discover.models import OpportunityEvidence, OpportunityVersion, ResearchOpportunity
+from app.domains.discover.exceptions import DiscoverGateError
 from app.domains.discover.service import DiscoverRunCancelled, DiscoverService, resume_discover_runs_for_paper
 from app.domains.knowledge.models import EvidenceSpan, KnowledgeItem
 from app.domains.paper.models import Paper
@@ -113,8 +116,113 @@ def test_two_span_backed_supports_papers_pass_gate(db_session) -> None:
     counter = RetrievalResponse(workspace_id=workspace_id, purpose="counter_evidence", status="succeeded")
     gate = service._evidence_gate(_run(workspace_id), candidate=_candidate(), supporting=_supporting_response(retrieval), counter=counter)
     assert gate["verified"] is True
+    assert gate["confirmable"] is True
     assert gate["independent_full_text_papers"] == 2
     assert gate["evidence_coverage"] >= 0.6
+
+
+def test_external_verification_is_warning_when_core_evidence_passes(db_session) -> None:
+    workspace_id = str(uuid4())
+    workspace = Workspace(id=workspace_id, name="Warning workspace", is_archived=False)
+    db_session.add(workspace)
+    db_session.flush()
+    retrieval = []
+    for index in range(2):
+        paper_id = str(uuid4())
+        artifact_id = str(uuid4())
+        paper = Paper(id=paper_id, workspace_id=workspace_id, title=f"Paper {index}", authors=[], source="manual", is_deleted=False)
+        artifact = Artifact(id=artifact_id, workspace_id=workspace_id, kind="parsed_markdown", file_path=f"paper-{index}.md", size_bytes=1, is_deleted=False)
+        item = KnowledgeItem(id=str(uuid4()), workspace_id=workspace_id, paper_id=paper_id, type="claim", canonical_name="claim", content={}, source_provenance={}, created_by="agent", is_deleted=False)
+        db_session.add_all([paper, artifact, item])
+        db_session.flush()
+        db_session.add(EvidenceSpan(id=str(uuid4()), workspace_id=workspace_id, knowledge_item_id=item.id, paper_id=paper_id, artifact_id=artifact_id, relation="supports", text="robust graph learning behavior under shift", start_char=0, end_char=44, confidence=0.9))
+        retrieval.append(_supporting_item(paper_id, artifact_id, "robust graph learning behavior under shift", f"chunk-{index}"))
+    db_session.commit()
+    run = _run(workspace_id)
+    run.stage_summaries = {"external_search": {"external_candidates": 2}}
+    counter = RetrievalResponse(workspace_id=workspace_id, purpose="counter_evidence", status="succeeded")
+
+    gate = DiscoverService(db_session)._evidence_gate(
+        run,
+        candidate=_candidate(),
+        supporting=_supporting_response(retrieval),
+        counter=counter,
+    )
+
+    assert gate["verified"] is False
+    assert gate["confirmable"] is True
+    assert gate["blocking_missing"] == []
+    assert gate["warnings"] == ["external verification did not complete"]
+
+
+def test_incomplete_gate_does_not_cap_agent_confidence() -> None:
+    candidate = DiscoverService._normalize_candidate(
+        {"confidence": 0.82},
+        {
+            "verified": False,
+            "confirmable": False,
+            "evidence_coverage": 0.25,
+            "independent_full_text_papers": 1,
+        },
+        provider="test",
+    )
+
+    assert candidate["confidence"] == 0.82
+    assert candidate["evidence_coverage"] == 0.25
+
+
+def test_external_warning_allows_human_confirmation_but_core_failure_does_not(db_session) -> None:
+    workspace_id = str(uuid4())
+    workspace = Workspace(id=workspace_id, name="Human review workspace", is_archived=False)
+    opportunity = ResearchOpportunity(
+        id=str(uuid4()),
+        workspace_id=workspace_id,
+        title="Opportunity",
+        summary="Summary",
+        rationale="Rationale",
+        suggested_directions=[],
+        confidence=0.82,
+        status="needs_more_evidence",
+        source_payload={"gate": {"missing": ["external verification did not complete"]}},
+        is_deleted=False,
+    )
+    db_session.add_all([workspace, opportunity])
+    db_session.flush()
+    version = OpportunityVersion(
+        id=str(uuid4()),
+        opportunity_id=opportunity.id,
+        version_number=1,
+        title="Opportunity",
+        problem_statement="Problem",
+        evidence_coverage=1.0,
+        confidence=0.82,
+        verification_status="verification_incomplete",
+        created_by="agent",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(version)
+    db_session.flush()
+    opportunity.current_version_id = version.id
+    for index in range(2):
+        paper_id = str(uuid4())
+        artifact_id = str(uuid4())
+        paper = Paper(id=paper_id, workspace_id=workspace_id, title=f"Paper {index}", authors=[], source="manual", is_deleted=False)
+        artifact = Artifact(id=artifact_id, workspace_id=workspace_id, kind="parsed_markdown", file_path=f"paper-{index}.md", size_bytes=1, is_deleted=False)
+        item = KnowledgeItem(id=str(uuid4()), workspace_id=workspace_id, paper_id=paper_id, type="claim", canonical_name="claim", content={}, source_provenance={}, created_by="agent", is_deleted=False)
+        db_session.add_all([paper, artifact, item])
+        db_session.flush()
+        span = EvidenceSpan(id=str(uuid4()), workspace_id=workspace_id, knowledge_item_id=item.id, paper_id=paper_id, artifact_id=artifact_id, relation="supports", text="support", start_char=0, end_char=7, confidence=0.9)
+        db_session.add(span)
+        db_session.flush()
+        db_session.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version.id, relation="supports", source_scope="workspace", evidence_level="full_text", paper_id=paper_id, evidence_span_id=span.id, artifact_id=artifact_id, chunk_id=f"chunk-{index}", judgement="supports", display_excerpt="support", snapshot_payload={}))
+    db_session.commit()
+
+    workflow = DiscoverService(db_session)
+    workflow._require_confirmable(opportunity, version)
+
+    opportunity.source_payload = {"gate": {"missing": ["counter evidence status is degraded"]}}
+    with pytest.raises(DiscoverGateError):
+        workflow._require_confirmable(opportunity, version)
 
 
 def test_candidate_relevance_does_not_fall_back_to_broad_topic_results(db_session) -> None:

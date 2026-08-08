@@ -83,6 +83,7 @@ switch to `--pool=gevent` (after `pip install gevent`).
 ```bash
 cd frontend
 npm install
+npm run gen:api
 npm run dev
 ```
 

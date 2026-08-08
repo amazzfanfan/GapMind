@@ -41,7 +41,7 @@ function errorMessage(error: unknown): string {
 function statusColor(status: string): string {
   if (["succeeded", "confirmed", "edited_confirmed", "verified"].includes(status)) return "green";
   if (["failed", "cancelled", "rejected", "verification_failed"].includes(status)) return "red";
-  if (["waiting_for_user", "waiting_for_fulltext", "needs_more_evidence", "verification_incomplete", "deferred"].includes(status)) return "orange";
+  if (["waiting_for_user", "waiting_for_fulltext", "needs_more_evidence", "reviewable_with_warning", "verification_incomplete", "verified_with_warnings", "deferred"].includes(status)) return "orange";
   return "blue";
 }
 
@@ -77,15 +77,31 @@ function verificationActionDisabled(status: string): boolean {
   return ["selected", "imported_pending_parse", "verified"].includes(status);
 }
 
-function gateDetails(sourcePayload: Record<string, unknown>): { verified: boolean; missing: string[]; reason?: string } | null {
+function gateDetails(sourcePayload: Record<string, unknown>): { verified: boolean; confirmable: boolean; blockingMissing: string[]; warnings: string[]; missing: string[]; reason?: string } | null {
   const value = sourcePayload.gate;
   if (!value || typeof value !== "object") return null;
-  const gate = value as { verified?: unknown; missing?: unknown; reason?: unknown };
+  const gate = value as { verified?: unknown; confirmable?: unknown; blocking_missing?: unknown; warnings?: unknown; missing?: unknown; reason?: unknown };
+  const missing = Array.isArray(gate.missing) ? gate.missing.filter((item): item is string => typeof item === "string") : [];
+  const blockingMissing = Array.isArray(gate.blocking_missing)
+    ? gate.blocking_missing.filter((item): item is string => typeof item === "string")
+    : missing.filter((item) => item !== "external verification did not complete");
+  const warnings = Array.isArray(gate.warnings)
+    ? gate.warnings.filter((item): item is string => typeof item === "string")
+    : missing.filter((item) => item === "external verification did not complete");
   return {
     verified: gate.verified === true,
-    missing: Array.isArray(gate.missing) ? gate.missing.filter((item): item is string => typeof item === "string") : [],
+    confirmable: gate.confirmable === true || (blockingMissing.length === 0 && (gate.verified === true || warnings.length > 0)),
+    blockingMissing,
+    warnings,
+    missing,
     reason: typeof gate.reason === "string" ? gate.reason : undefined,
   };
+}
+
+function opportunityStatus(item: ResearchOpportunity): string {
+  const gate = gateDetails(item.source_payload);
+  if (item.status === "needs_more_evidence" && gate?.confirmable) return "reviewable_with_warning";
+  return item.status;
 }
 
 export default function DiscoverPage() {
@@ -306,7 +322,7 @@ export default function DiscoverPage() {
               </>}
             </Card>
             <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
-              {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(item.status)}>{item.status}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>} />}
+      {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(displayStatus)}>{displayStatus}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>; }} />}
             </Card>
             {runDetail?.external_candidates?.length ? <Card title="External candidates for verification"><List size="small" dataSource={runDetail.external_candidates} renderItem={(candidate) => <List.Item actions={[<Button key="select" size="small" onClick={() => void selectExternal(candidate)} disabled={verificationActionDisabled(candidate.verification_status)}>{verificationActionLabel(candidate.verification_status)}</Button>]}><List.Item.Meta title={`${candidate.rank}. ${candidate.title}`} description={<Space wrap><Tag>{candidate.year || "Year unknown"}</Tag><Tag>{candidate.evidence_level}</Tag><Tag color={candidate.verification_status === "verified" ? "green" : candidate.verification_status === "verification_failed" ? "red" : "processing"}>{verificationStatusLabel(candidate.verification_status)}</Tag><Tag>{candidate.role}</Tag></Space>} /></List.Item>} /></Card> : null}
           </Space>
@@ -346,19 +362,21 @@ function AlertText({ text }: { text: string }) {
 function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onConvert }: { workspaceId: string; detail: OpportunityDetail; loading: boolean; onAction: (action: "confirm" | "reject" | "defer") => void; onEdit: () => void; onConvert: () => void }) {
   const version = detail.current_version;
   const gate = gateDetails(detail.opportunity.source_payload);
+  const confirmable = gate?.confirmable ?? detail.opportunity.status !== "needs_more_evidence";
   const supporting = detail.evidence.filter((item) => item.relation === "supports");
   const similar = detail.evidence.filter((item) => item.relation === "similar");
   const counter = detail.evidence.filter((item) => ["contradicts", "qualifies", "overlaps", "unknown"].includes(item.relation));
   return <Space direction="vertical" style={{ width: "100%" }}>
-    <Space wrap><Tag color={statusColor(detail.opportunity.status)}>{detail.opportunity.status}</Tag><Tag>{version?.verification_status || "unverified"}</Tag><Tag>Coverage {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>Agent confidence {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
-    {detail.opportunity.status === "needs_more_evidence" && <Alert type="warning" showIcon message="This opportunity cannot be confirmed yet" description={gate?.missing.length ? <List size="small" dataSource={gate.missing} renderItem={(item) => <List.Item>{item}</List.Item>} /> : gate?.reason || "The final Evidence Gate has not been satisfied."} />}
+    <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatus(detail.opportunity)}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{version?.verification_status || "unverified"}</Tag><Tag>Coverage {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>Agent confidence {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
+    {!confirmable && <Alert type="warning" showIcon message="This opportunity cannot be confirmed yet" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{item}</List.Item>} /> : gate?.reason || "The core Evidence Gate has not been satisfied."} />}
+    {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="Confirmable with verification warnings" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{item}</List.Item>} />} /> : null}
     <Divider orientation="left">Overview</Divider><Paragraph>{version?.problem_statement || detail.opportunity.summary}</Paragraph>
     <Descriptions column={1} size="small"><Descriptions.Item label="Scope">{version?.research_scope || "—"}</Descriptions.Item><Descriptions.Item label="Why existing work is insufficient">{version?.why_existing_work_is_insufficient || detail.opportunity.rationale}</Descriptions.Item><Descriptions.Item label="Research question">{version?.candidate_research_question || "—"}</Descriptions.Item><Descriptions.Item label="Hypothesis">{version?.candidate_hypothesis || "—"}</Descriptions.Item></Descriptions>
     <EvidenceGroup workspaceId={workspaceId} title={`Supporting evidence (${supporting.length})`} items={supporting} empty="No span-backed supporting evidence" />
     <EvidenceGroup workspaceId={workspaceId} title={`Similar work (${similar.length})`} items={similar} empty="No similar work saved" />
     <EvidenceGroup workspaceId={workspaceId} title={`Counter / qualifying evidence (${counter.length})`} items={counter} empty="No counter evidence saved" />
     <Divider orientation="left">Validation plan</Divider><List size="small" dataSource={(version?.candidate_validation_plan?.steps as string[]) || []} renderItem={(step) => <List.Item>{step}</List.Item>} locale={{ emptyText: "No structured validation steps" }} />
-    <Divider orientation="left">Human decision</Divider><Space wrap><Button danger onClick={() => onAction("reject")} loading={loading}>Reject</Button><Button onClick={() => onAction("defer")} loading={loading}>Defer</Button><Button onClick={onEdit} loading={loading} disabled={detail.opportunity.status === "needs_more_evidence"}>Edit & Confirm</Button><Button type="primary" onClick={() => onAction("confirm")} loading={loading} disabled={detail.opportunity.status === "needs_more_evidence"}>Confirm</Button>{["confirmed", "edited_confirmed"].includes(detail.opportunity.status) && <Button onClick={onConvert} loading={loading}>Generate Research Plan</Button>}</Space>
+    <Divider orientation="left">Human decision</Divider><Space wrap><Button danger onClick={() => onAction("reject")} loading={loading}>Reject</Button><Button onClick={() => onAction("defer")} loading={loading}>Defer</Button><Button onClick={onEdit} loading={loading} disabled={!confirmable}>Edit & Confirm</Button><Button type="primary" onClick={() => onAction("confirm")} loading={loading} disabled={!confirmable}>Confirm</Button>{["confirmed", "edited_confirmed"].includes(detail.opportunity.status) && <Button onClick={onConvert} loading={loading}>Generate Research Plan</Button>}</Space>
     {detail.plan && <Card size="small" title="Research Plan created"><Paragraph>{detail.plan.research_question}</Paragraph></Card>}
   </Space>;
 }
