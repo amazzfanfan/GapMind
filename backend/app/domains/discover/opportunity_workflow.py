@@ -150,10 +150,13 @@ class OpportunityWorkflow:
     ) -> tuple[list[ResearchPlan], int]:
         base = (
             select(ResearchPlan)
-            .join(ResearchOpportunity, ResearchPlan.opportunity_id == ResearchOpportunity.id)
+            .outerjoin(ResearchOpportunity, ResearchPlan.opportunity_id == ResearchOpportunity.id)
             .where(
                 ResearchPlan.workspace_id == workspace_id,
-                ResearchOpportunity.is_deleted.is_(False),
+                (
+                    (ResearchPlan.opportunity_id.is_(None))
+                    | (ResearchOpportunity.is_deleted.is_(False))
+                ),
             )
         )
         if status_filter:
@@ -453,6 +456,7 @@ class OpportunityWorkflow:
             workspace_id=workspace_id,
             opportunity_id=item.id,
             opportunity_version_id=version.id,
+            source_type="opportunity",
             status="draft",
             research_question=version.candidate_research_question,
             hypothesis=version.candidate_hypothesis,

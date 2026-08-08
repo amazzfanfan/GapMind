@@ -168,8 +168,10 @@ export interface HumanDecision {
 export interface ResearchPlan {
   id: string;
   workspace_id: string;
-  opportunity_id: string;
-  opportunity_version_id: string;
+  opportunity_id: string | null;
+  opportunity_version_id: string | null;
+  agent_run_id?: string | null;
+  source_type?: string;
   status: string;
   research_question: string;
   hypothesis: string;

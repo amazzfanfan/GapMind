@@ -3,9 +3,11 @@ import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd"
 import { useNavigate, useParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
 import workspaceApi from "../api/workspace";
+import agentApi, { type AgentRunDetail } from "../api/agent";
+import { discoverApi, type ResearchPlan } from "../api/discover";
 import type { Workspace } from "../api/types/workspace";
 import { chatConversationPath, chatErrorMessage, sortChatMessages } from "../state/chatState";
-import ChatComposer from "../components/chat/ChatComposer";
+import ChatComposer, { type ChatMode } from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
 import ChatHeader from "../components/chat/ChatHeader";
 import ChatHistory from "../components/chat/ChatHistory";
@@ -31,10 +33,25 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
+  const [mode, setMode] = useState<ChatMode>("chat");
+  const [researchPlans, setResearchPlans] = useState<ResearchPlan[]>([]);
+  const [researchPlanId, setResearchPlanId] = useState<string>();
+  const [agentRuns, setAgentRuns] = useState<AgentRunDetail[]>([]);
+  const [agentActionId, setAgentActionId] = useState<string>();
   const messagesRef = useRef<HTMLDivElement>(null);
   const workspaceNames = Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.name]));
   const activeWorkspaceId = conversation?.workspace_id ?? selectedWorkspaceId;
   const activeWorkspaceName = activeWorkspaceId ? workspaceNames[activeWorkspaceId] : undefined;
+
+  const loadAgentRuns = useCallback(async (workspaceId: string, targetConversationId: string) => {
+    try {
+      const listed = await agentApi.list(workspaceId, { conversation_id: targetConversationId, limit: 50 });
+      const details = await Promise.all(listed.items.map((run) => agentApi.get(workspaceId, run.id)));
+      setAgentRuns(details);
+    } catch (error) {
+      message.error(chatErrorMessage(error));
+    }
+  }, []);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -56,6 +73,19 @@ export default function ChatPage() {
   useEffect(() => { if (conversationId) void loadConversation(conversationId); else { setConversation(null); setMessages([]); setConversationError(null); } }, [conversationId, loadConversation]);
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
+  useEffect(() => {
+    if (!activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); setMode("chat"); return; }
+    discoverApi.listPlans(activeWorkspaceId, { limit: 100 }).then((response) => setResearchPlans(response.items)).catch(() => setResearchPlans([]));
+  }, [activeWorkspaceId]);
+  useEffect(() => {
+    if (conversationId && activeWorkspaceId) void loadAgentRuns(activeWorkspaceId, conversationId);
+    else setAgentRuns([]);
+  }, [activeWorkspaceId, conversationId, loadAgentRuns]);
+  useEffect(() => {
+    if (!conversationId || !activeWorkspaceId || !agentRuns.some((run) => ["queued", "running"].includes(run.status))) return;
+    const timer = window.setInterval(() => { void loadConversation(conversationId); void loadAgentRuns(activeWorkspaceId, conversationId); }, 1800);
+    return () => window.clearInterval(timer);
+  }, [activeWorkspaceId, agentRuns, conversationId, loadAgentRuns, loadConversation]);
 
   const selectConversation = (item: ChatConversation) => { navigate(chatConversationPath(item)); setHistoryOpen(false); };
   const newConversation = () => { navigate(routeWorkspaceId ? `/workspaces/${routeWorkspaceId}/assistant` : "/chat/new"); setInput(""); setHistoryOpen(false); };
@@ -64,7 +94,37 @@ export default function ChatPage() {
     if (workspaceId) navigate(`/workspaces/${workspaceId}/assistant`);
     else if (routeWorkspaceId) navigate("/chat/new");
   };
+  const startAgent = async (content: string) => {
+    if (!activeWorkspaceId || mode === "chat") return;
+    setSending(true);
+    setInput("");
+    try {
+      let targetConversationId = conversationId;
+      if (!targetConversationId) {
+        const created = await chatApi.createConversation(content.slice(0, 38), activeWorkspaceId);
+        targetConversationId = created.id;
+        setConversation(created);
+      }
+      const run = await agentApi.start(activeWorkspaceId, {
+        agent_type: mode,
+        prompt: content,
+        conversation_id: targetConversationId,
+        input: mode === "code_generation" ? { research_plan_id: researchPlanId, framework: "PyTorch" } : {},
+      });
+      if (!conversationId) navigate(`/workspaces/${activeWorkspaceId}/assistant/${targetConversationId}`, { replace: true });
+      await Promise.all([loadConversation(targetConversationId), loadAgentRuns(activeWorkspaceId, targetConversationId)]);
+      message.success(`${mode === "research_plan" ? "研究计划" : "代码生成"} Agent 已启动`);
+      setAgentActionId(run.id);
+      window.setTimeout(() => setAgentActionId(undefined), 500);
+      void loadHistory();
+    } catch (error) {
+      setInput(content);
+      message.error(chatErrorMessage(error));
+    } finally { setSending(false); }
+  };
+
   const send = async (content: string) => {
+    if (mode !== "chat") { await startAgent(content); return; }
     const targetId = conversationId;
     const optimisticUser = localMessage(targetId ?? "new", "user", content, messages.length + 1);
     const optimisticAssistant = localMessage(targetId ?? "new", "assistant", "", messages.length + 2);
@@ -85,6 +145,37 @@ export default function ChatPage() {
     } finally { setSending(false); }
   };
 
+  const refreshAgent = async (run: AgentRunDetail) => {
+    if (!activeWorkspaceId) return;
+    setAgentActionId(run.id);
+    try { await Promise.all([loadAgentRuns(activeWorkspaceId, run.conversation_id ?? conversationId ?? ""), conversationId ? loadConversation(conversationId) : Promise.resolve()]); }
+    finally { setAgentActionId(undefined); }
+  };
+  const confirmAgent = async (run: AgentRunDetail) => {
+    if (!activeWorkspaceId) return;
+    setAgentActionId(run.id);
+    try {
+      await agentApi.confirm(activeWorkspaceId, run.id);
+      message.success("研究计划已保存到研究中心");
+      await refreshAgent(run);
+      const response = await discoverApi.listPlans(activeWorkspaceId, { limit: 100 });
+      setResearchPlans(response.items);
+    } catch (error) { message.error(chatErrorMessage(error)); }
+    finally { setAgentActionId(undefined); }
+  };
+  const cancelAgent = async (run: AgentRunDetail) => {
+    if (!activeWorkspaceId) return;
+    setAgentActionId(run.id);
+    try { await agentApi.cancel(activeWorkspaceId, run.id); message.success("Agent 已停止"); await refreshAgent(run); }
+    catch (error) { message.error(chatErrorMessage(error)); }
+    finally { setAgentActionId(undefined); }
+  };
+  const validateAgent = async (run: AgentRunDetail) => {
+    if (!activeWorkspaceId) return;
+    try { await agentApi.validate(activeWorkspaceId, run.id); message.success("已提交隔离验证，可在处理中心查看结果"); }
+    catch (error) { message.error(chatErrorMessage(error)); }
+  };
+
   const retry = async (failed: ChatMessage) => {
     if (!conversationId) return;
     setRetryingId(failed.id);
@@ -102,5 +193,5 @@ export default function ChatPage() {
   };
 
   const historyPanel = <ChatHistory items={history} selectedId={conversationId} loading={historyLoading} query={historyQuery} workspaceNames={workspaceNames} onQueryChange={setHistoryQuery} onNew={newConversation} onSelect={selectConversation} onRename={rename} onDelete={remove} />;
-  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={activeWorkspaceName} /> : <ChatMessages conversationId={conversationId} messages={messages} onRetry={retry} retryingId={retryingId} />}</div>{activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">正在检索并组织回答，请稍候…</div>}<ChatComposer value={input} onChange={setInput} onSend={send} loading={sending || Boolean(retryingId)} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
+  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={activeWorkspaceName} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onValidateAgent={(run) => void validateAgent(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} />}</div>{activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在创建 Agent 任务，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={Boolean(activeWorkspaceId)} mode={mode} onModeChange={setMode} planOptions={researchPlans.map((plan) => ({ value: plan.id, label: plan.research_question }))} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
 }

@@ -97,7 +97,7 @@ export default function ResearchPlansPage() {
             title={<Space wrap><Text strong>{plan.research_question}</Text><Tag color="blue">{plan.status}</Tag></Space>}
             description={<Space direction="vertical" size={4}><Text>假设：{plan.hypothesis || "—"}</Text><Space wrap>{plan.datasets.slice(0, 4).map((dataset) => <Tag key={dataset}>{dataset}</Tag>)}<Text type="secondary">{plan.validation_steps.length} 个验证步骤</Text></Space></Space>}
           />
-          <Link to={`/workspaces/${workspace.id}/discover/opportunities/${plan.opportunity_id}`}><Button>查看来源机会</Button></Link>
+          {plan.opportunity_id ? <Link to={`/workspaces/${workspace.id}/discover/opportunities/${plan.opportunity_id}`}><Button>查看来源机会</Button></Link> : <Tag color="purple">AI 助手生成</Tag>}
         </List.Item>
       )}
     />

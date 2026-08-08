@@ -41,5 +41,6 @@ from app.domains.chat.models import (  # noqa: F401
     ChatMessage,
     ChatMessageEvidence,
 )
+from app.domains.agent.models import AgentArtifact, AgentRun, AgentStep  # noqa: F401
 
 from app.db.base import Base  # noqa: F401

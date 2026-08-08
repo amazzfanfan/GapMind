@@ -5,12 +5,18 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../../api/chat";
 import ChatCitations from "./ChatCitations";
+import ChatAgentRunCard from "./ChatAgentRunCard";
+import type { AgentRunDetail } from "../../api/agent";
 
-interface Props { conversationId?: string; messages: ChatMessage[]; onRetry: (message: ChatMessage) => void; retryingId?: string; }
+interface Props { conversationId?: string; messages: ChatMessage[]; agentRuns?: AgentRunDetail[]; onRetry: (message: ChatMessage) => void; retryingId?: string; agentActionId?: string; onRefreshAgent: (run: AgentRunDetail) => void; onConfirmAgent: (run: AgentRunDetail) => void; onCancelAgent: (run: AgentRunDetail) => void; onValidateAgent: (run: AgentRunDetail) => void; onDownloadAgent: (run: AgentRunDetail) => void; }
 
-export default function ChatMessages({ conversationId, messages, onRetry, retryingId }: Props) {
+export default function ChatMessages({ conversationId, messages, agentRuns = [], onRetry, retryingId, agentActionId, onRefreshAgent, onConfirmAgent, onCancelAgent, onValidateAgent, onDownloadAgent }: Props) {
   if (messages.length === 0) return <Empty className="gm-chat-empty-messages" image={Empty.PRESENTED_IMAGE_SIMPLE} description="开始一段新的研究对话" />;
-  return <div className="gm-chat-messages">{messages.map((message) => <ChatMessageItem key={message.id} conversationId={conversationId} message={message} onRetry={onRetry} retrying={retryingId === message.id} />)}</div>;
+  const byAssistant = new Map(agentRuns.map((run) => [run.assistant_message_id, run]));
+  return <div className="gm-chat-messages">{messages.map((message) => {
+    const run = byAssistant.get(message.id);
+    return <div key={message.id}>{run ? <><ChatAgentRunCard run={run} loading={agentActionId === run.id} onRefresh={() => onRefreshAgent(run)} onConfirm={() => onConfirmAgent(run)} onCancel={() => onCancelAgent(run)} onValidate={() => onValidateAgent(run)} onDownload={() => onDownloadAgent(run)} />{conversationId && (message.citations?.length ?? 0) > 0 && <div className="gm-agent-citations"><ChatCitations conversationId={conversationId} messageId={message.id} citations={message.citations ?? []} /></div>}</> : <ChatMessageItem conversationId={conversationId} message={message} onRetry={onRetry} retrying={retryingId === message.id} />}</div>;
+  })}</div>;
 }
 
 function ChatMessageItem({ conversationId, message, onRetry, retrying }: { conversationId?: string; message: ChatMessage; onRetry: (message: ChatMessage) => void; retrying: boolean }) {
