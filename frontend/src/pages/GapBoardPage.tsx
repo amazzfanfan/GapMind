@@ -17,6 +17,17 @@ function errorMessage(error: unknown): string {
   return detail?.message || value.message || "请求失败";
 }
 
+const candidatePresentation: Record<
+  GapBoardCell["candidate_tier"],
+  { label: string; color: string }
+> = {
+  covered: { label: "已有方法解决", color: "green" },
+  explicit_limitation: { label: "明确剩余局限", color: "orange" },
+  same_paper_unlinked: { label: "同篇共现待核验", color: "gold" },
+  cross_paper_transfer: { label: "跨论文迁移候选", color: "blue" },
+  corpus_only: { label: "语料库未覆盖（低证据）", color: "default" },
+};
+
 export default function GapBoardPage() {
   const { id: workspaceId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -167,20 +178,30 @@ export default function GapBoardPage() {
             );
           }
           const key = `${cell.method_concept_id}:${cell.problem_concept_id}`;
+          const presentation = candidatePresentation[cell.candidate_tier] || candidatePresentation.corpus_only;
           return (
             <Space direction="vertical" size={4}>
-              <Tag color={cell.explicit_limitation ? "orange" : "default"}>
-                {cell.explicit_limitation ? "明确剩余局限" : "语料库未覆盖"}
-              </Tag>
-              <Text type="secondary">候选分 {cell.candidate_score.toFixed(2)}</Text>
-              <Button
-                size="small"
-                type="link"
-                loading={discovering === key}
-                onClick={() => void verifyCandidate(cell)}
-              >
-                交给 Discover 核验
-              </Button>
+              <Tag color={presentation.color}>{presentation.label}</Tag>
+              <Text type="secondary">核验优先级 {cell.candidate_score.toFixed(2)}</Text>
+              {cell.candidate_reasons[0] ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {cell.candidate_reasons[0]}
+                </Text>
+              ) : null}
+              {cell.eligible_for_discovery ? (
+                <Button
+                  size="small"
+                  type="link"
+                  loading={discovering === key}
+                  onClick={() => void verifyCandidate(cell)}
+                >
+                  交给 Discover 核验
+                </Button>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  暂不推荐核验
+                </Text>
+              )}
             </Space>
           );
         },
@@ -191,6 +212,7 @@ export default function GapBoardPage() {
   if (!workspaceId) return <Empty description="工作区不存在" />;
   const validCount = annotations.filter((item) => item.status === "valid").length;
   const invalidCount = annotations.filter((item) => item.status === "invalid").length;
+  const uncoveredCount = board?.cells.filter((item) => !item.addressed).length || 0;
 
   return (
     <Space direction="vertical" size={18} style={{ width: "100%" }}>
@@ -217,15 +239,16 @@ export default function GapBoardPage() {
       <Alert
         type="warning"
         showIcon
-        message="棋盘空格不等于真实研究空白"
-        description="系统只把空格作为候选。必须再经过工作区相似工作检索、外部论文搜索、反证与 Evidence Gate，才可进入研究机会列表。"
+        message="棋盘空格不等于真实研究空白，优先级也不是成功概率"
+        description="系统保留全部未覆盖格用于观察，但只有明确局限、同篇共现未连接，或方法族与问题族均获得多篇论文支持的格子会进入推荐核验。之后仍须经过相似工作、外部论文、反证与 Evidence Gate。"
       />
 
       <Space wrap>
         <Card size="small"><Statistic title="有效专项标注" value={validCount} /></Card>
         <Card size="small"><Statistic title="隔离的无效标注" value={invalidCount} /></Card>
         <Card size="small"><Statistic title="棋盘版本" value={board?.version || 0} /></Card>
-        <Card size="small"><Statistic title="待核验候选格" value={board?.candidate_count || 0} /></Card>
+        <Card size="small"><Statistic title="全部未覆盖格" value={uncoveredCount} /></Card>
+        <Card size="small"><Statistic title="推荐核验候选格" value={board?.candidate_count || 0} /></Card>
       </Space>
 
       <Card title="方法 × 问题" loading={loading}>

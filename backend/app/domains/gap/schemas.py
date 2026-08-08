@@ -159,8 +159,12 @@ class GapBoardCell(BaseModel):
     addressed: bool
     addressed_paper_ids: list[str] = Field(default_factory=list)
     limitation_paper_ids: list[str] = Field(default_factory=list)
+    cooccurrence_paper_ids: list[str] = Field(default_factory=list)
     explicit_limitation: bool = False
     candidate_score: float = 0.0
+    candidate_tier: str = "corpus_only"
+    candidate_reasons: list[str] = Field(default_factory=list)
+    eligible_for_discovery: bool = False
     verification_status: str = "unverified"
 
 

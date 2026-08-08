@@ -30,8 +30,12 @@ export interface GapBoardCell {
   addressed: boolean;
   addressed_paper_ids: string[];
   limitation_paper_ids: string[];
+  cooccurrence_paper_ids: string[];
   explicit_limitation: boolean;
   candidate_score: number;
+  candidate_tier: "covered" | "explicit_limitation" | "same_paper_unlinked" | "cross_paper_transfer" | "corpus_only";
+  candidate_reasons: string[];
+  eligible_for_discovery: boolean;
   verification_status: string;
 }
 

@@ -43,9 +43,7 @@ def _service(db: DbSession) -> GapService:
     return GapService(db)
 
 
-def _workspace_dependency(
-    workspace_id: str, db: DbSession
-) -> None:
+def _workspace_dependency(workspace_id: str, db: DbSession) -> None:
     WorkspaceService(db).get(workspace_id)
 
 
@@ -69,15 +67,11 @@ def extract_papers(
     tasks: list[GapExtractionTask] = []
     for paper_id in dict.fromkeys(payload.paper_ids):
         try:
-            task_id = spawn_gap_extraction(
-                db, paper_id, workspace_id, force=payload.force
-            )
+            task_id = spawn_gap_extraction(db, paper_id, workspace_id, force=payload.force)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         task = TaskService(db).get(task_id)
-        tasks.append(
-            GapExtractionTask(paper_id=paper_id, task_id=task_id, status=task.status)
-        )
+        tasks.append(GapExtractionTask(paper_id=paper_id, task_id=task_id, status=task.status))
     return GapExtractionResponse(tasks=tasks)
 
 
@@ -140,6 +134,14 @@ def discover_candidate(
             status_code=409,
             detail="the selected method-problem pair is already covered",
         )
+    if not cell.get("eligible_for_discovery", False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the selected cell is only a low-evidence corpus absence; "
+                "rebuild the board with more papers or select a recommended candidate"
+            ),
+        )
     method_label = context["method"]["label"]
     problem_label = context["problem"]["label"]
     limitation_note = (
@@ -176,13 +178,9 @@ def discover_candidate(
         ),
         config=DiscoverConfig(max_opportunities=payload.max_opportunities),
     )
-    run, task_id = DiscoverService(db).create_run(
-        workspace_id, request, actor=current_user
-    )
+    run, task_id = DiscoverService(db).create_run(workspace_id, request, actor=current_user)
     celery_id = spawn_discover_task(run.id)
     task = TaskService(db).get(task_id)
     task.celery_task_id = celery_id
     db.commit()
-    return GapCandidateDiscoverResponse(
-        run_id=run.id, task_id=task_id, status=run.status
-    )
+    return GapCandidateDiscoverResponse(run_id=run.id, task_id=task_id, status=run.status)
