@@ -90,6 +90,84 @@ class OpportunityWorkflow:
         )
         return items, total
 
+    def list_confirmed_portfolio(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return durable confirmed opportunities independent of run history visibility."""
+        base = select(ResearchOpportunity).where(
+            ResearchOpportunity.workspace_id == workspace_id,
+            ResearchOpportunity.is_deleted.is_(False),
+            ResearchOpportunity.status.in_({"confirmed", "edited_confirmed"}),
+        )
+        opportunities = list(
+            self.db.execute(
+                base.order_by(ResearchOpportunity.updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+            ).scalars()
+        )
+        total = int(
+            self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        )
+        if not opportunities:
+            return [], total
+
+        version_ids = [item.current_version_id for item in opportunities if item.current_version_id]
+        versions = {
+            item.id: item
+            for item in self.db.execute(
+                select(OpportunityVersion).where(OpportunityVersion.id.in_(version_ids))
+            ).scalars()
+        } if version_ids else {}
+        opportunity_ids = [item.id for item in opportunities]
+        plans: dict[str, ResearchPlan] = {}
+        for plan in self.db.execute(
+            select(ResearchPlan)
+            .where(ResearchPlan.opportunity_id.in_(opportunity_ids))
+            .order_by(ResearchPlan.created_at.desc())
+        ).scalars():
+            plans.setdefault(plan.opportunity_id, plan)
+        return [
+            {
+                "opportunity": item,
+                "current_version": versions.get(item.current_version_id),
+                "plan": plans.get(item.id),
+            }
+            for item in opportunities
+        ], total
+
+    def list_research_plans(
+        self,
+        workspace_id: str,
+        *,
+        status_filter: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ResearchPlan], int]:
+        base = (
+            select(ResearchPlan)
+            .join(ResearchOpportunity, ResearchPlan.opportunity_id == ResearchOpportunity.id)
+            .where(
+                ResearchPlan.workspace_id == workspace_id,
+                ResearchOpportunity.is_deleted.is_(False),
+            )
+        )
+        if status_filter:
+            base = base.where(ResearchPlan.status == status_filter)
+        plans = list(
+            self.db.execute(
+                base.order_by(ResearchPlan.updated_at.desc()).limit(limit).offset(offset)
+            ).scalars()
+        )
+        total = int(
+            self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        )
+        return plans, total
+
     def get_opportunity(self, workspace_id: str, opportunity_id: str) -> ResearchOpportunity:
         item = self.db.get(ResearchOpportunity, opportunity_id)
         if item is None or item.is_deleted or item.workspace_id != workspace_id:

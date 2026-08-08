@@ -20,5 +20,7 @@ describe("navigation helpers", () => {
     expect(workspaceNavigationPath("ws-1", "overview")).toBe("/workspaces/ws-1/overview");
     expect(workspaceNavigationPath("ws-1", "papers")).toBe("/workspaces/ws-1/papers");
     expect(workspaceNavigationPath("ws-1", "assistant")).toBe("/workspaces/ws-1/assistant");
+    expect(workspaceNavigationPath("ws-1", "plans")).toBe("/workspaces/ws-1/plans");
+    expect(selectedWorkspaceKey("/workspaces/ws-1/plans")).toBe("plans");
   });
 });

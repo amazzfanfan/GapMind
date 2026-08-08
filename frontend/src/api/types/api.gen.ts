@@ -790,6 +790,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/discover/runs/{run_id}/external-selection/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Skip External Selection */
+        post: operations["skip_external_selection_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_skip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/discover/runs/{run_id}/cancel": {
         parameters: {
             query?: never;
@@ -816,6 +833,40 @@ export interface paths {
         };
         /** List Opportunities */
         get: operations["list_opportunities_api_v1_workspaces__workspace_id__discover_opportunities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/discover/portfolio/opportunities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Confirmed Portfolio */
+        get: operations["list_confirmed_portfolio_api_v1_workspaces__workspace_id__discover_portfolio_opportunities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/discover/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Research Plans */
+        get: operations["list_research_plans_api_v1_workspaces__workspace_id__discover_plans_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2185,6 +2236,23 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** OpportunityPortfolioItem */
+        OpportunityPortfolioItem: {
+            opportunity: components["schemas"]["ResearchOpportunityRead"];
+            current_version?: components["schemas"]["OpportunityVersionRead"] | null;
+            plan?: components["schemas"]["ResearchPlanRead"] | null;
+        };
+        /** OpportunityPortfolioResponse */
+        OpportunityPortfolioResponse: {
+            /** Items */
+            items: components["schemas"]["OpportunityPortfolioItem"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** OpportunityVersionRead */
         OpportunityVersionRead: {
             /** Id */
@@ -2397,6 +2465,17 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** ResearchPlanListResponse */
+        ResearchPlanListResponse: {
+            /** Items */
+            items: components["schemas"]["ResearchPlanRead"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** ResearchPlanRead */
         ResearchPlanRead: {
@@ -4689,6 +4768,40 @@ export interface operations {
             };
         };
     };
+    skip_external_selection_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_skip_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cancel_run_api_v1_workspaces__workspace_id__discover_runs__run_id__cancel_post: {
         parameters: {
             query?: never;
@@ -4746,6 +4859,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_confirmed_portfolio_api_v1_workspaces__workspace_id__discover_portfolio_opportunities_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpportunityPortfolioResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_research_plans_api_v1_workspaces__workspace_id__discover_plans_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchPlanListResponse"];
                 };
             };
             /** @description Validation Error */

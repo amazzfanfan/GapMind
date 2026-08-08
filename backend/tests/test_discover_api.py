@@ -6,7 +6,14 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.domains.discover.models import DiscoverRun, ResearchOpportunity
+from app.domains.discover.models import (
+    DiscoverExternalCandidate,
+    DiscoverRun,
+    OpportunityVersion,
+    ResearchOpportunity,
+    ResearchPlan,
+)
+from app.domains.task.models import Task
 
 
 def test_create_and_read_discover_run(client: TestClient) -> None:
@@ -163,3 +170,124 @@ def test_pending_opportunity_filter_returns_authoritative_workspace_count(
     assert body["total"] == 2
     assert len(body["items"]) == 1
     assert body["items"][0]["status"] in {"candidate", "needs_more_evidence"}
+
+
+def test_user_can_skip_external_selection_and_resume_run(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    workspace = client.post("/api/v1/workspaces", json={"name": "Skip Selection WS"}).json()
+    with patch("app.domains.discover.router.spawn_discover_task", return_value="initial-celery-id"):
+        created = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/discover/runs",
+            json={"input": {"topic": "Workspace-only evidence"}},
+        )
+    run = db_session.get(DiscoverRun, created.json()["run_id"])
+    assert run is not None and run.task_id
+    task = db_session.get(Task, run.task_id)
+    assert task is not None
+    run.status = "waiting_for_user"
+    run.stage = "external_selection"
+    run.progress = 0.62
+    run.stage_summaries = {
+        "external_search": {"status": "succeeded", "external_candidates": 1},
+        "external_selection": {"status": "waiting_for_user"},
+    }
+    task.status = "waiting_for_user"
+    db_session.add(
+        DiscoverExternalCandidate(
+            discover_run_id=run.id,
+            query="workspace evidence",
+            rank=1,
+            external_paper_id="S2-skip",
+            title="External candidate",
+            authors=[],
+            snapshot_payload={},
+        )
+    )
+    db_session.commit()
+
+    with patch("app.domains.discover.router.spawn_discover_task", return_value="resumed-celery-id"):
+        response = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/discover/runs/{run.id}/external-selection/skip"
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["stage"] == "synthesis"
+    assert body["stage_summaries"]["external_selection"]["status"] == "skipped"
+    db_session.refresh(task)
+    assert task.status == "running"
+    assert task.payload["user_decision"]["action"] == "skip_external_selection"
+
+
+def test_research_portfolio_keeps_confirmed_outputs_from_deleted_run(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    workspace = client.post("/api/v1/workspaces", json={"name": "Research Portfolio WS"}).json()
+    run = DiscoverRun(
+        workspace_id=workspace["id"],
+        input_topic="Archived discovery",
+        input_payload={},
+        scope={},
+        config={},
+        status="succeeded",
+        stage="saved",
+        progress=1.0,
+        verification_status="complete",
+        stage_summaries={},
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    db_session.flush()
+    opportunity = ResearchOpportunity(
+        workspace_id=workspace["id"],
+        discover_run_id=run.id,
+        title="Confirmed durable opportunity",
+        summary="Summary",
+        rationale="Rationale",
+        confidence=0.8,
+        status="confirmed",
+    )
+    db_session.add(opportunity)
+    db_session.flush()
+    version = OpportunityVersion(
+        opportunity_id=opportunity.id,
+        version_number=1,
+        title=opportunity.title,
+        problem_statement="Problem",
+        candidate_research_question="Can the method generalize?",
+        candidate_hypothesis="The method improves robustness.",
+        confidence=0.8,
+        evidence_coverage=0.75,
+        verification_status="verified",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add(version)
+    db_session.flush()
+    opportunity.current_version_id = version.id
+    plan = ResearchPlan(
+        workspace_id=workspace["id"],
+        opportunity_id=opportunity.id,
+        opportunity_version_id=version.id,
+        research_question=version.candidate_research_question,
+        hypothesis=version.candidate_hypothesis,
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    portfolio = client.get(
+        f"/api/v1/workspaces/{workspace['id']}/discover/portfolio/opportunities"
+    )
+    assert portfolio.status_code == 200, portfolio.text
+    assert portfolio.json()["total"] == 1
+    assert portfolio.json()["items"][0]["opportunity"]["id"] == opportunity.id
+    assert portfolio.json()["items"][0]["current_version"]["id"] == version.id
+    assert portfolio.json()["items"][0]["plan"]["id"] == plan.id
+
+    plans = client.get(f"/api/v1/workspaces/{workspace['id']}/discover/plans")
+    assert plans.status_code == 200, plans.text
+    assert plans.json()["total"] == 1
+    assert plans.json()["items"][0]["id"] == plan.id

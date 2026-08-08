@@ -155,6 +155,30 @@ def test_external_verification_is_warning_when_core_evidence_passes(db_session) 
     assert gate["warnings"] == ["external verification did not complete"]
 
 
+def test_skipped_external_selection_is_a_non_blocking_verification_warning(db_session) -> None:
+    run = _run(str(uuid4()))
+    run.stage_summaries = {
+        "external_search": {"status": "succeeded", "external_candidates": 3},
+        "external_selection": {"status": "skipped", "reason": "user_skipped"},
+    }
+    service = DiscoverService(db_session)
+
+    assert service._external_selection_skipped(run) is True
+    gate = service._evidence_gate(
+        run,
+        candidate=None,
+        supporting=_supporting_response([]),
+        counter=RetrievalResponse(
+            workspace_id=run.workspace_id,
+            purpose="counter_evidence",
+            status="succeeded",
+        ),
+    )
+    assert gate["external_search_executed"] is True
+    assert gate["external_verification_completed"] is False
+    assert "external verification did not complete" in gate["warnings"]
+
+
 def test_incomplete_gate_does_not_cap_agent_confidence() -> None:
     candidate = DiscoverService._normalize_candidate(
         {"confidence": 0.82},

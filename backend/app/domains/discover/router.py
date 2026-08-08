@@ -32,10 +32,13 @@ from app.domains.discover.schemas import (
     OpportunityEvidenceRead,
     OpportunityEvidenceContext,
     OpportunityListResponse,
+    OpportunityPortfolioItem,
+    OpportunityPortfolioResponse,
     OpportunityVersionRead,
     PlanCreateResponse,
     ResearchOpportunityRead,
     ResearchPlanRead,
+    ResearchPlanListResponse,
 )
 from app.domains.discover.service import DiscoverService
 from app.domains.task.service import TaskService
@@ -128,6 +131,21 @@ def select_external(
     return DiscoverRunRead.model_validate(run)
 
 
+@router.post("/runs/{run_id}/external-selection/skip", response_model=DiscoverRunRead)
+def skip_external_selection(
+    workspace_id: str,
+    run_id: str,
+    service: DiscoverService = Depends(_service),
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user),
+) -> DiscoverRunRead:
+    run = service.skip_external_selection(workspace_id, run_id, actor=current_user)
+    celery_id = spawn_discover_task(run.id)
+    if run.task_id:
+        _attach_celery_id(db, run.task_id, celery_id)
+    return DiscoverRunRead.model_validate(run)
+
+
 @router.post("/runs/{run_id}/cancel", response_model=DiscoverRunRead)
 def cancel_run(
     workspace_id: str,
@@ -166,6 +184,59 @@ def list_opportunities(
         offset=offset,
     )
     return OpportunityListResponse(items=[ResearchOpportunityRead.model_validate(item) for item in items], total=total, limit=limit, offset=offset)
+
+
+@router.get("/portfolio/opportunities", response_model=OpportunityPortfolioResponse)
+def list_confirmed_portfolio(
+    workspace_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    service: DiscoverService = Depends(_service),
+) -> OpportunityPortfolioResponse:
+    items, total = service.list_confirmed_portfolio(
+        workspace_id,
+        limit=limit,
+        offset=offset,
+    )
+    return OpportunityPortfolioResponse(
+        items=[
+            OpportunityPortfolioItem(
+                opportunity=ResearchOpportunityRead.model_validate(item["opportunity"]),
+                current_version=OpportunityVersionRead.model_validate(item["current_version"])
+                if item["current_version"]
+                else None,
+                plan=ResearchPlanRead.model_validate(item["plan"])
+                if item["plan"]
+                else None,
+            )
+            for item in items
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/plans", response_model=ResearchPlanListResponse)
+def list_research_plans(
+    workspace_id: str,
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    service: DiscoverService = Depends(_service),
+) -> ResearchPlanListResponse:
+    items, total = service.list_research_plans(
+        workspace_id,
+        status_filter=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return ResearchPlanListResponse(
+        items=[ResearchPlanRead.model_validate(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/opportunities/{opportunity_id}", response_model=OpportunityDetail)

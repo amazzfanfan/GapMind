@@ -295,8 +295,8 @@ class DiscoverService(OpportunityWorkflow):
 
     def select_external(self, workspace_id: str, run_id: str, candidate_ids: list[str]) -> DiscoverRun:
         run = self.get_run(workspace_id, run_id)
-        if run.status in {"cancelled", "succeeded"}:
-            raise DiscoverInputError(f"Run is already {run.status}")
+        if run.status != "waiting_for_user" or run.stage != "external_selection":
+            raise DiscoverInputError("Run is not waiting for external paper selection")
         rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id, DiscoverExternalCandidate.id.in_(candidate_ids))).scalars())
         if len(rows) != len(set(candidate_ids)):
             raise DiscoverInputError("one or more external candidates do not belong to this run")
@@ -317,6 +317,51 @@ class DiscoverService(OpportunityWorkflow):
             except Exception:
                 pass
         return run
+
+    def skip_external_selection(
+        self,
+        workspace_id: str,
+        run_id: str,
+        *,
+        actor: str = "user",
+    ) -> DiscoverRun:
+        run = self.get_run(workspace_id, run_id)
+        if run.status != "waiting_for_user" or run.stage != "external_selection":
+            raise DiscoverInputError("Run is not waiting for external paper selection")
+        run.status = "queued"
+        run.stage = "synthesis"
+        run.progress = max(run.progress, 0.62)
+        run.verification_status = "incomplete"
+        run.stage_summaries = {
+            **(run.stage_summaries or {}),
+            "external_selection": {
+                "status": "skipped",
+                "reason": "user_skipped",
+                "selected": 0,
+                "actor": actor,
+                "skipped_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        self.db.commit()
+        if run.task_id:
+            TaskService(self.db).resume_from_user(
+                run.task_id,
+                decision={"action": "skip_external_selection"},
+            )
+        self.timeline.record(
+            workspace_id=workspace_id,
+            event_type="discover.external_selection_skipped",
+            subject_type="discover_run",
+            subject_id=run.id,
+            actor=actor,
+            payload={"run_id": run.id, "reason": "user_skipped"},
+        )
+        return run
+
+    @staticmethod
+    def _external_selection_skipped(run: DiscoverRun) -> bool:
+        summary = (run.stage_summaries or {}).get("external_selection") or {}
+        return summary.get("status") == "skipped"
 
     def _external_candidate_state(self, run: DiscoverRun) -> dict[str, Any]:
         rows = list(
@@ -492,7 +537,14 @@ class DiscoverService(OpportunityWorkflow):
         pending = candidate_state["pending"]
         verified = candidate_state["verified"]
         failed = candidate_state["failed"]
-        if external and not selected and not pending and not verified and not failed:
+        if (
+            external
+            and not self._external_selection_skipped(run)
+            and not selected
+            and not pending
+            and not verified
+            and not failed
+        ):
             run.status = "waiting_for_user"
             run.stage = "external_selection"
             run.progress = 0.62
@@ -1348,6 +1400,7 @@ class DiscoverService(OpportunityWorkflow):
 
         external_summary = (run.stage_summaries or {}).get("external_search") or {}
         external_executed = external_summary.get("status") in {"succeeded", "succeeded_empty"}
+        external_verification_completed = external_executed and not self._external_selection_skipped(run)
         supporting_checked = supporting.status == "succeeded"
         counter_checked = counter.status == "succeeded"
         blocking_missing: list[str] = []
@@ -1358,7 +1411,7 @@ class DiscoverService(OpportunityWorkflow):
             blocking_missing.append(f"supporting evidence retrieval status is {supporting.status}")
         if not counter_checked:
             blocking_missing.append(f"counter evidence status is {counter.status}")
-        if not external_executed:
+        if not external_verification_completed:
             warnings.append("external verification did not complete")
         coverage = self._evidence_coverage(candidate, valid)
         if coverage < 0.6:
@@ -1375,6 +1428,7 @@ class DiscoverService(OpportunityWorkflow):
             "counter_checked": counter_checked,
             "counter_status": counter.status,
             "external_search_executed": external_executed,
+            "external_verification_completed": external_verification_completed,
             "external_search_status": external_summary.get("status", "not_run"),
             "evidence_coverage": coverage,
             "reason": "verified" if verified else ("verified_with_warnings" if confirmable else "insufficient_full_text_evidence"),

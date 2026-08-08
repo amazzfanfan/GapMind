@@ -107,7 +107,7 @@ function opportunityStatus(item: ResearchOpportunity): string {
 export default function DiscoverPage() {
   const { id: workspaceId, runId, opportunityId } = useParams<{ id: string; runId?: string; opportunityId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const screens = Grid.useBreakpoint();
   const [form] = Form.useForm();
   const [decisionForm] = Form.useForm();
@@ -271,6 +271,28 @@ export default function DiscoverPage() {
     catch (error) { message.error(`Selection failed: ${errorMessage(error)}`); }
   };
 
+  const skipExternalSelection = () => {
+    if (!workspaceId || !runDetail) return;
+    modal.confirm({
+      title: "Skip external paper verification?",
+      content: "Discover will continue using only evidence already available in this workspace. External candidates will not be imported or parsed, so novelty verification may be less complete.",
+      okText: "Skip and continue",
+      cancelText: "Keep selecting",
+      onOk: async () => {
+        setActionLoading(true);
+        try {
+          await discoverApi.skipExternalSelection(workspaceId, runDetail.id);
+          message.success("External selection skipped; Discover is continuing with workspace knowledge");
+          await load();
+        } catch (error) {
+          message.error(`Could not skip selection: ${errorMessage(error)}`);
+        } finally {
+          setActionLoading(false);
+        }
+      },
+    });
+  };
+
   const cancelRun = async () => {
     if (!workspaceId || !selectedRun) return;
     try { await discoverApi.cancelRun(workspaceId, selectedRun.id); message.success("Discover run cancelled"); await load(); }
@@ -318,13 +340,14 @@ export default function DiscoverPage() {
                 <Progress percent={Math.round((runDetail?.id === selectedRun.id ? runDetail.progress : selectedRun.progress) * 100)} status={selectedRun.status === "failed" ? "exception" : undefined} />
                 {stagePosition < 0 ? <Tag color="red">Unknown stage: {stage || "missing"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item) => { const label = item.replaceAll("_", " "); const failed = item === "external_search" && externalSearchError; return { status: failed ? "error" : undefined, title: <Tooltip title={failed ? "No papers found or external search failed" : label}><span>{label}</span></Tooltip> }; })} />}
                 {selectedRun.status === "waiting_for_fulltext" && <Paragraph type="warning" style={{ marginTop: 16 }}>The selected paper is being parsed, indexed, and checked for EvidenceSpan. Synthesis is paused until the pipeline is ready.</Paragraph>}
+                {selectedRun.status === "waiting_for_user" && stage === "external_selection" && <Alert style={{ marginTop: 16 }} type="info" showIcon message="External papers are ready for review" description={<Space direction="vertical" size={8}><Text>Select a paper for full-text verification, or continue with evidence already available in this workspace.</Text><Button onClick={skipExternalSelection} loading={actionLoading}>Skip external selection and continue</Button></Space>} />}
                 {selectedRun.error_message && <Paragraph type="danger" style={{ marginTop: 16 }}>{selectedRun.error_message}</Paragraph>}
               </>}
             </Card>
             <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
       {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(displayStatus)}>{displayStatus}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>; }} />}
             </Card>
-            {runDetail?.external_candidates?.length ? <Card title="External candidates for verification"><List size="small" dataSource={runDetail.external_candidates} renderItem={(candidate) => <List.Item actions={[<Button key="select" size="small" onClick={() => void selectExternal(candidate)} disabled={verificationActionDisabled(candidate.verification_status)}>{verificationActionLabel(candidate.verification_status)}</Button>]}><List.Item.Meta title={`${candidate.rank}. ${candidate.title}`} description={<Space wrap><Tag>{candidate.year || "Year unknown"}</Tag><Tag>{candidate.evidence_level}</Tag><Tag color={candidate.verification_status === "verified" ? "green" : candidate.verification_status === "verification_failed" ? "red" : "processing"}>{verificationStatusLabel(candidate.verification_status)}</Tag><Tag>{candidate.role}</Tag></Space>} /></List.Item>} /></Card> : null}
+            {runDetail?.external_candidates?.length ? <Card title="External candidates for verification" extra={selectedRun?.status === "waiting_for_user" && stage === "external_selection" ? <Button size="small" onClick={skipExternalSelection} loading={actionLoading}>Skip selection</Button> : null}><List size="small" dataSource={runDetail.external_candidates} renderItem={(candidate) => <List.Item actions={[<Button key="select" size="small" onClick={() => void selectExternal(candidate)} disabled={verificationActionDisabled(candidate.verification_status)}>{verificationActionLabel(candidate.verification_status)}</Button>]}><List.Item.Meta title={`${candidate.rank}. ${candidate.title}`} description={<Space wrap><Tag>{candidate.year || "Year unknown"}</Tag><Tag>{candidate.evidence_level}</Tag><Tag color={candidate.verification_status === "verified" ? "green" : candidate.verification_status === "verification_failed" ? "red" : "processing"}>{verificationStatusLabel(candidate.verification_status)}</Tag><Tag>{candidate.role}</Tag></Space>} /></List.Item>} /></Card> : null}
           </Space>
         </div>
       </Space>

@@ -247,6 +247,26 @@ class OpportunityListResponse(BaseModel):
     offset: int
 
 
+class OpportunityPortfolioItem(BaseModel):
+    opportunity: ResearchOpportunityRead
+    current_version: OpportunityVersionRead | None = None
+    plan: ResearchPlanRead | None = None
+
+
+class OpportunityPortfolioResponse(BaseModel):
+    items: list[OpportunityPortfolioItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class ResearchPlanListResponse(BaseModel):
+    items: list[ResearchPlanRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class DiscoverRunListResponse(BaseModel):
     """Standard list envelope for ``GET /discover/runs``.
 
