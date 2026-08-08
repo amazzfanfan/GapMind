@@ -1,0 +1,235 @@
+"""W7 full-lifecycle agent tests: Analyze / Write / Respond.
+
+These reuse the controlled AgentRun/AgentStep/AgentArtifact protocol. All three
+are plan-bound, evidence-linked, end in "succeeded" with a markdown artifact
+in agent_artifacts (never auto-promoted), and each claim cites workspace
+evidence via [En] markers.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from unittest.mock import patch
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+
+from app.domains.agent.service import AgentService
+from app.domains.discover.models import ResearchPlan
+from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
+
+
+@dataclass
+class FakeResponse:
+    content: str
+    model: str = "fake-deepseek"
+    prompt_tokens: int = 20
+    completion_tokens: int = 30
+    total_tokens: int = 50
+
+
+class FakeGateway:
+    api_key = "test-key"
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def chat_completion(self, messages, **kwargs):
+        return FakeResponse(json.dumps(self.payload, ensure_ascii=False))
+
+
+def _retrieval(workspace_id: str) -> RetrievalResponse:
+    return RetrievalResponse(
+        workspace_id=workspace_id,
+        status="succeeded",
+        items=[
+            RetrievalResultItem(
+                paper_id="paper-1",
+                paper_title="Grounded Paper",
+                chunk_id="chunk-1",
+                section="Methods",
+                text="The method uses topology-aware contrastive learning.",
+                score=0.91,
+            )
+        ],
+    )
+
+
+def _workspace_plan(client, db_session: Session) -> tuple[dict, dict, ResearchPlan]:
+    workspace = client.post("/api/v1/workspaces", json={"name": "Lifecycle WS"}).json()
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "Lifecycle 对话", "workspace_id": workspace["id"]},
+    ).json()
+    plan = ResearchPlan(
+        id=str(uuid4()),
+        workspace_id=workspace["id"],
+        status="draft",
+        research_question="拓扑感知对比学习能否提升分布偏移下的鲁棒性？",
+        hypothesis="拓扑正则能够提高 OOD 准确率。",
+        scope_and_assumptions="节点分类",
+        datasets=["Cora"],
+        baselines=["GCN"],
+        metrics=["OOD accuracy"],
+        validation_steps=["构造分布偏移"],
+        expected_supporting_result="准确率提升",
+        falsification_criteria="提升小于 1%",
+        risks=["数据规模有限"],
+        resource_constraints="单张 GPU",
+    )
+    db_session.add(plan)
+    db_session.commit()
+    return workspace, conversation, plan
+
+
+def _start(client, workspace: dict, conversation: dict, *, agent_type: str, input_payload: dict):
+    with patch("app.domains.agent.router.spawn_agent_task", return_value="celery-agent"):
+        response = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/agent-runs",
+            json={
+                "agent_type": agent_type,
+                "prompt": "执行",
+                "conversation_id": conversation["id"],
+                "input": input_payload,
+            },
+        )
+    return response
+
+
+def _execute(client, db_session: Session, run_id: str, payload: dict, workspace_id: str):
+    import app.domains.agent.service as agent_service_module
+
+    with patch.object(
+        agent_service_module,
+        "semantic_search",
+        lambda **_: _retrieval(workspace_id),
+    ):
+        AgentService(db_session, gateway=FakeGateway(payload)).execute(run_id)
+    detail = client.get(f"/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}")
+    assert detail.status_code == 200
+    return detail.json()
+
+
+def test_analyze_agent_produces_evidence_linked_memo(client, db_session: Session, monkeypatch):
+    workspace, conversation, plan = _workspace_plan(client, db_session)
+    started = _start(
+        client, workspace, conversation,
+        agent_type="analyze",
+        input_payload={
+            "research_plan_id": plan.id,
+            "results": {"ood_accuracy": 0.82, "baseline_ood_accuracy": 0.79},
+        },
+    )
+    assert started.status_code == 202, started.text
+    run_id = started.json()["id"]
+
+    body = _execute(
+        client, db_session, run_id,
+        {
+            "verdict": "部分支持",
+            "conclusion": "OOD 准确率提升 3%，支持假设但对大偏移失效。",
+            "key_findings": ["拓扑正则带来有限提升"],
+            "evidence_refs": ["E1"],
+            "risks": ["数据规模有限"],
+        },
+        workspace["id"],
+    )
+
+    assert body["status"] == "succeeded"
+    assert body["result"]["verdict"] == "部分支持"
+    assert body["result"]["research_plan_id"] == plan.id
+    artifact = body["artifacts"][0]
+    assert artifact["artifact_type"] == "analysis"
+    assert artifact["filename"] == "research_memo.md"
+    assert "[E1]" in artifact["content"] or "E1" in artifact["content"]
+
+
+def test_write_agent_produces_paper_draft(client, db_session: Session):
+    workspace, conversation, plan = _workspace_plan(client, db_session)
+    started = _start(
+        client, workspace, conversation,
+        agent_type="write",
+        input_payload={"research_plan_id": plan.id},
+    )
+    assert started.status_code == 202, started.text
+    run_id = started.json()["id"]
+
+    body = _execute(
+        client, db_session, run_id,
+        {
+            "title": "Robustness of Topology-Aware GNNs under Distribution Shift",
+            "abstract": "我们研究了拓扑感知对比学习在分布偏移下的鲁棒性 [E1]。",
+            "introduction": "背景与动机。",
+            "method": "方法。",
+            "experiments": "实验。",
+            "conclusion": "结论。",
+            "evidence_refs": ["E1"],
+        },
+        workspace["id"],
+    )
+
+    assert body["status"] == "succeeded"
+    assert body["result"]["title"].startswith("Robustness")
+    artifact = body["artifacts"][0]
+    assert artifact["artifact_type"] == "paper_draft"
+    assert artifact["filename"] == "paper_draft.md"
+    assert "## Abstract" in artifact["content"]
+
+
+def test_respond_agent_produces_rebuttal(client, db_session: Session):
+    workspace, conversation, plan = _workspace_plan(client, db_session)
+    started = _start(
+        client, workspace, conversation,
+        agent_type="respond",
+        input_payload={
+            "research_plan_id": plan.id,
+            "reviewer_comments": "1) 缺乏与强基线的对比；2) 数据集规模太小。",
+        },
+    )
+    assert started.status_code == 202, started.text
+    run_id = started.json()["id"]
+
+    body = _execute(
+        client, db_session, run_id,
+        {
+            "summary": "已逐条回应审稿意见。",
+            "responses": [
+                {
+                    "comment": "缺乏与强基线的对比",
+                    "response": "我们在实验中补充了 GCN 与拓扑基线对比 [E1]。",
+                    "evidence_refs": ["E1"],
+                },
+                {"comment": "数据集规模太小", "response": "后续将扩展数据集。", "evidence_refs": []},
+            ],
+            "evidence_refs": ["E1"],
+        },
+        workspace["id"],
+    )
+
+    assert body["status"] == "succeeded"
+    assert len(body["result"]["responses"]) == 2
+    artifact = body["artifacts"][0]
+    assert artifact["artifact_type"] == "rebuttal"
+    assert artifact["filename"] == "rebuttal.md"
+    assert "### 意见 1" in artifact["content"]
+
+
+def test_analyze_requires_research_plan(client, db_session: Session):
+    workspace, conversation, _ = _workspace_plan(client, db_session)
+    response = _start(
+        client, workspace, conversation,
+        agent_type="analyze",
+        input_payload={"results": {"x": 1}},
+    )
+    assert response.status_code == 422  # plan-bound agent without a plan
+
+
+def test_respond_requires_reviewer_comments(client, db_session: Session):
+    workspace, conversation, plan = _workspace_plan(client, db_session)
+    response = _start(
+        client, workspace, conversation,
+        agent_type="respond",
+        input_payload={"research_plan_id": plan.id},  # missing reviewer_comments
+    )
+    assert response.status_code == 422

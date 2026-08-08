@@ -1393,7 +1393,7 @@ export interface components {
              * Agent Type
              * @enum {string}
              */
-            agent_type: "research_plan" | "code_generation";
+            agent_type: "research_plan" | "code_generation" | "analyze" | "write" | "respond";
             /** Prompt */
             prompt: string;
             /** Conversation Id */
