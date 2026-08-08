@@ -3,6 +3,7 @@ export const WORKSPACE_NAVIGATION = [
   { key: "papers", label: "文献" },
   { key: "assistant", label: "AI 助手" },
   { key: "knowledge", label: "知识" },
+  { key: "gap-board", label: "研究空白" },
   { key: "discover", label: "发现" },
   { key: "plans", label: "研究中心" },
   { key: "activity", label: "动态" },
@@ -20,6 +21,7 @@ export function selectedGlobalKey(pathname: string): string {
 export function workspaceNavigationPath(workspaceId: string, key: string): string {
   if (key === "overview") return `/workspaces/${workspaceId}/overview`;
   if (key === "knowledge") return `/workspaces/${workspaceId}/knowledge`;
+  if (key === "gap-board") return `/workspaces/${workspaceId}/gap-board`;
   if (key === "discover") return `/workspaces/${workspaceId}/discover`;
   return `/workspaces/${workspaceId}/${key}`;
 }
@@ -27,6 +29,7 @@ export function workspaceNavigationPath(workspaceId: string, key: string): strin
 export function selectedWorkspaceKey(pathname: string): string {
   if (pathname.includes("/assistant")) return "assistant";
   if (pathname.includes("/knowledge")) return "knowledge";
+  if (pathname.includes("/gap-board")) return "gap-board";
   if (pathname.includes("/discover")) return "discover";
   const matched = WORKSPACE_NAVIGATION.find((item) => pathname.includes(`/${item.key}`));
   return matched?.key ?? "overview";

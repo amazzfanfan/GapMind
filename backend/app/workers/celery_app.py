@@ -11,14 +11,13 @@ import sys
 from celery import Celery
 from celery.signals import worker_ready
 
-from app.core.config import settings
-from app.core.logging import configure_logging, get_logger
-
 # Import the model registry so all ORM models are loaded on Base.metadata
 # before any task runs. Without this, a worker that imports only Task + Paper
 # (but not Workspace) will fail on commit with NoReferencedTableError because
 # SQLAlchemy can't sort FK dependencies across the partial model set.
 import app.db.models  # noqa: F401  (import side-effect: registers all models)
+from app.core.config import settings
+from app.core.logging import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -47,6 +46,7 @@ celery_app.conf.update(
         "app.workers.tasks.embed_chunks",
         "app.workers.tasks.run_discover",
         "app.workers.tasks.run_agent",
+        "app.workers.tasks.extract_gap_annotation",
     ],
 )
 

@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
 
+    # ---- Fine-tuned gap extractor (Ollama) ----
+    gap_extractor_base_url: str = "http://127.0.0.1:11434"
+    gap_extractor_model: str = "research-dataset-qwen3:run7-q8-templatefix"
+    gap_extractor_model_digest: str = ""
+    gap_extractor_timeout_seconds: float = 600.0
+    gap_extractor_repair_attempts: int = 2
+    gap_extractor_num_ctx: int = 32768
+    gap_extractor_num_predict: int = 4096
+    gap_extractor_temperature: float = 0.01
+    gap_extractor_top_p: float = 1.0
+    gap_extractor_repeat_penalty: float = 1.05
+    gap_extractor_seed: int = 42
+
     # ---- Chat ----
     chat_history_message_limit: int = 20
     chat_history_char_limit: int = 60000

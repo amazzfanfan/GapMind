@@ -8,16 +8,17 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.health import router as health_router
+from app.domains.agent.router import router as agent_router
 from app.domains.artifact.router import router as artifact_router
-from app.domains.knowledge.router import router as knowledge_router
+from app.domains.chat.router import router as chat_router
 from app.domains.discover.router import router as discover_router
+from app.domains.gap.router import router as gap_router
+from app.domains.knowledge.router import router as knowledge_router
 from app.domains.paper.router import router as paper_router
 from app.domains.retrieval.router import router as retrieval_router
 from app.domains.task.router import router as task_router
 from app.domains.timeline.router import router as timeline_router
 from app.domains.workspace.router import router as workspace_router
-from app.domains.chat.router import router as chat_router
-from app.domains.agent.router import router as agent_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
@@ -31,3 +32,4 @@ api_router.include_router(retrieval_router)
 api_router.include_router(discover_router)
 api_router.include_router(chat_router)
 api_router.include_router(agent_router)
+api_router.include_router(gap_router)
