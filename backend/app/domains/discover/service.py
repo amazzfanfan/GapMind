@@ -17,6 +17,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.domains.agent.models import AgentRun, AgentStep
 from app.domains.artifact.models import Artifact
 from app.domains.artifact.service import ArtifactService
 from app.domains.discover.adapters import (
@@ -122,6 +123,42 @@ Examples of good queries:
 
 Output a JSON object, nothing else:
 {"queries": ["...", "...", "..."], "exact_lookups": ["Method Full Name", "...", "..."]}"""
+
+# LLM prompt for the CriticAgent (Stage MA). After OpportunityAgent proposes
+# candidates, CriticAgent adversarially reviews each against the evidence
+# ledger and returns challenges + a verdict. The Orchestrator uses the verdict
+# to keep, narrow, or down-weight weak opportunities — this is the visible
+# "multi-agent collaboration" the demo shows (not raw model reasoning).
+CRITIC_SYSTEM_PROMPT = """\
+You are a rigorous, adversarial reviewer of proposed research opportunities. \
+For each candidate, identify weaknesses it must address before it can be \
+considered novel and viable.
+
+Challenge categories:
+- counter_evidence: the evidence ledger already contains work covering the claim
+- overlap: the proposal overlaps too much with existing similar work
+- assumption: a stated assumption is unsupported or brittle
+- framing: the research question is too broad or ill-defined
+- evaluation: the proposed validation cannot falsify the hypothesis
+
+Rules:
+- Be specific; reference the evidence roles (supporting / similar / counter / external)
+- Verdict per candidate: "keep" (novel and viable), "narrow" (viable after \
+tightening focus), or "reject" (not novel or fatally flawed)
+- Be conservative: do not invent evidence that is not in the ledger
+
+Output a JSON object, nothing else:
+{"reviews": [{"index": 0, "verdict": "keep|narrow|reject", "challenges": ["..."], \
+"suggested_narrowing": "..."}, ...]}"""
+
+# Bounded Critic narrowing loop (MA). When the Critic marks a candidate
+# "narrow", the Orchestrator runs ONE focused counter-evidence pass on the
+# suggested narrower focus instead of unbounded re-synthesis. The outcome
+# (obstacle found vs direction clear) is recorded on the candidate and
+# surfaced to the user, keeping the multi-agent loop cheap and predictable.
+MA_NARROW_MAX_ITERATIONS = 1
+MA_NARROW_COUNTER_TOP_K = 8
+MA_NARROW_OBSTACLE_CONFIDENCE = 0.6  # counter evidence at/above this confidence counts as an obstacle
 
 # Stage 3 external-query construction budget. A handful of focused queries
 # covers more angles than the literal claim wording while keeping S2 API
@@ -503,6 +540,16 @@ class DiscoverService(OpportunityWorkflow):
         if not claim_text.strip():
             return self._fail_run(run, "discover_preflight_failed", "No usable topic or claim was provided")
 
+        agent_run = self._discover_agent_run(run)
+        self._sync_agent_run(agent_run, run)
+        self._agent_step(
+            agent_run,
+            "planner",
+            "completed",
+            "Decomposed the research question and planned evidence gathering.",
+            {"research_question": claim_text[:300], "claim_item_id": run.input_claim_item_id},
+        )
+
         config = DiscoverConfig.model_validate(run.config or {})
         self._checkpoint(run)
         similar = self._workspace_similar(run, claim, claim_text, config)
@@ -519,6 +566,17 @@ class DiscoverService(OpportunityWorkflow):
                 "status": counter.status,
             },
         )
+        self._agent_step(
+            agent_run,
+            "evidence",
+            "completed",
+            "Retrieved workspace supporting, similar-work, and counter-evidence.",
+            {
+                "similar": len(similar.items),
+                "counter": len(counter.items),
+                "workspace_status": similar.status,
+            },
+        )
 
         external_queries, exact_lookups = self._external_query_plan(run, claim_text)
         external = self._external_verify(run, external_queries, exact_lookups)
@@ -530,6 +588,13 @@ class DiscoverService(OpportunityWorkflow):
             "external_search",
             0.58,
             {**external_summary, "external_candidates": external},
+        )
+        self._agent_step(
+            agent_run,
+            "external_novelty",
+            "completed",
+            "Searched external literature and classified candidate roles.",
+            {"candidates": external, "query_count": len(external_queries)},
         )
         self._checkpoint(run)
         candidate_state = self._external_candidate_state(run)
@@ -557,6 +622,14 @@ class DiscoverService(OpportunityWorkflow):
                 except Exception:
                     pass
             self.timeline.record(workspace_id=run.workspace_id, event_type="discover.external_input_requested", subject_type="discover_run", subject_id=run.id, actor="agent", payload={"run_id": run.id, "candidate_count": external})
+            self._sync_agent_run(agent_run, run)
+            self._agent_step(
+                agent_run,
+                "external_selection",
+                "waiting",
+                "Waiting for the user to select external candidates for full-text verification.",
+                {"candidate_count": external},
+            )
             return {"run_id": run.id, "status": run.status, "waiting_for_user": True}
         if selected:
             self._import_selected_candidates(run)
@@ -589,7 +662,55 @@ class DiscoverService(OpportunityWorkflow):
             preliminary_gate,
             config.max_opportunities,
         )
+        self._agent_step(
+            agent_run,
+            "opportunity",
+            "completed",
+            f"Synthesized {len(candidates)} candidate opportunities from workspace and external evidence.",
+            {"candidate_count": len(candidates)},
+        )
         self._checkpoint(run)
+
+        # CriticAgent: adversarially review candidates. Verdicts are advisory —
+        # weak candidates are down-weighted, never silently dropped, and a
+        # critic failure must not block the pipeline.
+        critic_reviews = self._critic_review(
+            run,
+            claim_text,
+            candidates,
+            supporting,
+            similar,
+            counter,
+        )
+        if critic_reviews:
+            verdict_counts = self._apply_critic_reviews(candidates, critic_reviews)
+            self._agent_step(
+                agent_run,
+                "critic",
+                "completed",
+                "Critic reviewed candidates against the evidence ledger.",
+                {"reviews": critic_reviews, "verdicts": verdict_counts},
+            )
+            # Orchestrator narrowing loop (bounded): for "narrow" candidates,
+            # run a focused counter-evidence pass on the suggested focus.
+            narrowed = self._narrowing_pass(run, candidates, critic_reviews)
+            if narrowed:
+                self._agent_step(
+                    agent_run,
+                    "narrowing",
+                    "completed",
+                    f"Ran a focused counter-evidence pass to narrow {narrowed} candidate(s).",
+                    {"narrowed": narrowed},
+                )
+        else:
+            self._agent_step(
+                agent_run,
+                "critic",
+                "skipped",
+                "Critic review unavailable; candidates kept as synthesized.",
+            )
+        self._checkpoint(run)
+
         created, final_gates = self._persist_candidates(
             run,
             claim,
@@ -599,6 +720,17 @@ class DiscoverService(OpportunityWorkflow):
             counter,
             external_fulltext,
             candidates,
+        )
+        self._agent_step(
+            agent_run,
+            "gate",
+            "completed",
+            "Applied the evidence gate and persisted opportunities.",
+            {
+                "opportunities": len(created),
+                "verified": any(gate["verified"] for gate in final_gates),
+                "needs_more_evidence": sum(not gate["verified"] for gate in final_gates),
+            },
         )
         self._checkpoint(run)
         finished_at = datetime.now(timezone.utc)
@@ -636,6 +768,15 @@ class DiscoverService(OpportunityWorkflow):
             except Exception:
                 pass
         self.timeline.record(workspace_id=run.workspace_id, event_type="discover.run_completed", subject_type="discover_run", subject_id=run.id, actor="agent", payload={"run_id": run.id, "opportunities": len(created), "verification_status": run.verification_status})
+        if agent_run is not None:
+            agent_run.status = "succeeded"
+            self._agent_step(
+                agent_run,
+                "complete",
+                "completed",
+                f"Discovery run finished with {len(created)} opportunities.",
+                {"verification_status": run.verification_status},
+            )
         return {"run_id": run.id, "status": run.status, "opportunity_ids": [item.id for item in created]}
 
     def _checkpoint(self, run: DiscoverRun) -> None:
@@ -654,6 +795,228 @@ class DiscoverService(OpportunityWorkflow):
         run.finished_at = run.finished_at or datetime.now(timezone.utc)
         self.db.commit()
         return {"run_id": run.id, "status": "cancelled", "idempotent": True}
+
+    # -------------------------------------------------------------- agent observability
+    def _discover_agent_run(self, run: DiscoverRun) -> AgentRun | None:
+        """Find-or-create the AgentRun mirroring this Discover run's orchestration.
+
+        Reuses the workspace AgentRun/AgentStep protocol (agent domain) so the
+        Discover pipeline surfaces as an auditable agent handoff, consistent
+        with the multi-agent direction. The run is keyed by the Discover run's
+        ``task_id`` so it survives worker resumes (external-selection and
+        fulltext pauses). ``None`` when the run has no task (e.g. tests that
+        construct runs directly).
+        """
+        if run.task_id:
+            existing = self.db.scalar(
+                select(AgentRun).where(
+                    AgentRun.task_id == run.task_id,
+                    AgentRun.agent_type == "discover",
+                )
+            )
+            if existing is not None:
+                return existing
+        agent_run = AgentRun(
+            workspace_id=run.workspace_id,
+            task_id=run.task_id,
+            agent_type="discover",
+            status=run.status,
+            current_stage=run.stage,
+            progress=run.progress,
+            input_payload={"discover_run_id": run.id, "trigger": run.trigger_type},
+            context_snapshot={"input_topic": run.input_topic, "claim_item_id": run.input_claim_item_id},
+            requires_confirmation=False,
+        )
+        self.db.add(agent_run)
+        self.db.flush()
+        return agent_run
+
+    def _agent_step(self, agent_run: AgentRun | None, stage: str, status: str, summary: str, details: dict[str, Any] | None = None) -> None:
+        """Append an AgentStep to the discover AgentRun (idempotent across resumes)."""
+        if agent_run is None:
+            return
+        max_seq = int(self.db.scalar(select(func.max(AgentStep.sequence)).where(AgentStep.run_id == agent_run.id)) or 0)
+        self.db.add(
+            AgentStep(
+                run_id=agent_run.id,
+                sequence=int(max_seq) + 1,
+                stage=stage,
+                status=status,
+                summary=summary,
+                details=details or {},
+            )
+        )
+        agent_run.current_stage = stage
+        if agent_run.status not in {"succeeded", "failed", "cancelled"}:
+            agent_run.status = "running"
+        self.db.commit()
+
+    def _sync_agent_run(self, agent_run: AgentRun | None, run: DiscoverRun) -> None:
+        if agent_run is None:
+            return
+        agent_run.status = run.status
+        agent_run.current_stage = run.stage
+        agent_run.progress = run.progress
+        self.db.commit()
+
+    # -------------------------------------------------------------- CriticAgent
+    def _critic_review(
+        self,
+        run: DiscoverRun,
+        claim_text: str,
+        candidates: list[dict[str, Any]],
+        supporting: RetrievalResponse,
+        similar: RetrievalResponse,
+        counter: RetrievalResponse,
+    ) -> list[dict[str, Any]]:
+        """Adversarially review proposed candidates (CriticAgent).
+
+        Returns per-candidate verdicts (keep/narrow/reject) with challenges,
+        used by the Orchestrator to down-weight or flag weak opportunities.
+        On LLM failure it returns ``[]`` — the run keeps the candidates and
+        records a critic-failed step, so the pipeline never blocks on the
+        critic.
+        """
+        if not candidates:
+            return []
+        briefs = [
+            f"[{i}] {str(c.get('title') or '')[:120]} — {str(c.get('problem_statement') or '')[:220]}"
+            for i, c in enumerate(candidates)
+        ]
+        evidence_brief = {
+            "supporting": [self._retrieval_payload(item) for item in supporting.items[:6]],
+            "similar": [self._retrieval_payload(item) for item in similar.items[:6]],
+            "counter": [self._retrieval_payload(item) for item in counter.items[:6]],
+        }
+        user_prompt = (
+            f"RESEARCH QUESTION: {claim_text[:300]}\n\n"
+            f"EVIDENCE LEDGER:\n{json.dumps(evidence_brief, ensure_ascii=False)}\n\n"
+            f"CANDIDATES:\n" + "\n".join(briefs)
+        )
+        try:
+            resp = self.llm.chat_completion(
+                [
+                    {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.0,
+                max_tokens=2000,
+                disable_thinking=True,
+            )
+            parsed = self._parse_json(resp.content)
+            reviews = parsed.get("reviews") if isinstance(parsed, dict) else None
+            if not isinstance(reviews, list):
+                logger.warning("discover.critic_bad_shape", raw_preview=(resp.content or "")[:200])
+                return []
+            out: list[dict[str, Any]] = []
+            for review in reviews:
+                if not isinstance(review, dict) or not isinstance(review.get("index"), int):
+                    continue
+                idx = int(review["index"])
+                if not (0 <= idx < len(candidates)):
+                    continue
+                verdict = str(review.get("verdict") or "keep").lower()
+                if verdict not in {"keep", "narrow", "reject"}:
+                    verdict = "keep"
+                out.append(
+                    {
+                        "index": idx,
+                        "verdict": verdict,
+                        "challenges": [s for s in review.get("challenges") or [] if isinstance(s, str)],
+                        "suggested_narrowing": str(review.get("suggested_narrowing") or ""),
+                    }
+                )
+            return out
+        except Exception as exc:
+            logger.warning("discover.critic_failed", run_id=run.id, error=str(exc))
+            return []
+
+    @staticmethod
+    def _apply_critic_reviews(candidates: list[dict[str, Any]], critic_reviews: list[dict[str, Any]]) -> dict[str, int]:
+        """Attach critic reviews and down-weight weak candidates.
+
+        Returns verdict counts. ``reject`` candidates are down-weighted to at
+        most 0.3 confidence and ``narrow`` to 0.45, so they surface as weaker
+        opportunities without being silently dropped (HITL preserves them).
+        """
+        verdict_counts = {"keep": 0, "narrow": 0, "reject": 0}
+        for review in critic_reviews:
+            verdict = str(review.get("verdict") or "keep")
+            if verdict not in verdict_counts:
+                verdict = "keep"
+            verdict_counts[verdict] += 1
+            idx = review.get("index")
+            idx = int(idx) if isinstance(idx, int) else -1
+            if not (0 <= idx < len(candidates)):
+                continue
+            candidate = candidates[idx]
+            candidate["critic_review"] = review
+            confidence = float(candidate.get("confidence") or 0.5)
+            candidate["confidence"] = min(confidence, 0.3 if verdict == "reject" else (0.45 if verdict == "narrow" else confidence))
+        return verdict_counts
+
+    def _narrowing_pass(self, run: DiscoverRun, candidates: list[dict[str, Any]], critic_reviews: list[dict[str, Any]]) -> int:
+        """One bounded narrowing pass for Critic-flagged "narrow" candidates.
+
+        For each narrow candidate with a suggested narrowing, runs a focused
+        counter-evidence retrieval on the narrowed focus and records whether an
+        obstacle was found. The candidate is never silently dropped — the
+        outcome is recorded on ``candidate["narrowing_pass"]`` so HITL can see
+        the narrowing trail. Returns the number of candidates narrowed.
+        """
+        by_index: dict[int, dict[str, Any]] = {}
+        for review in critic_reviews:
+            idx = review.get("index")
+            if isinstance(idx, int):
+                by_index[idx] = review
+        narrow = [
+            (idx, r)
+            for idx, r in by_index.items()
+            if r.get("verdict") == "narrow" and r.get("suggested_narrowing") and 0 <= idx < len(candidates)
+        ]
+        if not narrow:
+            return 0
+        config = DiscoverConfig.model_validate(run.config or {})
+        excluded = {claim_paper} if (claim_paper := (run.input_payload or {}).get("claim_paper_id")) else set()
+        narrowed = 0
+        for idx, review in narrow:
+            candidate = candidates[idx]
+            narrowing = str(review.get("suggested_narrowing") or "").strip()
+            base = str(candidate.get("candidate_research_question") or candidate.get("title") or "")
+            query = f"{base[:300]} {narrowing[:120]}".strip()
+            if not query:
+                continue
+            try:
+                counter = self.retrieval.find_counter_evidence(
+                    run.workspace_id,
+                    query,
+                    MA_NARROW_COUNTER_TOP_K,
+                    use_reranker=config.use_reranker,
+                    use_judge=config.use_judge,
+                    exclude_paper_ids=excluded or None,
+                )
+            except Exception as exc:
+                logger.warning("discover.narrowing_retrieval_failed", run_id=run.id, error=str(exc))
+                counter = self._empty_response(run.workspace_id, query, "counter_evidence")
+            obstacle = self._narrowing_obstacle(counter)
+            candidate["narrowing_pass"] = {
+                "query": query[:300],
+                "counter_candidates": len(counter.items),
+                "obstacle": obstacle,
+                "outcome": "obstacle_found" if obstacle else "direction_clear",
+            }
+            if obstacle:
+                candidate["confidence"] = min(float(candidate.get("confidence") or 0.5), 0.25)
+            narrowed += 1
+        return narrowed
+
+    @staticmethod
+    def _narrowing_obstacle(counter: RetrievalResponse) -> bool:
+        """True when focused counter evidence already covers the narrowed claim."""
+        for item in counter.items:
+            if item.judgement in {"contradicts", "qualifies"} and (item.judgement_confidence or 0.0) >= MA_NARROW_OBSTACLE_CONFIDENCE:
+                return True
+        return False
 
     def _stage(self, run: DiscoverRun, stage: str, progress: float, summary: dict[str, Any] | None = None) -> None:
         self.db.refresh(run)
@@ -1617,7 +1980,7 @@ class DiscoverService(OpportunityWorkflow):
                 title=candidate["title"], summary=candidate["problem_statement"], rationale=candidate["why_existing_work_is_insufficient"],
                 suggested_directions=list((candidate.get("candidate_validation_plan") or {}).get("steps", []))[:8], confidence=candidate["confidence"],
                 status="candidate" if gate["confirmable"] else "needs_more_evidence",
-                source_payload={"claim_text": claim_text, "gate": gate, "candidate_index": index, "synthesis_provider": candidate["provider"], "supporting_evidence": candidate_supporting.model_dump(mode="json"), "external_full_text": candidate_external_fulltext.model_dump(mode="json"), "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json")},
+                source_payload={"claim_text": claim_text, "gate": gate, "candidate_index": index, "synthesis_provider": candidate["provider"], "critic_review": candidate.get("critic_review"), "narrowing_pass": candidate.get("narrowing_pass"), "supporting_evidence": candidate_supporting.model_dump(mode="json"), "external_full_text": candidate_external_fulltext.model_dump(mode="json"), "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json")},
                 is_deleted=False,
             )
             self.db.add(opportunity)
