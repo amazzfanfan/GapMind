@@ -10,6 +10,12 @@ export function sortChatMessages(messages: ChatMessage[]): ChatMessage[] {
   return [...messages].sort((a, b) => a.sequence - b.sequence);
 }
 
+export function chatConversationPath(conversation: ChatConversation): string {
+  return conversation.workspace_id
+    ? `/workspaces/${conversation.workspace_id}/assistant/${conversation.id}`
+    : `/chat/${conversation.id}`;
+}
+
 export function shouldSendOnEnter(event: { key: string; shiftKey: boolean; nativeEvent?: { isComposing?: boolean } }): boolean {
   return event.key === "Enter" && !event.shiftKey && !event.nativeEvent?.isComposing;
 }

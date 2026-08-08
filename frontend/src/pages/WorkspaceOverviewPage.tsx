@@ -26,6 +26,7 @@ export default function WorkspaceOverviewPage() {
   const [knowledge, setKnowledge] = useState<KnowledgeItem[] | null>(null);
   const [runs, setRuns] = useState<DiscoverRun[] | null>(null);
   const [opportunities, setOpportunities] = useState<ResearchOpportunity[] | null>(null);
+  const [pendingOpportunityCount, setPendingOpportunityCount] = useState<number | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,7 +37,7 @@ export default function WorkspaceOverviewPage() {
       taskApi.list(workspace.id, { limit: 100 }),
       knowledgeApi.listItems(workspace.id, { limit: 200 }),
       discoverApi.listRuns(workspace.id),
-      discoverApi.listOpportunities(workspace.id),
+      discoverApi.listOpportunities(workspace.id, { pendingOnly: true, limit: 100 }),
       timelineApi.list(workspace.id, { limit: 8 }),
     ]);
     setPapers(results[0].status === "fulfilled" ? results[0].value.items : null);
@@ -44,6 +45,7 @@ export default function WorkspaceOverviewPage() {
     setKnowledge(results[2].status === "fulfilled" ? results[2].value.items : null);
     setRuns(results[3].status === "fulfilled" ? results[3].value.items : null);
     setOpportunities(results[4].status === "fulfilled" ? results[4].value.items : null);
+    setPendingOpportunityCount(results[4].status === "fulfilled" ? results[4].value.total : null);
     setTimeline(results[5].status === "fulfilled" ? results[5].value.items : null);
     setLoading(false);
   }, [workspace.id]);
@@ -54,7 +56,7 @@ export default function WorkspaceOverviewPage() {
   const failedTasks = tasks?.filter((task) => task.status === "failed") ?? [];
   const reviewItems = knowledge?.filter((item) => ["candidate", "needs_review", "proposed"].includes(item.status)) ?? [];
   const waitingRuns = runs?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? [];
-  const reviewOpportunities = opportunities?.filter((item) => !["confirmed", "edited_confirmed", "rejected"].includes(item.status)) ?? [];
+  const reviewOpportunities = opportunities ?? [];
 
   const nextAction = !papers?.length
     ? { title: "先收集几篇文献", description: "搜索论文或上传已有 PDF，建立这个课题的证据基础。", href: `/workspaces/${workspace.id}/papers`, label: "添加文献", icon: <FileSearchOutlined /> }
@@ -92,7 +94,7 @@ export default function WorkspaceOverviewPage() {
         <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="课题文献" value={papers?.length ?? "—"} suffix={papers ? "篇" : undefined} /><Typography.Text type="secondary">{papers ? `${papers.filter((paper) => Boolean(paper.primary_artifact_id)).length} 篇已有 PDF` : "数据暂不可用"}</Typography.Text></Card></Col>
         <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="待审核知识" value={knowledge ? reviewItems.length : "—"} suffix={knowledge ? "条" : undefined} /><Typography.Text type="secondary">{knowledge ? "优先处理候选内容" : "数据暂不可用"}</Typography.Text></Card></Col>
         <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="处理中" value={tasks ? activeTasks.length : "—"} suffix={tasks ? "项" : undefined} /><Typography.Text type="secondary">{tasks ? "解析、提取或发现任务" : "数据暂不可用"}</Typography.Text></Card></Col>
-        <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="待处理机会" value={opportunities ? reviewOpportunities.length : "—"} suffix={opportunities ? "项" : undefined} /><Typography.Text type="secondary">{opportunities ? "等待人工判断" : "数据暂不可用"}</Typography.Text></Card></Col>
+        <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="待处理机会" value={pendingOpportunityCount ?? "—"} suffix={pendingOpportunityCount !== null ? "项" : undefined} /><Typography.Text type="secondary">{pendingOpportunityCount !== null ? "等待人工判断" : "数据暂不可用"}</Typography.Text></Card></Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>

@@ -30,6 +30,7 @@ from app.domains.knowledge.schemas import (
     ExtractionRejectionListResponse,
     ExtractionRejectionRead,
     KnowledgeGraphResponse,
+    KnowledgeGraphSearchResponse,
     KnowledgeItemListResponse,
     KnowledgeItemRead,
     KnowledgeItemReview,
@@ -171,6 +172,8 @@ def get_knowledge_graph(
     q: str | None = Query(None, max_length=255),
     min_confidence: float | None = Query(None, ge=0.0, le=1.0),
     relation_type: str | None = Query(None),
+    status: str | None = Query(None),
+    projection_mode: str = Query("all", pattern="^(all|landscape|claims|evidence)$"),
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
     service: KnowledgeService = Depends(_get_knowledge_service),
@@ -179,25 +182,57 @@ def get_knowledge_graph(
     """Return a self-contained, workspace-scoped graph projection."""
     workspace_service.get(workspace_id)
 
-    nodes, edges, total_nodes, total_edges, truncated = service.graph_projection(
+    projection = service.graph_projection(
         workspace_id=workspace_id,
         type_filter=type,
         paper_id=paper_id,
         query_text=q,
         min_confidence=min_confidence,
         relation_type=relation_type,
+        status_filter=status,
+        projection_mode=projection_mode,
         limit=limit,
         offset=offset,
     )
     return KnowledgeGraphResponse(
         workspace_id=workspace_id,
-        nodes=nodes,
-        edges=edges,
-        total_nodes=total_nodes,
-        total_edges=total_edges,
-        truncated=truncated,
+        nodes=projection.nodes,
+        edges=projection.edges,
+        total_nodes=projection.total_nodes,
+        total_edges=projection.total_edges,
+        truncated=projection.has_more,
         limit=limit,
         offset=offset,
+        projection_mode=projection_mode,
+        loaded_nodes=len(projection.nodes),
+        loaded_edges=len(projection.edges),
+        has_more=projection.has_more,
+        node_counts=projection.node_counts,
+        relation_counts=projection.relation_counts,
+        workspace_counts=projection.workspace_counts,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/knowledge/graph/search",
+    response_model=KnowledgeGraphSearchResponse,
+)
+def search_knowledge_graph_nodes(
+    workspace_id: str,
+    q: str = Query(..., min_length=1, max_length=255),
+    projection_mode: str = Query("all", pattern="^(all|landscape|claims|evidence)$"),
+    limit: int = Query(12, ge=1, le=50),
+    service: KnowledgeService = Depends(_get_knowledge_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> KnowledgeGraphSearchResponse:
+    workspace_service.get(workspace_id)
+    return KnowledgeGraphSearchResponse(
+        items=service.search_graph_nodes(
+            workspace_id=workspace_id,
+            query_text=q,
+            projection_mode=projection_mode,
+            limit=limit,
+        )
     )
 
 
@@ -231,6 +266,12 @@ def get_knowledge_graph_neighbors(
         total_edges=len(edges),
         limit=limit,
         offset=0,
+        projection_mode="neighbors",
+        loaded_nodes=len(nodes),
+        loaded_edges=len(edges),
+        has_more=False,
+        seed_node_id=node_id,
+        depth=depth,
     )
 
 

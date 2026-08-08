@@ -24,11 +24,13 @@ from app.domains.chat.service import (
     ChatConflictError,
     ChatInputError,
     ChatNotFoundError,
+    ChatRetrievalError,
     ChatUpstreamError,
 )
 from app.domains.discover.service import (
     DiscoverGateError,
     DiscoverInputError,
+    DiscoverRunDeletionConflict,
     DiscoverRunNotFoundError,
     InvalidOpportunityTransition,
     OpportunityNotFoundError,
@@ -45,6 +47,12 @@ from app.domains.paper.service import (
 )
 from app.domains.task.service import InvalidTaskTransition, TaskNotFoundError
 from app.domains.workspace.service import WorkspaceNotFoundError
+from app.domains.agent.service import (
+    AgentConflictError,
+    AgentExecutionDisabledError,
+    AgentInputError,
+    AgentRunNotFoundError,
+)
 
 
 # (status_code, error_code, retryable)
@@ -60,20 +68,25 @@ EXCEPTION_REGISTRY: dict[type[Exception], tuple[int, str, bool]] = {
     PaperNotFoundError: (404, "paper_not_found", False),
     TaskNotFoundError: (404, "task_not_found", False),
     WorkspaceNotFoundError: (404, "workspace_not_found", False),
+    AgentRunNotFoundError: (404, "agent_run_not_found", False),
     # 409 — Conflict / state machine
     ChatConflictError: (409, "chat_conflict", False),
+    DiscoverRunDeletionConflict: (409, "discover_run_deletion_conflict", False),
     InvalidOpportunityTransition: (409, "invalid_opportunity_transition", False),
     InvalidTaskTransition: (409, "invalid_task_transition", False),
     OpportunityVersionConflict: (409, "opportunity_version_conflict", False),
     PaperAlreadyHasPdfError: (409, "paper_already_has_pdf", False),
+    AgentConflictError: (409, "agent_conflict", False),
     # 422 — Input validation
     ChatInputError: (400, "invalid_chat_input", False),
     DiscoverInputError: (422, "discover_input_invalid", False),
     KnowledgeItemReviewError: (422, "invalid_review", False),
+    AgentInputError: (422, "agent_input_invalid", False),
+    AgentExecutionDisabledError: (422, "agent_execution_disabled", False),
 }
 
 
-def _extras_for_chat(exc: ChatConfigurationError | ChatUpstreamError) -> dict[str, str]:
+def _extras_for_chat(exc: ChatConfigurationError | ChatUpstreamError | ChatRetrievalError) -> dict[str, str]:
     """Carry the chat context (conversation + assistant message IDs) into the envelope."""
     extras: dict[str, str] = {}
     if exc.conversation_id is not None:
@@ -99,6 +112,8 @@ def _resolve_status(exc: Exception) -> tuple[int, str, bool, dict[str, str]]:
         return 503, "deepseek_unavailable", False, _extras_for_chat(exc)
     if isinstance(exc, ChatUpstreamError):
         return 502, "deepseek_request_failed", True, _extras_for_chat(exc)
+    if isinstance(exc, ChatRetrievalError):
+        return 502, "workspace_retrieval_failed", True, _extras_for_chat(exc)
 
     # Discover gate errors expose their own `code` so the front-end can render
     # a precise remediation hint (e.g. "evidence_insufficient").
@@ -153,6 +168,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     for exc_cls in (
         ChatConfigurationError,
         ChatUpstreamError,
+        ChatRetrievalError,
         DiscoverGateError,
         SemanticScholarError,
         *EXCEPTION_REGISTRY.keys(),

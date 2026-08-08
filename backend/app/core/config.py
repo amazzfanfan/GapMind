@@ -61,6 +61,20 @@ class Settings(BaseSettings):
     chat_history_message_limit: int = 20
     chat_history_char_limit: int = 60000
     chat_max_input_chars: int = 12000
+    chat_rag_top_k: int = 6
+    chat_rag_max_context_chars: int = 18000
+
+    # ---- Controlled workspace agents ----
+    agent_rag_top_k: int = 10
+    agent_code_max_files: int = 30
+    agent_code_max_chars: int = 300000
+    agent_code_execution_enabled: bool = False
+    agent_docker_binary: str = "docker"
+    agent_sandbox_image: str = "python:3.11-slim"
+    agent_sandbox_timeout_seconds: int = 60
+    agent_sandbox_memory: str = "512m"
+    agent_sandbox_cpus: float = 1.0
+    agent_sandbox_pids: int = 128
 
     # ---- Embedding (SiliconFlow, BGE-m3) ----
     siliconflow_api_key: str = ""

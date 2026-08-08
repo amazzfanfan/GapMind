@@ -213,8 +213,10 @@ class ResearchPlanRead(BaseModel):
 
     id: str
     workspace_id: str
-    opportunity_id: str
-    opportunity_version_id: str
+    opportunity_id: str | None = None
+    opportunity_version_id: str | None = None
+    agent_run_id: str | None = None
+    source_type: str = "opportunity"
     status: str
     research_question: str
     hypothesis: str
@@ -242,6 +244,26 @@ class OpportunityDetail(BaseModel):
 
 class OpportunityListResponse(BaseModel):
     items: list[ResearchOpportunityRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class OpportunityPortfolioItem(BaseModel):
+    opportunity: ResearchOpportunityRead
+    current_version: OpportunityVersionRead | None = None
+    plan: ResearchPlanRead | None = None
+
+
+class OpportunityPortfolioResponse(BaseModel):
+    items: list[OpportunityPortfolioItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class ResearchPlanListResponse(BaseModel):
+    items: list[ResearchPlanRead]
     total: int
     limit: int
     offset: int

@@ -80,6 +80,8 @@ class DiscoverRun(Base, UUIDPKMixin, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DiscoverExternalCandidate(Base, UUIDPKMixin, TimestampMixin):
@@ -196,12 +198,16 @@ class ResearchPlan(Base, UUIDPKMixin, TimestampMixin):
     workspace_id: Mapped[str] = mapped_column(
         ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    opportunity_id: Mapped[str] = mapped_column(
-        ForeignKey("research_opportunities.id", ondelete="CASCADE"), nullable=False, index=True
+    opportunity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("research_opportunities.id", ondelete="CASCADE"), nullable=True, index=True
     )
-    opportunity_version_id: Mapped[str] = mapped_column(
-        ForeignKey("opportunity_versions.id", ondelete="RESTRICT"), nullable=False
+    opportunity_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("opportunity_versions.id", ondelete="RESTRICT"), nullable=True
     )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    source_type: Mapped[str] = mapped_column(String(32), default="opportunity", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
     hypothesis: Mapped[str] = mapped_column(Text, nullable=False)

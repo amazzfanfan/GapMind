@@ -15,6 +15,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const DiscoverPage = lazy(() => import("./pages/DiscoverPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
+const ChatHubPage = lazy(() => import("./pages/ChatHubPage"));
 
 function LazyPage({ children, label }: { children: ReactNode; label: string }) {
   return <Suspense fallback={<div className="gm-loading">正在加载{label}…</div>}>{children}</Suspense>;
@@ -26,13 +27,16 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/search" element={<SearchPage />} />
-        <Route path="/chat" element={<LazyPage label="AI 对话"><ChatPage /></LazyPage>} />
+        <Route path="/chat" element={<LazyPage label="AI 助手"><ChatHubPage /></LazyPage>} />
+        <Route path="/chat/new" element={<LazyPage label="通用对话"><ChatPage /></LazyPage>} />
         <Route path="/chat/:conversationId" element={<LazyPage label="AI 对话"><ChatPage /></LazyPage>} />
         <Route path="/workspaces" element={<WorkspacesPage />} />
         <Route path="/workspaces/:id" element={<WorkspaceLayout />}>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<WorkspaceOverviewPage />} />
           <Route path="papers" element={<WorkspacePapersPage />} />
+          <Route path="assistant" element={<LazyPage label="AI 助手"><ChatPage /></LazyPage>} />
+          <Route path="assistant/:conversationId" element={<LazyPage label="AI 助手"><ChatPage /></LazyPage>} />
           <Route path="knowledge" element={<LazyPage label="知识"><KnowledgePage /></LazyPage>} />
           <Route path="knowledge/graph" element={<LazyPage label="知识图谱"><KnowledgePage initialTab="graph" /></LazyPage>} />
           <Route path="discover" element={<LazyPage label="Discover"><DiscoverPage /></LazyPage>} />

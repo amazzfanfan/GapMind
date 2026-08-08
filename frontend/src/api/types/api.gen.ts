@@ -575,6 +575,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/knowledge/graph/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Knowledge Graph Nodes */
+        get: operations["search_knowledge_graph_nodes_api_v1_workspaces__workspace_id__knowledge_graph_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/knowledge/graph/neighbors/{node_id}": {
         parameters: {
             query?: never;
@@ -749,7 +766,8 @@ export interface paths {
         get: operations["get_run_api_v1_workspaces__workspace_id__discover_runs__run_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete Run */
+        delete: operations["delete_run_api_v1_workspaces__workspace_id__discover_runs__run_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -766,6 +784,23 @@ export interface paths {
         put?: never;
         /** Select External */
         post: operations["select_external_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/discover/runs/{run_id}/external-selection/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Skip External Selection */
+        post: operations["skip_external_selection_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_skip_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -798,6 +833,40 @@ export interface paths {
         };
         /** List Opportunities */
         get: operations["list_opportunities_api_v1_workspaces__workspace_id__discover_opportunities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/discover/portfolio/opportunities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Confirmed Portfolio */
+        get: operations["list_confirmed_portfolio_api_v1_workspaces__workspace_id__discover_portfolio_opportunities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/discover/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Research Plans */
+        get: operations["list_research_plans_api_v1_workspaces__workspace_id__discover_plans_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1014,6 +1083,143 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/conversations/{conversation_id}/messages/{message_id}/evidence/{evidence_id}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence Context */
+        get: operations["get_evidence_context_api_v1_chat_conversations__conversation_id__messages__message_id__evidence__evidence_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agents */
+        get: operations["list_agents_api_v1_workspaces__workspace_id__agent_runs_get"];
+        put?: never;
+        /** Start Agent */
+        post: operations["start_agent_api_v1_workspaces__workspace_id__agent_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent */
+        get: operations["get_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Agent */
+        post: operations["cancel_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Agent */
+        post: operations["confirm_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Agent Code */
+        post: operations["validate_agent_code_api_v1_workspaces__workspace_id__agent_runs__run_id__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Artifact */
+        get: operations["download_artifact_api_v1_workspaces__workspace_id__agent_runs__run_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/agent-runs/{run_id}/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Bundle */
+        get: operations["download_bundle_api_v1_workspaces__workspace_id__agent_runs__run_id__bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -1038,6 +1244,187 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentArtifactRead */
+        AgentArtifactRead: {
+            /** Id */
+            id: string;
+            /** Run Id */
+            run_id: string;
+            /** Artifact Type */
+            artifact_type: string;
+            /** Filename */
+            filename: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Content */
+            content: string;
+            /** Metadata */
+            metadata: Record<string, never>;
+            /** Validation Status */
+            validation_status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AgentConfirmResponse */
+        AgentConfirmResponse: {
+            run: components["schemas"]["AgentRunDetail"];
+            /** Research Plan Id */
+            research_plan_id?: string | null;
+        };
+        /** AgentRunCreate */
+        AgentRunCreate: {
+            /**
+             * Agent Type
+             * @enum {string}
+             */
+            agent_type: "research_plan" | "code_generation";
+            /** Prompt */
+            prompt: string;
+            /** Conversation Id */
+            conversation_id: string;
+            /** Input */
+            input?: Record<string, never>;
+        };
+        /** AgentRunDetail */
+        AgentRunDetail: {
+            /** Id */
+            id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Trigger Message Id */
+            trigger_message_id?: string | null;
+            /** Assistant Message Id */
+            assistant_message_id?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Agent Type */
+            agent_type: string;
+            /** Status */
+            status: string;
+            /** Current Stage */
+            current_stage: string;
+            /** Progress */
+            progress: number;
+            /** Input Payload */
+            input_payload: Record<string, never>;
+            /** Context Snapshot */
+            context_snapshot: Record<string, never>;
+            /** Result */
+            result?: Record<string, never> | null;
+            /** Error */
+            error?: string | null;
+            /** Requires Confirmation */
+            requires_confirmation: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Steps */
+            steps?: components["schemas"]["AgentStepRead"][];
+            /** Artifacts */
+            artifacts?: components["schemas"]["AgentArtifactRead"][];
+        };
+        /** AgentRunListResponse */
+        AgentRunListResponse: {
+            /** Items */
+            items: components["schemas"]["AgentRunRead"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** AgentRunRead */
+        AgentRunRead: {
+            /** Id */
+            id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Trigger Message Id */
+            trigger_message_id?: string | null;
+            /** Assistant Message Id */
+            assistant_message_id?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Agent Type */
+            agent_type: string;
+            /** Status */
+            status: string;
+            /** Current Stage */
+            current_stage: string;
+            /** Progress */
+            progress: number;
+            /** Input Payload */
+            input_payload: Record<string, never>;
+            /** Context Snapshot */
+            context_snapshot: Record<string, never>;
+            /** Result */
+            result?: Record<string, never> | null;
+            /** Error */
+            error?: string | null;
+            /** Requires Confirmation */
+            requires_confirmation: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AgentStepRead */
+        AgentStepRead: {
+            /** Id */
+            id: string;
+            /** Run Id */
+            run_id: string;
+            /** Sequence */
+            sequence: number;
+            /** Stage */
+            stage: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string;
+            /** Details */
+            details: Record<string, never>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /**
          * ArtifactRead
          * @description Artifact as returned from the API.
@@ -1105,6 +1492,8 @@ export interface components {
         ChatConversationCreate: {
             /** Title */
             title?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** ChatConversationDetail */
         ChatConversationDetail: {
@@ -1129,6 +1518,8 @@ export interface components {
             id: string;
             /** Title */
             title: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
             /** Model */
             model?: string | null;
             /** Last Message At */
@@ -1156,10 +1547,65 @@ export interface components {
             /** Deleted */
             deleted: boolean;
         };
+        /** ChatEvidenceContextRead */
+        ChatEvidenceContextRead: {
+            evidence: components["schemas"]["ChatMessageEvidenceRead"];
+            /** Available */
+            available: boolean;
+            /** Artifact Kind */
+            artifact_kind?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /** Content */
+            content?: string | null;
+            /** Message */
+            message?: string | null;
+        };
         /** ChatMessageCreate */
         ChatMessageCreate: {
             /** Content */
             content: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** ChatMessageEvidenceRead */
+        ChatMessageEvidenceRead: {
+            /** Id */
+            id: string;
+            /** Message Id */
+            message_id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Paper Id */
+            paper_id?: string | null;
+            /** Artifact Id */
+            artifact_id?: string | null;
+            /** Chunk Id */
+            chunk_id?: string | null;
+            /** Paper Title */
+            paper_title?: string | null;
+            /** Section */
+            section?: string | null;
+            /** Excerpt */
+            excerpt: string;
+            /** Start Char */
+            start_char?: number | null;
+            /** End Char */
+            end_char?: number | null;
+            /** Score */
+            score: number;
+            /** Rank */
+            rank: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** ChatMessageRead */
         ChatMessageRead: {
@@ -1185,6 +1631,13 @@ export interface components {
             completion_tokens?: number | null;
             /** Total Tokens */
             total_tokens?: number | null;
+            /**
+             * Grounding Status
+             * @default not_requested
+             */
+            grounding_status: string;
+            /** Citations */
+            citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             /**
              * Created At
              * Format: date-time
@@ -1218,6 +1671,16 @@ export interface components {
              * @default 10
              */
             top_k: number;
+            /**
+             * Source Paper Id
+             * @description UUID of the claim's source paper. Always excluded from recall.
+             */
+            source_paper_id?: string | null;
+            /**
+             * Exclude Paper Ids
+             * @description Additional paper UUIDs to exclude. Merged with source_paper_id.
+             */
+            exclude_paper_ids?: string[];
             /**
              * Use Reranker
              * @default true
@@ -1403,6 +1866,24 @@ export interface components {
             external_candidates?: components["schemas"]["DiscoverExternalCandidateRead"][];
             /** Opportunities */
             opportunities?: components["schemas"]["ResearchOpportunityRead"][];
+        };
+        /**
+         * DiscoverRunListResponse
+         * @description Standard list envelope for ``GET /discover/runs``.
+         *
+         *     Defined explicitly so the front-end's OpenAPI codegen produces a
+         *     stable shape and so the endpoint can declare ``response_model=...``
+         *     instead of returning a hand-written dict.
+         */
+        DiscoverRunListResponse: {
+            /** Items */
+            items: components["schemas"]["DiscoverRunRead"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** DiscoverRunRead */
         DiscoverRunRead: {
@@ -1660,6 +2141,14 @@ export interface components {
             confidence: number;
             /** Payload */
             payload?: Record<string, never>;
+            /** Display Label */
+            display_label?: string | null;
+            /** Source Label */
+            source_label?: string | null;
+            /** Target Label */
+            target_label?: string | null;
+            /** Relation Group */
+            relation_group?: string | null;
         };
         /**
          * KnowledgeGraphNodeRead
@@ -1697,6 +2186,32 @@ export interface components {
             mention_text?: string | null;
             /** Knowledge Item Id */
             knowledge_item_id?: string | null;
+            /** Display Label */
+            display_label?: string | null;
+            /** Display Type */
+            display_type?: string | null;
+            /**
+             * Importance Score
+             * @default 0
+             */
+            importance_score: number;
+            /**
+             * Relation Count
+             * @default 0
+             */
+            relation_count: number;
+            /**
+             * Evidence Count
+             * @default 0
+             */
+            evidence_count: number;
+            /**
+             * Paper Count
+             * @default 0
+             */
+            paper_count: number;
+            /** Review Status */
+            review_status?: string | null;
         };
         /**
          * KnowledgeGraphResponse
@@ -1734,6 +2249,68 @@ export interface components {
              * @default 0
              */
             offset: number;
+            /**
+             * Projection Mode
+             * @default all
+             */
+            projection_mode: string;
+            /**
+             * Loaded Nodes
+             * @default 0
+             */
+            loaded_nodes: number;
+            /**
+             * Loaded Edges
+             * @default 0
+             */
+            loaded_edges: number;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Node Counts */
+            node_counts?: {
+                [key: string]: number;
+            };
+            /** Relation Counts */
+            relation_counts?: {
+                [key: string]: number;
+            };
+            /** Workspace Counts */
+            workspace_counts?: {
+                [key: string]: number;
+            };
+            /** Seed Node Id */
+            seed_node_id?: string | null;
+            /**
+             * Depth
+             * @default 0
+             */
+            depth: number;
+        };
+        /** KnowledgeGraphSearchResponse */
+        KnowledgeGraphSearchResponse: {
+            /** Items */
+            items?: components["schemas"]["KnowledgeGraphSearchResult"][];
+        };
+        /** KnowledgeGraphSearchResult */
+        KnowledgeGraphSearchResult: {
+            /** Node Id */
+            node_id: string;
+            /** Label */
+            label: string;
+            /** Node Kind */
+            node_kind: string;
+            /** Type */
+            type: string;
+            /** Paper Title */
+            paper_title?: string | null;
+            /**
+             * Confidence
+             * @default 0
+             */
+            confidence: number;
         };
         /** KnowledgeItemListResponse */
         KnowledgeItemListResponse: {
@@ -1960,6 +2537,23 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** OpportunityPortfolioItem */
+        OpportunityPortfolioItem: {
+            opportunity: components["schemas"]["ResearchOpportunityRead"];
+            current_version?: components["schemas"]["OpportunityVersionRead"] | null;
+            plan?: components["schemas"]["ResearchPlanRead"] | null;
+        };
+        /** OpportunityPortfolioResponse */
+        OpportunityPortfolioResponse: {
+            /** Items */
+            items: components["schemas"]["OpportunityPortfolioItem"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** OpportunityVersionRead */
         OpportunityVersionRead: {
             /** Id */
@@ -2173,6 +2767,17 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ResearchPlanListResponse */
+        ResearchPlanListResponse: {
+            /** Items */
+            items: components["schemas"]["ResearchPlanRead"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** ResearchPlanRead */
         ResearchPlanRead: {
             /** Id */
@@ -2180,9 +2785,16 @@ export interface components {
             /** Workspace Id */
             workspace_id: string;
             /** Opportunity Id */
-            opportunity_id: string;
+            opportunity_id?: string | null;
             /** Opportunity Version Id */
-            opportunity_version_id: string;
+            opportunity_version_id?: string | null;
+            /** Agent Run Id */
+            agent_run_id?: string | null;
+            /**
+             * Source Type
+             * @default opportunity
+             */
+            source_type: string;
             /** Status */
             status: string;
             /** Research Question */
@@ -2271,6 +2883,8 @@ export interface components {
             filters_applied?: Record<string, never>;
             /** Error */
             error?: string | null;
+            /** Empty Reason */
+            empty_reason?: ("retrieval_empty" | "judge_failed" | "genuinely_no_counter_evidence") | null;
         };
         /**
          * RetrievalResultItem
@@ -2324,8 +2938,9 @@ export interface components {
             /**
              * Judgement
              * @default unknown
+             * @enum {string}
              */
-            judgement: string;
+            judgement: "contradicts" | "qualifies" | "supports" | "overlaps" | "unknown";
             /**
              * Judgement Confidence
              * @default 0
@@ -2343,6 +2958,11 @@ export interface components {
             top_k: number;
             /** Section */
             section?: string | null;
+            /**
+             * Exclude Paper Ids
+             * @description Paper UUIDs to exclude from recall (pushed into the Milvus filter).
+             */
+            exclude_paper_ids?: string[];
             /**
              * Use Reranker
              * @default true
@@ -2498,6 +3118,11 @@ export interface components {
              * @default 10
              */
             top_k: number;
+            /**
+             * Exclude Paper Ids
+             * @description Additional paper UUIDs to exclude. The source ``paper_id`` is always excluded.
+             */
+            exclude_paper_ids?: string[];
             /**
              * Use Reranker
              * @default true
@@ -3938,6 +4563,8 @@ export interface operations {
                 q?: string | null;
                 min_confidence?: number | null;
                 relation_type?: string | null;
+                status?: string | null;
+                projection_mode?: string;
                 limit?: number;
                 offset?: number;
             };
@@ -3956,6 +4583,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_knowledge_graph_nodes_api_v1_workspaces__workspace_id__knowledge_graph_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                projection_mode?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGraphSearchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4263,7 +4925,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["DiscoverRunListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4280,7 +4942,9 @@ export interface operations {
     create_run_api_v1_workspaces__workspace_id__discover_runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -4344,6 +5008,38 @@ export interface operations {
             };
         };
     };
+    delete_run_api_v1_workspaces__workspace_id__discover_runs__run_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     select_external_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_post: {
         parameters: {
             query?: never;
@@ -4359,6 +5055,40 @@ export interface operations {
                 "application/json": components["schemas"]["ExternalSelectionRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skip_external_selection_api_v1_workspaces__workspace_id__discover_runs__run_id__external_selection_skip_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -4417,6 +5147,8 @@ export interface operations {
             query?: {
                 status?: string | null;
                 run_id?: string | null;
+                /** @description Only return opportunities awaiting human handling */
+                pending_only?: boolean;
                 limit?: number;
                 offset?: number;
             };
@@ -4435,6 +5167,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_confirmed_portfolio_api_v1_workspaces__workspace_id__discover_portfolio_opportunities_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpportunityPortfolioResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_research_plans_api_v1_workspaces__workspace_id__discover_plans_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchPlanListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4483,7 +5284,9 @@ export interface operations {
     edit_confirm_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4583,7 +5386,9 @@ export interface operations {
     confirm_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__confirm_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4619,7 +5424,9 @@ export interface operations {
     reject_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__reject_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4655,7 +5462,9 @@ export interface operations {
     defer_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__defer_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4691,7 +5500,9 @@ export interface operations {
     convert_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__convert_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
             path: {
                 workspace_id: string;
                 opportunity_id: string;
@@ -4724,6 +5535,7 @@ export interface operations {
         parameters: {
             query?: {
                 query?: string | null;
+                workspace_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -4970,6 +5782,302 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatSendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_context_api_v1_chat_conversations__conversation_id__messages__message_id__evidence__evidence_id__context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                message_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatEvidenceContextRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_api_v1_workspaces__workspace_id__agent_runs_get: {
+        parameters: {
+            query?: {
+                conversation_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_agent_api_v1_workspaces__workspace_id__agent_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_agent_api_v1_workspaces__workspace_id__agent_runs__run_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentConfirmResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_agent_code_api_v1_workspaces__workspace_id__agent_runs__run_id__validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_artifact_api_v1_workspaces__workspace_id__agent_runs__run_id__artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_bundle_api_v1_workspaces__workspace_id__agent_runs__run_id__bundle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

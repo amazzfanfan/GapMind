@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class ChatConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=255)
+    workspace_id: str | None = None
 
     @field_validator("title")
     @classmethod
@@ -35,6 +36,7 @@ class ChatConversationUpdate(BaseModel):
 
 class ChatMessageCreate(BaseModel):
     content: str = Field(..., min_length=1)
+    workspace_id: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -50,8 +52,29 @@ class ChatConversationRead(BaseModel):
 
     id: str
     title: str
+    workspace_id: str | None = None
     model: str | None = None
     last_message_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessageEvidenceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    message_id: str
+    workspace_id: str
+    paper_id: str | None = None
+    artifact_id: str | None = None
+    chunk_id: str | None = None
+    paper_title: str | None = None
+    section: str | None = None
+    excerpt: str
+    start_char: int | None = None
+    end_char: int | None = None
+    score: float
+    rank: int
     created_at: datetime
     updated_at: datetime
 
@@ -70,6 +93,8 @@ class ChatMessageRead(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    grounding_status: str = "not_requested"
+    citations: list[ChatMessageEvidenceRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -95,3 +120,12 @@ class ChatSendResponse(BaseModel):
 class ChatDeleteResponse(BaseModel):
     id: str
     deleted: bool
+
+
+class ChatEvidenceContextRead(BaseModel):
+    evidence: ChatMessageEvidenceRead
+    available: bool
+    artifact_kind: str | None = None
+    filename: str | None = None
+    content: str | None = None
+    message: str | None = None

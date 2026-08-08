@@ -46,6 +46,7 @@ celery_app.conf.update(
         "app.workers.tasks.extract_knowledge",
         "app.workers.tasks.embed_chunks",
         "app.workers.tasks.run_discover",
+        "app.workers.tasks.run_agent",
     ],
 )
 

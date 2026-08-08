@@ -83,10 +83,17 @@ switch to `--pool=gevent` (after `pip install gevent`).
 ```bash
 cd frontend
 npm install
+npm run gen:api
 npm run dev
 ```
 
 Frontend: http://localhost:5173
+
+### Workspace Agents
+
+The workspace AI assistant supports evidence-grounded Q&A, research-plan generation, and code-project generation. Agent runs are processed by the Celery worker, so Redis and the worker must be running. After pulling migrations that add Agent support, run `alembic upgrade head` and restart both FastAPI and Celery.
+
+Generated code is previewed and downloaded by default; it is never executed automatically. Optional Python syntax validation runs in a network-disabled, resource-limited Docker container and must be enabled explicitly with `AGENT_CODE_EXECUTION_ENABLED=true`. Pull the configured image once (`docker pull python:3.11-slim`) before validation; the validator itself uses `--pull never`.
 
 ## Development Phases
 

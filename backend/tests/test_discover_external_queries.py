@@ -20,6 +20,7 @@ from app.domains.discover.service import (  # noqa: E402
 )
 from app.domains.knowledge.models import KnowledgeItem  # noqa: E402
 from app.gateway.semantic_scholar import SemanticScholarError  # noqa: E402
+from app.domains.workspace.models import Workspace  # noqa: E402
 
 
 def _run(workspace_id: str, **overrides: Any) -> DiscoverRun:
@@ -293,6 +294,8 @@ def test_external_verify_merges_and_dedupes_candidates(db_session) -> None:
     llm = _NoopLLM()
     service = _service(db_session, fake, llm)
     run = _run(workspace_id)
+    db_session.add_all([Workspace(id=workspace_id, name="External search workspace", is_archived=False), run])
+    db_session.commit()
     count = service._external_verify(run, [primary, "PGIB: invariant rationale"])
 
     assert count == 4  # p1..p4 deduped, no duplicate p2
@@ -315,6 +318,10 @@ def test_external_verify_merges_and_dedupes_candidates(db_session) -> None:
     assert fake.calls[0]["limit"] == 10  # primary uses full top_k
     assert fake.calls[1]["limit"] == 5  # extra query uses top_k // 2
     assert run.stage_summaries["external_search"]["candidate_count"] == 4
+    summary = dict(run.stage_summaries["external_search"])
+    service._stage(run, "external_search", 0.58, {**summary, "external_candidates": count})
+    assert run.stage_summaries["external_search"]["status"] == "succeeded"
+    assert run.stage_summaries["external_search"]["executed"] is True
     # role judge ran against the research question (primary), not the extra query
     assert llm.messages
     assert primary in llm.messages[0][-1]["content"]

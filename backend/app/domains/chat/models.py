@@ -1,11 +1,11 @@
-"""Persistent models for the global, non-RAG AI chat."""
+"""Persistent models for global and workspace-grounded AI chat."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPKMixin
 
@@ -21,6 +21,9 @@ class ChatConversation(Base, UUIDPKMixin, TimestampMixin):
     __table_args__ = (Index("ix_chat_conversations_last_message_at", "last_message_at"),)
 
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="新对话")
+    workspace_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -47,3 +50,44 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    grounding_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_requested"
+    )
+    citations: Mapped[list["ChatMessageEvidence"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        order_by="ChatMessageEvidence.rank",
+    )
+
+
+class ChatMessageEvidence(Base, UUIDPKMixin, TimestampMixin):
+    """A persisted retrieval hit cited by one assistant message."""
+
+    __tablename__ = "chat_message_evidence"
+    __table_args__ = (
+        Index("ix_chat_message_evidence_message_id", "message_id"),
+        Index("ix_chat_message_evidence_workspace_id", "workspace_id"),
+    )
+
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    paper_id: Mapped[str | None] = mapped_column(
+        ForeignKey("papers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
+    )
+    chunk_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    paper_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    section: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    message: Mapped[ChatMessage] = relationship(back_populates="citations")

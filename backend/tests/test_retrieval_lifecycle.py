@@ -26,29 +26,15 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
-from app.db.session import SessionLocal
-from app.domains.artifact.models import Artifact
-from app.domains.artifact.service import ArtifactService
 from app.domains.paper.models import Paper
 from app.domains.paper.service import PaperService
 from app.domains.retrieval import milvus_client, service as retrieval_service
-from app.domains.task.models import Task
-from app.domains.task.schemas import TaskCreate
-from app.domains.task.service import TaskService
 from app.domains.workspace.models import Workspace
 
 
 # ==================================================================
 # Fixtures
 # ==================================================================
-
-
-@pytest.fixture
-def db_session() -> Session:
-    session = SessionLocal()
-    yield session
-    session.close()
 
 
 @pytest.fixture

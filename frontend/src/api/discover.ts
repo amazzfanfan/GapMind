@@ -168,8 +168,10 @@ export interface HumanDecision {
 export interface ResearchPlan {
   id: string;
   workspace_id: string;
-  opportunity_id: string;
-  opportunity_version_id: string;
+  opportunity_id: string | null;
+  opportunity_version_id: string | null;
+  agent_run_id?: string | null;
+  source_type?: string;
   status: string;
   research_question: string;
   hypothesis: string;
@@ -195,6 +197,12 @@ export interface OpportunityDetail {
   plan: ResearchPlan | null;
 }
 
+export interface OpportunityPortfolioItem {
+  opportunity: ResearchOpportunity;
+  current_version: OpportunityVersion | null;
+  plan: ResearchPlan | null;
+}
+
 export const discoverApi = {
   async createRun(workspaceId: string, payload: {
     input: { topic?: string; claim_item_id?: string; paper_ids?: string[]; keywords?: string[]; constraints?: string };
@@ -212,14 +220,38 @@ export const discoverApi = {
   async selectExternal(workspaceId: string, runId: string, candidateIds: string[]): Promise<DiscoverRun> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/runs/${runId}/external-selection`, { candidate_ids: candidateIds, action: "import_and_verify" })).data;
   },
+  async skipExternalSelection(workspaceId: string, runId: string): Promise<DiscoverRun> {
+    return (await apiClient.post(`/workspaces/${workspaceId}/discover/runs/${runId}/external-selection/skip`)).data;
+  },
   async cancelRun(workspaceId: string, runId: string): Promise<DiscoverRun> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/runs/${runId}/cancel`)).data;
   },
-  async listOpportunities(workspaceId: string): Promise<{ items: ResearchOpportunity[]; total: number }> {
-    return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities`, { params: { limit: 50 } })).data;
+  async deleteRun(workspaceId: string, runId: string): Promise<void> {
+    await apiClient.delete(`/workspaces/${workspaceId}/discover/runs/${runId}`);
+  },
+  async listOpportunities(workspaceId: string, options: { status?: string; runId?: string; pendingOnly?: boolean; limit?: number; offset?: number } = {}): Promise<{ items: ResearchOpportunity[]; total: number; limit: number; offset: number }> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities`, {
+      params: {
+        status: options.status,
+        run_id: options.runId,
+        pending_only: options.pendingOnly,
+        limit: options.limit ?? 50,
+        offset: options.offset ?? 0,
+      },
+    })).data;
   },
   async getOpportunity(workspaceId: string, opportunityId: string): Promise<OpportunityDetail> {
     return (await apiClient.get(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}`)).data;
+  },
+  async listConfirmedPortfolio(workspaceId: string, options: { limit?: number; offset?: number } = {}): Promise<{ items: OpportunityPortfolioItem[]; total: number; limit: number; offset: number }> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/discover/portfolio/opportunities`, {
+      params: { limit: options.limit ?? 50, offset: options.offset ?? 0 },
+    })).data;
+  },
+  async listPlans(workspaceId: string, options: { status?: string; limit?: number; offset?: number } = {}): Promise<{ items: ResearchPlan[]; total: number; limit: number; offset: number }> {
+    return (await apiClient.get(`/workspaces/${workspaceId}/discover/plans`, {
+      params: { status: options.status, limit: options.limit ?? 50, offset: options.offset ?? 0 },
+    })).data;
   },
   async getEvidenceContext(workspaceId: string, evidenceId: string): Promise<OpportunityEvidenceContext> {
     return (await apiClient.get(`/workspaces/${workspaceId}/discover/evidence/${evidenceId}/context`)).data;

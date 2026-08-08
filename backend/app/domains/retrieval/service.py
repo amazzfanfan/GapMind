@@ -201,6 +201,22 @@ def _load_chunks_jsonl(workspace_id: str, paper_id: str) -> list[ChunkRecord]:
     return chunks
 
 
+def find_chunk_record(
+    workspace_id: str,
+    paper_id: str,
+    chunk_id: str,
+) -> ChunkRecord | None:
+    """Resolve a retrieved Milvus hit back to its immutable chunk offsets."""
+    return next(
+        (
+            chunk
+            for chunk in _load_chunks_jsonl(workspace_id, paper_id)
+            if chunk.chunk_id == chunk_id
+        ),
+        None,
+    )
+
+
 # ==================================================================
 # Step ⑤: Retrieval functions (Contract D output)
 # ==================================================================

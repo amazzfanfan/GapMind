@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.domains.discover.exceptions import (
     DiscoverGateError,
@@ -24,12 +24,17 @@ from app.domains.discover.exceptions import (
     OpportunityVersionConflict,
 )
 from app.domains.discover.models import (
+    DiscoverRun,
     HumanDecision,
     OpportunityEvidence,
     OpportunityVersion,
     ResearchOpportunity,
     ResearchPlan,
 )
+
+
+CLOSED_OPPORTUNITY_STATUSES = frozenset({"confirmed", "edited_confirmed", "rejected"})
+
 from app.domains.knowledge.models import EvidenceSpan
 from app.domains.artifact.service import ArtifactService
 from app.domains.artifact.models import Artifact
@@ -50,15 +55,29 @@ class OpportunityWorkflow:
         *,
         status_filter: str | None,
         run_id: str | None,
+        pending_only: bool,
         limit: int,
         offset: int,
     ) -> tuple[list[ResearchOpportunity], int]:
-        base = select(ResearchOpportunity).where(
-            ResearchOpportunity.workspace_id == workspace_id,
-            ResearchOpportunity.is_deleted.is_(False),
+        base = (
+            select(ResearchOpportunity)
+            .outerjoin(
+                DiscoverRun,
+                ResearchOpportunity.discover_run_id == DiscoverRun.id,
+            )
+            .where(
+                ResearchOpportunity.workspace_id == workspace_id,
+                ResearchOpportunity.is_deleted.is_(False),
+                or_(
+                    ResearchOpportunity.discover_run_id.is_(None),
+                    DiscoverRun.deleted_at.is_(None),
+                ),
+            )
         )
         if status_filter:
             base = base.where(ResearchOpportunity.status == status_filter)
+        if pending_only:
+            base = base.where(ResearchOpportunity.status.not_in(CLOSED_OPPORTUNITY_STATUSES))
         if run_id:
             base = base.where(ResearchOpportunity.discover_run_id == run_id)
         items = list(
@@ -70,6 +89,87 @@ class OpportunityWorkflow:
             self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
         )
         return items, total
+
+    def list_confirmed_portfolio(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return durable confirmed opportunities independent of run history visibility."""
+        base = select(ResearchOpportunity).where(
+            ResearchOpportunity.workspace_id == workspace_id,
+            ResearchOpportunity.is_deleted.is_(False),
+            ResearchOpportunity.status.in_({"confirmed", "edited_confirmed"}),
+        )
+        opportunities = list(
+            self.db.execute(
+                base.order_by(ResearchOpportunity.updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+            ).scalars()
+        )
+        total = int(
+            self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        )
+        if not opportunities:
+            return [], total
+
+        version_ids = [item.current_version_id for item in opportunities if item.current_version_id]
+        versions = {
+            item.id: item
+            for item in self.db.execute(
+                select(OpportunityVersion).where(OpportunityVersion.id.in_(version_ids))
+            ).scalars()
+        } if version_ids else {}
+        opportunity_ids = [item.id for item in opportunities]
+        plans: dict[str, ResearchPlan] = {}
+        for plan in self.db.execute(
+            select(ResearchPlan)
+            .where(ResearchPlan.opportunity_id.in_(opportunity_ids))
+            .order_by(ResearchPlan.created_at.desc())
+        ).scalars():
+            plans.setdefault(plan.opportunity_id, plan)
+        return [
+            {
+                "opportunity": item,
+                "current_version": versions.get(item.current_version_id),
+                "plan": plans.get(item.id),
+            }
+            for item in opportunities
+        ], total
+
+    def list_research_plans(
+        self,
+        workspace_id: str,
+        *,
+        status_filter: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ResearchPlan], int]:
+        base = (
+            select(ResearchPlan)
+            .outerjoin(ResearchOpportunity, ResearchPlan.opportunity_id == ResearchOpportunity.id)
+            .where(
+                ResearchPlan.workspace_id == workspace_id,
+                (
+                    (ResearchPlan.opportunity_id.is_(None))
+                    | (ResearchOpportunity.is_deleted.is_(False))
+                ),
+            )
+        )
+        if status_filter:
+            base = base.where(ResearchPlan.status == status_filter)
+        plans = list(
+            self.db.execute(
+                base.order_by(ResearchPlan.updated_at.desc()).limit(limit).offset(offset)
+            ).scalars()
+        )
+        total = int(
+            self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        )
+        return plans, total
 
     def get_opportunity(self, workspace_id: str, opportunity_id: str) -> ResearchOpportunity:
         item = self.db.get(ResearchOpportunity, opportunity_id)
@@ -196,7 +296,7 @@ class OpportunityWorkflow:
     ) -> ResearchOpportunity:
         item = self.get_opportunity(workspace_id, opportunity_id)
         version = self._current_version(item, version_id)
-        self._require_confirmable(version)
+        self._require_confirmable(item, version)
         item.status = "confirmed"
         self._decision(item, version, version, "confirm", note, None, actor=actor)
         self.db.commit()
@@ -223,7 +323,7 @@ class OpportunityWorkflow:
         base = self._current_version(item, base_version_id)
         if item.current_version_id != base_version_id:
             raise OpportunityVersionConflict("Opportunity has changed; refresh before editing")
-        self._require_confirmable(base)
+        self._require_confirmable(item, base)
         data = {
             key: getattr(base, key)
             for key in (
@@ -356,6 +456,7 @@ class OpportunityWorkflow:
             workspace_id=workspace_id,
             opportunity_id=item.id,
             opportunity_version_id=version.id,
+            source_type="opportunity",
             status="draft",
             research_question=version.candidate_research_question,
             hypothesis=version.candidate_hypothesis,
@@ -443,7 +544,7 @@ class OpportunityWorkflow:
             raise OpportunityVersionConflict("Requested version is not part of this opportunity")
         return version
 
-    def _require_confirmable(self, version: OpportunityVersion) -> None:
+    def _require_confirmable(self, item: ResearchOpportunity, version: OpportunityVersion) -> None:
         evidence_rows = list(
             self.db.execute(
                 select(OpportunityEvidence).where(
@@ -459,11 +560,23 @@ class OpportunityWorkflow:
             for ev in evidence_rows
             if ev.paper_id and ev.evidence_span_id and ev.artifact_id
         }
-        if (
-            version.verification_status != "verified"
-            or version.evidence_coverage < 0.6
-            or len(independent_papers) < 2
-        ):
+        gate = (item.source_payload or {}).get("gate")
+        blocking_missing: list[str] = []
+        if isinstance(gate, dict):
+            raw_blocking = gate.get("blocking_missing")
+            if isinstance(raw_blocking, list):
+                blocking_missing = [value for value in raw_blocking if isinstance(value, str)]
+            else:
+                raw_missing = gate.get("missing")
+                if isinstance(raw_missing, list):
+                    blocking_missing = [
+                        value
+                        for value in raw_missing
+                        if isinstance(value, str) and value != "external verification did not complete"
+                    ]
+        elif version.verification_status not in {"verified", "verified_with_warnings"}:
+            blocking_missing = [f"verification status is {version.verification_status}"]
+        if version.evidence_coverage < 0.6 or len(independent_papers) < 2 or blocking_missing:
             raise DiscoverGateError(
                 "insufficient_full_text_evidence",
                 "At least two independent full-text evidence papers are required before confirmation",

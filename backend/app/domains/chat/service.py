@@ -1,9 +1,4 @@
-"""Application service for ordinary DeepSeek conversations.
-
-Chat intentionally has no workspace, retrieval, Discover, or tool context.
-The service owns persistence and delegates the upstream call to the existing
-LLMGateway so API credentials stay on the backend.
-"""
+"""Application service for ordinary and workspace-grounded conversations."""
 
 from __future__ import annotations
 
@@ -11,11 +6,18 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.domains.chat.models import ChatConversation, ChatMessage
+from app.domains.artifact.models import Artifact
+from app.domains.artifact.service import ArtifactService
+from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
+from app.domains.paper.models import Paper
+from app.domains.retrieval.schemas import RetrievalResultItem
+from app.domains.retrieval.service import find_chunk_record, semantic_search
+from app.domains.workspace.models import Workspace
+from app.domains.workspace.service import WorkspaceService
 from app.gateway.llm import LLMGateway, get_llm_gateway
 
 
@@ -45,6 +47,13 @@ class ChatUpstreamError(RuntimeError):
         self.assistant_message_id = assistant_message_id
 
 
+class ChatRetrievalError(RuntimeError):
+    def __init__(self, message: str, *, conversation_id: str | None = None, assistant_message_id: str | None = None) -> None:
+        super().__init__(message)
+        self.conversation_id = conversation_id
+        self.assistant_message_id = assistant_message_id
+
+
 def make_conversation_title(content: str) -> str:
     """Create a deterministic title without spending another LLM request."""
     normalized = re.sub(r"\s+", " ", content).strip()
@@ -58,8 +67,17 @@ class ChatService:
         self.db = db
         self.gateway = gateway
 
-    def list_conversations(self, query: str | None, limit: int, offset: int) -> tuple[list[ChatConversation], int]:
+    def list_conversations(
+        self,
+        query: str | None,
+        limit: int,
+        offset: int,
+        workspace_id: str | None = None,
+    ) -> tuple[list[ChatConversation], int]:
         stmt = select(ChatConversation).where(ChatConversation.is_deleted.is_(False))
+        if workspace_id:
+            WorkspaceService(self.db).get(workspace_id)
+            stmt = stmt.where(ChatConversation.workspace_id == workspace_id)
         if query and query.strip():
             stmt = stmt.where(ChatConversation.title.ilike(f"%{query.strip()}%"))
         total = int(self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
@@ -73,8 +91,17 @@ class ChatService:
         )
         return items, total
 
-    def create_conversation(self, title: str | None = None) -> ChatConversation:
-        conversation = ChatConversation(title=(title or "新对话").strip() or "新对话")
+    def create_conversation(
+        self,
+        title: str | None = None,
+        workspace_id: str | None = None,
+    ) -> ChatConversation:
+        if workspace_id:
+            WorkspaceService(self.db).get(workspace_id)
+        conversation = ChatConversation(
+            title=(title or "新对话").strip() or "新对话",
+            workspace_id=workspace_id,
+        )
         self.db.add(conversation)
         self.db.commit()
         self.db.refresh(conversation)
@@ -114,18 +141,34 @@ class ChatService:
         conversation.is_deleted = True
         self.db.commit()
 
-    def send_new(self, content: str) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
+    def send_new(
+        self,
+        content: str,
+        workspace_id: str | None = None,
+    ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
-        conversation = ChatConversation(title=make_conversation_title(content))
+        if workspace_id:
+            WorkspaceService(self.db).get(workspace_id)
+        conversation = ChatConversation(
+            title=make_conversation_title(content),
+            workspace_id=workspace_id,
+        )
         self.db.add(conversation)
         self.db.flush()
         user_message, assistant_message = self._create_pending_messages(conversation, content)
         self.db.commit()
         return self._complete(conversation.id, user_message.id, assistant_message.id, [{"role": "user", "content": content}])
 
-    def send(self, conversation_id: str, content: str) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
+    def send(
+        self,
+        conversation_id: str,
+        content: str,
+        workspace_id: str | None = None,
+    ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
         conversation = self.get_conversation(conversation_id)
+        if workspace_id is not None and workspace_id != conversation.workspace_id:
+            raise ChatConflictError("conversation workspace cannot be changed")
         self._ensure_not_generating(conversation.id)
         existing = self._completed_messages(conversation.id)
         user_message, assistant_message = self._create_pending_messages(conversation, content)
@@ -238,7 +281,23 @@ class ChatService:
 
     def _complete(self, conversation_id: str, user_id: str, assistant_id: str, context: list[dict[str, str]]) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         assistant = self.db.get(ChatMessage, assistant_id)
+        conversation = self.db.get(ChatConversation, conversation_id)
+        user_message = self.db.get(ChatMessage, user_id)
         try:
+            evidence: list[ChatMessageEvidence] = []
+            if conversation.workspace_id:
+                context, evidence = self._workspace_context(
+                    conversation,
+                    user_message.content,
+                    context,
+                    assistant.id,
+                )
+                if not evidence:
+                    return self._complete_without_evidence(
+                        conversation,
+                        user_message,
+                        assistant,
+                    )
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
@@ -246,6 +305,8 @@ class ChatService:
         except ChatConfigurationError as exc:
             self._mark_failed(assistant, str(exc))
             raise ChatConfigurationError(str(exc), conversation_id=conversation_id, assistant_message_id=assistant_id) from exc
+        except ChatRetrievalError:
+            raise
         except Exception as exc:
             safe_error = _safe_error_message(exc)
             self._mark_failed(assistant, safe_error)
@@ -258,18 +319,199 @@ class ChatService:
         assistant.prompt_tokens = response.prompt_tokens
         assistant.completion_tokens = response.completion_tokens
         assistant.total_tokens = response.total_tokens
-        conversation = self.db.get(ChatConversation, conversation_id)
+        assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
+        if conversation.workspace_id:
+            assistant.citations = evidence
         conversation.model = response.model
         conversation.last_message_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(conversation)
         self.db.refresh(assistant)
-        user_message = self.db.get(ChatMessage, user_id)
         return conversation, user_message, assistant
 
-    def _mark_failed(self, assistant: ChatMessage, error_message: str) -> None:
+    def _workspace_context(
+        self,
+        conversation: ChatConversation,
+        question: str,
+        context: list[dict[str, str]],
+        assistant_id: str,
+    ) -> tuple[list[dict[str, str]], list[ChatMessageEvidence]]:
+        workspace = WorkspaceService(self.db).get(conversation.workspace_id)
+        result = semantic_search(
+            workspace_id=workspace.id,
+            query=question,
+            top_k=settings.chat_rag_top_k,
+            use_reranker=True,
+        )
+        if result.status == "failed":
+            assistant = self.db.get(ChatMessage, assistant_id)
+            self._mark_failed(assistant, result.error or "Workspace retrieval failed", grounding_status="retrieval_failed")
+            raise ChatRetrievalError(
+                "工作区论文检索失败，请检查向量化服务与 Milvus 后重试",
+                conversation_id=conversation.id,
+                assistant_message_id=assistant_id,
+            )
+
+        evidence = self._materialize_evidence(
+            workspace,
+            assistant_id,
+            result.items,
+        )
+        if not evidence:
+            return context, []
+
+        profile = self._workspace_profile(workspace)
+        evidence_text = self._evidence_prompt(evidence)
+        system_message = {
+            "role": "system",
+            "content": (
+                "你是 GapMind 的课题空间研究助手。只能依据下方工作区资料回答与该课题相关的事实性问题。"
+                "回答中的关键结论必须使用 [E1]、[E2] 形式引用证据；不要编造不存在的论文、实验结果或引用。"
+                "如果证据不足，请直接说明不足，并指出还需要什么资料。可以使用对话历史理解代词和上下文，"
+                "但历史中的助手回答不能替代论文证据。\n\n"
+                f"工作区资料：\n{profile}\n\n检索证据：\n{evidence_text}"
+            ),
+        }
+        return [system_message, *context], evidence
+
+    def _materialize_evidence(
+        self,
+        workspace: Workspace,
+        assistant_id: str,
+        items: list[RetrievalResultItem],
+    ) -> list[ChatMessageEvidence]:
+        evidence: list[ChatMessageEvidence] = []
+        for rank, item in enumerate(items, 1):
+            if not item.paper_id:
+                continue
+            paper = self.db.get(Paper, item.paper_id)
+            if paper is None or paper.is_deleted or paper.workspace_id != workspace.id:
+                continue
+            chunk = (
+                find_chunk_record(workspace.id, paper.id, item.chunk_id)
+                if item.chunk_id
+                else None
+            )
+            artifact_id = chunk.source_artifact_id if chunk else item.artifact_id
+            artifact = self.db.get(Artifact, artifact_id) if artifact_id else None
+            if artifact is not None and (
+                artifact.is_deleted or artifact.workspace_id != workspace.id
+            ):
+                artifact_id = None
+            excerpt = item.text.strip()[:4000]
+            if not excerpt:
+                continue
+            evidence.append(
+                ChatMessageEvidence(
+                    message_id=assistant_id,
+                    workspace_id=workspace.id,
+                    paper_id=paper.id,
+                    artifact_id=artifact_id,
+                    chunk_id=item.chunk_id,
+                    paper_title=paper.title,
+                    section=item.section,
+                    excerpt=excerpt,
+                    start_char=chunk.start_char if chunk else None,
+                    end_char=chunk.end_char if chunk else None,
+                    score=float(item.score),
+                    rank=rank,
+                )
+            )
+        return evidence
+
+    @staticmethod
+    def _workspace_profile(workspace: Workspace) -> str:
+        fields = [f"名称：{workspace.name}"]
+        if workspace.topic:
+            fields.append(f"主题：{workspace.topic}")
+        if workspace.keywords:
+            fields.append(f"关键词：{', '.join(workspace.keywords)}")
+        if workspace.goals:
+            fields.append(f"目标：{workspace.goals}")
+        if workspace.constraints:
+            fields.append(f"约束：{workspace.constraints}")
+        return "\n".join(fields)
+
+    @staticmethod
+    def _evidence_prompt(evidence: list[ChatMessageEvidence]) -> str:
+        blocks: list[str] = []
+        total_chars = 0
+        for item in evidence:
+            block = (
+                f"[E{item.rank}] 论文：{item.paper_title or '未命名论文'}；"
+                f"章节：{item.section or '未知'}；相关度：{item.score:.3f}\n"
+                f"{item.excerpt}"
+            )
+            remaining = settings.chat_rag_max_context_chars - total_chars
+            if remaining <= 0:
+                break
+            blocks.append(block[:remaining])
+            total_chars += min(len(block), remaining)
+        return "\n\n".join(blocks)
+
+    def _complete_without_evidence(
+        self,
+        conversation: ChatConversation,
+        user_message: ChatMessage,
+        assistant: ChatMessage,
+    ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
+        assistant.status = "completed"
+        assistant.content = (
+            "当前工作区没有检索到可用于回答这个问题的已索引论文内容。"
+            "请先确认论文 PDF 已完成解析和向量化，或者换一个更具体的问题后重试。"
+        )
+        assistant.error_message = None
+        assistant.grounding_status = "no_evidence"
+        conversation.last_message_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(conversation)
+        self.db.refresh(assistant)
+        return conversation, user_message, assistant
+
+    def evidence_context(
+        self,
+        conversation_id: str,
+        message_id: str,
+        evidence_id: str,
+    ) -> tuple[ChatMessageEvidence, Artifact | None, str | None, str | None]:
+        conversation = self.get_conversation(conversation_id)
+        evidence = self.db.scalar(
+            select(ChatMessageEvidence)
+            .join(ChatMessage, ChatMessage.id == ChatMessageEvidence.message_id)
+            .where(
+                ChatMessageEvidence.id == evidence_id,
+                ChatMessageEvidence.message_id == message_id,
+                ChatMessageEvidence.workspace_id == conversation.workspace_id,
+                ChatMessage.conversation_id == conversation.id,
+            )
+        )
+        if evidence is None:
+            raise ChatNotFoundError("chat evidence not found")
+        if not evidence.artifact_id:
+            return evidence, None, None, "证据没有可定位的原文文件"
+        artifact = self.db.get(Artifact, evidence.artifact_id)
+        if artifact is None or artifact.is_deleted or artifact.workspace_id != evidence.workspace_id:
+            return evidence, None, None, "证据原文文件已不可用"
+        path = ArtifactService(self.db).resolve_abs_path(artifact)
+        if not path.exists():
+            return evidence, artifact, None, "证据原文文件不存在"
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return evidence, artifact, None, "证据原文读取失败"
+        return evidence, artifact, content, None
+
+    def _mark_failed(
+        self,
+        assistant: ChatMessage,
+        error_message: str,
+        *,
+        grounding_status: str | None = None,
+    ) -> None:
         assistant.status = "failed"
         assistant.error_message = error_message[:1000]
+        if grounding_status:
+            assistant.grounding_status = grounding_status
         conversation = self.db.get(ChatConversation, assistant.conversation_id)
         conversation.last_message_at = datetime.now(timezone.utc)
         self.db.commit()

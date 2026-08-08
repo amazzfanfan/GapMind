@@ -20,7 +20,7 @@ const globalNavigation = [
   { key: "/", icon: <DashboardOutlined />, label: "首页" },
   { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
   { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
-  { key: "/chat", icon: <MessageOutlined />, label: "AI 对话" },
+  { key: "/chat", icon: <MessageOutlined />, label: "AI 助手" },
 ];
 
 export default function AppLayout() {
