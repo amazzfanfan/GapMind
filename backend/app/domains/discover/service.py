@@ -296,7 +296,30 @@ class DiscoverService(OpportunityWorkflow):
         run = self.get_run(workspace_id, run_id)
         candidates = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id).order_by(DiscoverExternalCandidate.rank)).scalars())
         opportunities = list(self.db.execute(select(ResearchOpportunity).where(ResearchOpportunity.discover_run_id == run.id, ResearchOpportunity.is_deleted.is_(False)).order_by(ResearchOpportunity.created_at)).scalars())
-        return {"run": run, "external_candidates": candidates, "opportunities": opportunities}
+        return {
+            "run": run,
+            "external_candidates": candidates,
+            "opportunities": opportunities,
+            "agent_steps": self._run_agent_steps(run),
+        }
+
+    def _run_agent_steps(self, run: DiscoverRun) -> list[AgentStep]:
+        """The multi-agent handoff recorded for this Discover run (empty pre-run)."""
+        if not run.task_id:
+            return []
+        agent_run = self.db.scalar(
+            select(AgentRun).where(
+                AgentRun.task_id == run.task_id,
+                AgentRun.agent_type == "discover",
+            )
+        )
+        if agent_run is None:
+            return []
+        return list(
+            self.db.execute(
+                select(AgentStep).where(AgentStep.run_id == agent_run.id).order_by(AgentStep.sequence)
+            ).scalars()
+        )
 
     def cancel_run(self, workspace_id: str, run_id: str) -> DiscoverRun:
         run = self.get_run(workspace_id, run_id)

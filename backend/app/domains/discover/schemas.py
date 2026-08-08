@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.domains.agent.schemas import AgentStepRead
+
 
 class DiscoverInput(BaseModel):
     topic: str | None = Field(default=None, max_length=4000)
@@ -112,6 +114,7 @@ class DiscoverRunRead(BaseModel):
 class DiscoverRunDetail(DiscoverRunRead):
     external_candidates: list[DiscoverExternalCandidateRead] = Field(default_factory=list)
     opportunities: list["ResearchOpportunityRead"] = Field(default_factory=list)
+    agent_steps: list[AgentStepRead] = Field(default_factory=list)
 
 
 class ResearchOpportunityRead(BaseModel):

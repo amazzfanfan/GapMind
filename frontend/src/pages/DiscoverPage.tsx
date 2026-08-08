@@ -45,6 +45,14 @@ function statusColor(status: string): string {
   return "blue";
 }
 
+function agentStepColor(status: string): string {
+  if (status === "completed") return "green";
+  if (status === "waiting") return "orange";
+  if (status === "failed") return "red";
+  if (status === "skipped") return "default";
+  return "processing";
+}
+
 function externalSearchHasNoResults(run: DiscoverRun | null): boolean {
   const rawSummary = run?.stage_summaries?.external_search;
   if (!rawSummary || typeof rawSummary !== "object" || Array.isArray(rawSummary)) return false;
@@ -343,6 +351,9 @@ export default function DiscoverPage() {
                 {selectedRun.status === "waiting_for_user" && stage === "external_selection" && <Alert style={{ marginTop: 16 }} type="info" showIcon message="External papers are ready for review" description={<Space direction="vertical" size={8}><Text>Select a paper for full-text verification, or continue with evidence already available in this workspace.</Text><Button onClick={skipExternalSelection} loading={actionLoading}>Skip external selection and continue</Button></Space>} />}
                 {selectedRun.error_message && <Paragraph type="danger" style={{ marginTop: 16 }}>{selectedRun.error_message}</Paragraph>}
               </>}
+            </Card>
+            <Card size="small" title="Multi-agent handoff">
+              {!runDetail?.agent_steps?.length ? <Empty description="The run records Planner → Evidence → External → Critic → Gate as it executes" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : <List size="small" dataSource={runDetail.agent_steps} renderItem={(step) => { const verdicts = step.stage === "critic" ? (step.details?.verdicts as Record<string, number> | undefined) : undefined; const narrowing = step.stage === "narrowing" ? (step.details?.narrowed as number | undefined) : undefined; return <List.Item><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color={agentStepColor(step.status)}>{step.status}</Tag><Text strong style={{ textTransform: "capitalize" }}>{step.stage.replaceAll("_", " ")}</Text><Text type="secondary">step {step.sequence}</Text></Space><Text type="secondary">{step.summary}</Text>{verdicts ? <Space wrap>{(["keep", "narrow", "reject"] as const).map((key) => <Tag key={key} color={key === "reject" ? "red" : key === "narrow" ? "orange" : "green"}>{key}: {verdicts[key] ?? 0}</Tag>)}</Space> : null}{narrowing ? <Text type="secondary">Focused counter-evidence pass narrowed {narrowing} candidate(s)</Text> : null}</Space></List.Item>; }} />}
             </Card>
             <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
       {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(displayStatus)}>{displayStatus}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>; }} />}
