@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,7 +20,12 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from app.domains.agent.models import AgentRun, AgentStep  # noqa: E402
-from app.domains.discover.models import DiscoverRun  # noqa: E402
+from app.domains.discover.models import (  # noqa: E402
+    DiscoverRun,
+    OpportunityEvidence,
+    OpportunityVersion,
+    ResearchOpportunity,
+)
 from app.domains.discover.service import DiscoverService  # noqa: E402
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem  # noqa: E402
 from app.domains.task.models import Task  # noqa: E402
@@ -367,3 +373,69 @@ def test_narrowing_pass_skips_keep_and_reject(db_session) -> None:
     assert "narrowing_pass" not in candidates[0]
     assert "narrowing_pass" not in candidates[1]
     assert candidates[2]["narrowing_pass"]["outcome"] == "direction_clear"
+
+
+# ------------------------------------------------------------------ Evidence Passport
+def test_build_evidence_manifest_aggregates_counts(db_session) -> None:
+    workspace_id = str(uuid4())
+    _workspace(db_session, workspace_id)
+    opp = ResearchOpportunity(
+        id=str(uuid4()), workspace_id=workspace_id, title="T", summary="S", rationale="R",
+        suggested_directions=[], confidence=0.5, status="candidate",
+        source_payload={
+            "gate": {"verified": False, "confirmable": True, "evidence_coverage": 0.5},
+            "critic_review": {"verdict": "narrow"},
+            "narrowing_pass": {"outcome": "direction_clear"},
+        },
+    )
+    version = OpportunityVersion(
+        id=str(uuid4()), opportunity_id=opp.id, version_number=1, title="T", problem_statement="P",
+        created_at=datetime.now(UTC),
+        verification_status="verified_with_warnings",
+        synthesis_metadata={"provider": "deepseek", "prompt_version": "discover-v1"},
+    )
+    opp.current_version_id = version.id
+    db_session.add_all([opp, version])
+    db_session.flush()
+    evidence = [
+        OpportunityEvidence(opportunity_version_id=version.id, relation="supports", source_scope="workspace", evidence_level="full_text", paper_id="p1", rank=1, display_excerpt="a"),
+        OpportunityEvidence(opportunity_version_id=version.id, relation="supports", source_scope="workspace", evidence_level="full_text", paper_id="p2", rank=2, display_excerpt="b"),
+        OpportunityEvidence(opportunity_version_id=version.id, relation="similar", source_scope="workspace", evidence_level="metadata_only", paper_id="p3", rank=3, display_excerpt="c"),
+        OpportunityEvidence(opportunity_version_id=version.id, relation="qualifies", source_scope="external", evidence_level="metadata_only", paper_id="p4", rank=4, display_excerpt="d"),
+    ]
+    db_session.add_all(evidence)
+    db_session.commit()
+
+    service = _service(db_session)
+    manifest = service._build_evidence_manifest(opp, version, evidence)
+    assert manifest is not None
+    assert manifest.total == 4
+    assert manifest.supports == 2
+    assert manifest.similar == 1
+    assert manifest.counter == 1
+    assert manifest.independent_papers == 4
+    assert manifest.full_text_papers == 2
+    assert manifest.metadata_only_papers == 2
+    assert manifest.external_sources == 1
+    assert manifest.gate_verified is False
+    assert manifest.gate_confirmable is True
+    assert manifest.evidence_coverage == 0.5
+    assert manifest.critic_verdict == "narrow"
+    assert manifest.narrowing_outcome == "direction_clear"
+    assert manifest.human_status == "candidate"
+    assert manifest.prompt_version == "discover-v1"
+    assert manifest.model_name == "deepseek"
+    assert manifest.verification_status == "verified_with_warnings"
+    assert len(manifest.items) == 4
+    # the manifest is a snapshot, not tied to a new table
+    assert db_session.get(type(opp), opp.id) is not None
+
+
+def test_build_evidence_manifest_none_without_version(db_session) -> None:
+    workspace_id = str(uuid4())
+    _workspace(db_session, workspace_id)
+    opp = ResearchOpportunity(id=str(uuid4()), workspace_id=workspace_id, title="T", summary="S", rationale="R", suggested_directions=[], confidence=0.4, status="candidate", source_payload={})
+    db_session.add(opp)
+    db_session.commit()
+    service = _service(db_session)
+    assert service._build_evidence_manifest(opp, None, []) is None

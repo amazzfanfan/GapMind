@@ -298,11 +298,11 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W3-1 | `EvidenceManifest` schema：支持/限定/反驳/相似数量 + 独立/全文论文数 + metadata/fulltext 区分 + 版本 + 人工状态 | ☐ |
-| W3-2 | Chat / Opportunity / Plan / AgentArtifact 复用同一套证据语义 | ☐ |
-| W3-3 | 一致性检查：`[E1]` 引用必须存在 / 无引用标 unsupported / 版本过期标 stale | ☐ |
-| W3-4 | 前端可信度卡片（覆盖/全文来源/反证状态/外部核验/人工状态）| ☐ |
-| W3-5 | 验收：关键结论一键回原文高亮；非法引用被拦截或警告 | ☐ |
+| W3-1 | `EvidenceManifest` schema：支持/限定/反驳/相似数量 + 独立/全文论文数 + metadata/fulltext 区分 + 版本 + 人工状态 | ✅ |
+| W3-2 | Chat / Opportunity / Plan / AgentArtifact 复用同一套证据语义 | ✅ Opportunity；schema 通用 |
+| W3-3 | 一致性检查：`[E1]` 引用必须存在 / 无引用标 unsupported / 版本过期标 stale | ✅ 引用存在性 + grounded 无引用；stale 版本检查 ⏳ |
+| W3-4 | 前端可信度卡片（覆盖/全文来源/反证状态/外部核验/人工状态）| ✅ |
+| W3-5 | 验收：关键结论一键回原文高亮；非法引用被拦截或警告 | ✅ 前端告警 + 回原文已有 |
 
 ### W4 — 前端 agent 呈现 + 可信度卡片
 
