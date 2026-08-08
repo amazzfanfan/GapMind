@@ -84,3 +84,69 @@ class WorkspaceListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# W0 research readiness (GET /workspaces/{id}/readiness)
+# ---------------------------------------------------------------------------
+
+
+class ReadinessBlockingAction(BaseModel):
+    """One explainable blocking step: what to do, why, and where."""
+
+    action: str
+    reason: str
+    href: str
+
+
+class ReadinessDimension(BaseModel):
+    """One readiness dimension (corpus / retrieval / knowledge / discover / research).
+
+    ``ready`` means usable; ``waiting`` means a background pipeline task is
+    still running (not a user action); otherwise the dimension is blocked and
+    ``blocking_actions`` explains what to do and where.
+    """
+
+    key: str
+    label: str
+    ready: bool
+    waiting: bool
+    summary: str
+    blocking_actions: list[ReadinessBlockingAction] = Field(default_factory=list)
+
+
+class WorkspaceReadinessCounts(BaseModel):
+    """Single-source counts used by the overview progress bar and stats."""
+
+    papers: int = 0
+    papers_with_pdf: int = 0
+    parsed_papers: int = 0
+    extracted_papers: int = 0
+    knowledge_items: int = 0
+    confirmed_items: int = 0
+    pending_knowledge: int = 0
+    runs: int = 0
+    pending_runs: int = 0
+    active_tasks: int = 0
+    opportunities: int = 0
+    pending_opportunities: int = 0
+    confirmed_opportunities: int = 0
+    research_plans: int = 0
+
+
+class ReadinessRecommendedAction(BaseModel):
+    """The single next step the user should take."""
+
+    title: str
+    description: str
+    href: str
+    label: str
+
+
+class WorkspaceReadiness(BaseModel):
+    """Full readiness document returned by GET /workspaces/{id}/readiness."""
+
+    workspace_id: str
+    counts: WorkspaceReadinessCounts
+    dimensions: list[ReadinessDimension]
+    recommended_next_action: ReadinessRecommendedAction

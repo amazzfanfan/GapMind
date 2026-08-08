@@ -4,6 +4,7 @@ import type {
   WorkspaceCreate,
   WorkspaceListParams,
   WorkspaceListResponse,
+  WorkspaceReadiness,
   WorkspaceUpdate,
 } from "./types/workspace";
 
@@ -21,6 +22,11 @@ export const workspaceApi = {
 
   async get(id: string): Promise<Workspace> {
     const resp = await apiClient.get<Workspace>(`/workspaces/${id}`);
+    return resp.data;
+  },
+
+  async readiness(id: string): Promise<WorkspaceReadiness> {
+    const resp = await apiClient.get<WorkspaceReadiness>(`/workspaces/${id}/readiness`);
     return resp.data;
   },
 
