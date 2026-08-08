@@ -87,6 +87,17 @@ def test_parse_pdf_removes_citation_brackets() -> None:
     assert "GNNs" in cleaned
 
 
+def test_clean_page_text_strips_nul_bytes() -> None:
+    """PyMuPDF emits \x00 for embedded glyphs; they must never reach a chunk
+    because PostgreSQL rejects NUL in text columns and LIKE parameters."""
+    from app.domains.artifact.pdf_parser import _clean_page_text
+
+    cleaned = _clean_page_text("Lexpl(e, G, y) :=\x001\n|V |\x00X\nu\u2208V\nBCE\x00e(G)u")
+    assert "\x00" not in cleaned
+    assert "Lexpl" in cleaned
+    assert "BCE" in cleaned
+
+
 def test_parse_pdf_detects_sections() -> None:
     pdf = _make_pdf(
         [

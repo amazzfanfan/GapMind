@@ -369,6 +369,11 @@ def _clean_page_text(raw: str) -> str:
 
     text = raw
 
+    # 0. Strip NUL bytes. PyMuPDF emits \x00 for certain embedded glyphs
+    # (formulas, math fonts); PostgreSQL refuses to store or query NUL in
+    # text columns, so these must never reach a chunk or a LIKE parameter.
+    text = text.replace("\x00", "")
+
     # 1a. Fix intra-chunk broken hyphenation: "opti-\nmization" -> "optimization"
     # Lowercase continuation is the safest case (real word-break, not
     # sentence-start punctuation).

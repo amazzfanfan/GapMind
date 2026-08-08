@@ -2089,12 +2089,16 @@ class DiscoverService(OpportunityWorkflow):
     def _find_evidence_span(self, item: RetrievalResultItem) -> EvidenceSpan | None:
         if not item.paper_id or not item.text:
             return None
+        # The retrieved chunk may still carry NUL bytes from an older parse
+        # (pre-sanitization). PostgreSQL refuses NUL in a LIKE parameter, so
+        # strip it defensively before querying.
+        fragment = item.text[:80].replace("\x00", "")
         exact = self.db.execute(
             select(EvidenceSpan)
             .where(
                 EvidenceSpan.paper_id == item.paper_id,
                 EvidenceSpan.relation == "supports",
-                EvidenceSpan.text.contains(item.text[:80]),
+                EvidenceSpan.text.contains(fragment),
             )
             .order_by(EvidenceSpan.confidence.desc())
             .limit(1)

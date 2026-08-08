@@ -27,6 +27,7 @@ from app.domains.discover.models import (  # noqa: E402
     ResearchOpportunity,
 )
 from app.domains.discover.service import DiscoverService  # noqa: E402
+from app.domains.knowledge.models import EvidenceSpan  # noqa: E402
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem  # noqa: E402
 from app.domains.task.models import Task  # noqa: E402
 from app.domains.workspace.models import Workspace  # noqa: E402
@@ -439,3 +440,38 @@ def test_build_evidence_manifest_none_without_version(db_session) -> None:
     db_session.commit()
     service = _service(db_session)
     assert service._build_evidence_manifest(opp, None, []) is None
+
+
+def test_find_evidence_span_strips_nul_from_query(db_session) -> None:
+    """PostgreSQL rejects NUL in LIKE parameters; _find_evidence_span must
+    strip NUL bytes from the retrieved chunk text before querying."""
+    workspace_id = str(uuid4())
+    _workspace(db_session, workspace_id)
+    paper_id = str(uuid4())
+    span_text = "Lexpl(e, G, y) := BCE e(G)u"
+    db_session.add(
+        EvidenceSpan(
+            workspace_id=workspace_id,
+            paper_id=paper_id,
+            knowledge_item_id=str(uuid4()),
+            artifact_kind="parsed_markdown",
+            text=span_text,
+            relation="supports",
+            confidence=0.9,
+        )
+    )
+    db_session.commit()
+    service = _service(db_session)
+    item = RetrievalResultItem(
+        paper_id=paper_id,
+        paper_title="P",
+        artifact_id=None,
+        chunk_id="c1",
+        text="Lexpl(e, G, y) := \x00BCE e(G)u",  # NUL from an old parse
+        evidence_level="full_text",
+        judgement="supports",
+        source_scope="workspace",
+    )
+    span = service._find_evidence_span(item)  # must not raise
+    assert span is not None
+    assert span.text == span_text
