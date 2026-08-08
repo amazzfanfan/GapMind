@@ -79,6 +79,14 @@ class ChatMessageEvidenceRead(BaseModel):
     updated_at: datetime
 
 
+class CitationCheckRead(BaseModel):
+    """Result of validating [En] markers in an assistant message against its citations."""
+    referenced: list[int] = Field(default_factory=list)
+    broken: list[int] = Field(default_factory=list)
+    ok: bool = True
+    grounded_without_citations: bool = False
+
+
 class ChatMessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,6 +103,7 @@ class ChatMessageRead(BaseModel):
     total_tokens: int | None = None
     grounding_status: str = "not_requested"
     citations: list[ChatMessageEvidenceRead] = Field(default_factory=list)
+    citation_check: CitationCheckRead | None = None
     created_at: datetime
     updated_at: datetime
 

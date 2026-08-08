@@ -31,6 +31,8 @@ function ChatMessageItem({ conversationId, message, onRetry, retrying }: { conve
     <div className="gm-chat-message-body">
       {message.status === "generating" ? <Space><Spin size="small" /><Typography.Text type="secondary">正在思考…</Typography.Text></Space> : message.status === "failed" ? <div><Typography.Text type="danger">回答失败，请重试。</Typography.Text><div><Button type="link" size="small" icon={<ReloadOutlined />} loading={retrying} onClick={() => onRetry(message)}>重新尝试</Button></div></div> : isUser ? <Typography.Paragraph className="gm-chat-plain-text">{message.content}</Typography.Paragraph> : <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>}
       {!isUser && message.status === "completed" && message.grounding_status === "no_evidence" && <Typography.Text type="warning">本次没有使用工作区证据。</Typography.Text>}
+      {!isUser && message.status === "completed" && message.citation_check && !message.citation_check.ok && <Typography.Text type="danger">检测到失效引用：[E{message.citation_check.broken.join("]、[E")}] 未找到对应证据，请核对来源。</Typography.Text>}
+      {!isUser && message.status === "completed" && message.citation_check?.grounded_without_citations && <Typography.Text type="warning">已使用工作区证据，但回答未标注 [E] 引用，关键结论可能缺少直接支撑。</Typography.Text>}
       {!isUser && conversationId && (message.citations?.length ?? 0) > 0 && <ChatCitations conversationId={conversationId} messageId={message.id} citations={message.citations ?? []} />}
     </div>
     {message.status === "completed" && <div className="gm-chat-message-actions"><Tooltip title={copied ? "已复制" : "复制"}><Button type="text" size="small" aria-label="复制消息" icon={copied ? <CheckOutlined /> : <CopyOutlined />} onClick={() => void copy()} /></Tooltip></div>}

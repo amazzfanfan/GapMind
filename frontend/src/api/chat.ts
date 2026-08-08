@@ -24,8 +24,16 @@ export interface ChatMessage {
   total_tokens: number | null;
   grounding_status?: "not_requested" | "grounded" | "no_evidence" | "retrieval_failed";
   citations?: ChatMessageEvidence[];
+  citation_check?: CitationCheck | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CitationCheck {
+  referenced: number[];
+  broken: number[];
+  ok: boolean;
+  grounded_without_citations: boolean;
 }
 
 export interface ChatMessageEvidence {

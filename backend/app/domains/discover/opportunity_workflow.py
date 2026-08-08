@@ -31,13 +31,13 @@ from app.domains.discover.models import (
     ResearchOpportunity,
     ResearchPlan,
 )
-
+from app.domains.discover.schemas import EvidenceManifest, EvidenceManifestItem
 
 CLOSED_OPPORTUNITY_STATUSES = frozenset({"confirmed", "edited_confirmed", "rejected"})
 
-from app.domains.knowledge.models import EvidenceSpan
-from app.domains.artifact.service import ArtifactService
 from app.domains.artifact.models import Artifact
+from app.domains.artifact.service import ArtifactService
+from app.domains.knowledge.models import EvidenceSpan
 
 
 class OpportunityWorkflow:
@@ -222,9 +222,88 @@ class OpportunityWorkflow:
             "current_version": current,
             "versions": versions,
             "evidence": evidence,
+            "evidence_manifest": self._build_evidence_manifest(item, current, evidence),
             "decisions": decisions,
             "plan": plan,
         }
+
+    def _build_evidence_manifest(
+        self,
+        item: ResearchOpportunity,
+        current: OpportunityVersion | None,
+        evidence: list[OpportunityEvidence],
+    ) -> EvidenceManifest | None:
+        """Assemble the evidence-credibility passport for an opportunity.
+
+        Aggregates counts, independent papers, full-text vs metadata, gate
+        status, versions, critic verdict and human-review state from existing
+        rows — a plain snapshot, no new tables. Returns ``None`` only when the
+        opportunity has no version yet.
+        """
+        if current is None:
+            return None
+        source = item.source_payload or {}
+        gate = source.get("gate") or {}
+        critic = source.get("critic_review") or {}
+        narrowing = source.get("narrowing_pass") or {}
+        synthesis_meta = current.synthesis_metadata or {}
+
+        counts = {"supports": 0, "similar": 0, "counter": 0}
+        papers: set[str] = set()
+        full_text: set[str] = set()
+        metadata_only: set[str] = set()
+        external = 0
+        items: list[EvidenceManifestItem] = []
+        for ev in evidence:
+            relation = ev.relation
+            if relation == "supports":
+                counts["supports"] += 1
+            elif relation == "similar":
+                counts["similar"] += 1
+            else:
+                counts["counter"] += 1
+            if ev.source_scope == "external":
+                external += 1
+            if ev.paper_id:
+                papers.add(ev.paper_id)
+                if ev.evidence_level == "full_text":
+                    full_text.add(ev.paper_id)
+                else:
+                    metadata_only.add(ev.paper_id)
+            items.append(
+                EvidenceManifestItem(
+                    relation=relation,
+                    source_scope=ev.source_scope,
+                    evidence_level=ev.evidence_level,
+                    paper_id=ev.paper_id,
+                    external_candidate_id=ev.external_candidate_id,
+                    rank=ev.rank,
+                    judgement=ev.judgement,
+                    judgement_confidence=ev.judgement_confidence,
+                    display_excerpt=(ev.display_excerpt or "")[:200],
+                )
+            )
+        return EvidenceManifest(
+            source_type="opportunity",
+            source_id=item.id,
+            total=len(evidence),
+            **counts,
+            independent_papers=len(papers),
+            full_text_papers=len(full_text),
+            metadata_only_papers=len(metadata_only),
+            external_sources=external,
+            gate_verified=gate.get("verified"),
+            gate_confirmable=gate.get("confirmable"),
+            evidence_coverage=gate.get("evidence_coverage"),
+            verification_status=getattr(current, "verification_status", None),
+            critic_verdict=critic.get("verdict"),
+            narrowing_outcome=narrowing.get("outcome"),
+            prompt_version=synthesis_meta.get("prompt_version") or source.get("prompt_version"),
+            model_name=synthesis_meta.get("provider"),
+            corpus_version=synthesis_meta.get("corpus_version") or source.get("corpus_version"),
+            human_status=item.status,
+            items=items,
+        )
 
     def versions(self, workspace_id: str, opportunity_id: str) -> list[OpportunityVersion]:
         item = self.get_opportunity(workspace_id, opportunity_id)
