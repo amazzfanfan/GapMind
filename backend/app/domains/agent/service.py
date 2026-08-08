@@ -43,6 +43,17 @@ class AgentExecutionDisabledError(RuntimeError):
 ACTIVE_STATUSES = {"queued", "running"}
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
+# W7 full-lifecycle agents share the same controlled-run protocol.
+SUPPORTED_AGENT_TYPES = {
+    "research_plan",
+    "code_generation",
+    "analyze",
+    "write",
+    "respond",
+}
+# Agents that must be attached to an existing research plan.
+PLAN_BOUND_AGENT_TYPES = {"code_generation", "analyze", "write", "respond"}
+
 
 class AgentService:
     def __init__(self, db: Session, gateway: LLMGateway | None = None) -> None:
@@ -64,17 +75,19 @@ class AgentService:
             raise AgentInputError("对话不存在")
         if conversation.workspace_id != workspace_id:
             raise AgentInputError("Agent 对话与工作区不匹配")
-        if agent_type not in {"research_plan", "code_generation"}:
+        if agent_type not in SUPPORTED_AGENT_TYPES:
             raise AgentInputError("不支持的 Agent 类型")
         payload = dict(input_payload or {})
         payload["prompt"] = prompt.strip()
         if not payload["prompt"]:
             raise AgentInputError("任务描述不能为空")
-        if agent_type == "code_generation":
+        if agent_type in PLAN_BOUND_AGENT_TYPES:
             plan_id = str(payload.get("research_plan_id") or "")
             plan = self.db.get(ResearchPlan, plan_id) if plan_id else None
             if plan is None or plan.workspace_id != workspace_id:
-                raise AgentInputError("代码生成必须选择当前工作区中的研究计划")
+                raise AgentInputError("该 Agent 必须选择当前工作区中的研究计划")
+        if agent_type == "respond" and not str(payload.get("reviewer_comments") or "").strip():
+            raise AgentInputError("审稿回复必须提供审稿意见")
 
         active = self.db.scalar(
             select(AgentRun.id).where(
@@ -209,6 +222,12 @@ class AgentService:
                 return self._execute_research_plan(run)
             if run.agent_type == "code_generation":
                 return self._execute_code_generation(run)
+            if run.agent_type == "analyze":
+                return self._execute_analyze(run)
+            if run.agent_type == "write":
+                return self._execute_write(run)
+            if run.agent_type == "respond":
+                return self._execute_respond(run)
             raise AgentInputError("不支持的 Agent 类型")
         except Exception as exc:
             self.db.rollback()
@@ -409,6 +428,259 @@ class AgentService:
         )
         self.db.commit()
         return {"status": run.status, "run_id": run.id, "file_count": len(files)}
+
+    # ----------------------------------------------------- W7 lifecycle agents
+    # Analyze / Write / Respond are lightweight, evidence-linked, controlled
+    # agents. They follow the same AgentRun/AgentStep/AgentArtifact protocol,
+    # keep their outputs in agent_artifacts (never auto-promoted to facts),
+    # end in "succeeded" (no confirmation gate - HITL reviews the artifacts),
+    # and every claim cites workspace evidence via [En] markers.
+
+    def _bound_plan(self, run: AgentRun) -> ResearchPlan:
+        plan = self.db.get(ResearchPlan, str(run.input_payload.get("research_plan_id") or ""))
+        if plan is None or plan.workspace_id != run.workspace_id:
+            raise AgentInputError("研究计划不存在或不属于当前工作区")
+        return plan
+
+    def _execute_analyze(self, run: AgentRun) -> dict[str, Any]:
+        """AnalyzeAgent: user-uploaded experiment results vs the plan's
+        falsification criteria, producing a support / partial / reject verdict
+        with evidence-linked findings. Eats manual data (results are supplied
+        by the user, never auto-run experiments)."""
+        plan = self._bound_plan(run)
+        self._step(run, 1, "workspace_retrieval", "running", "正在检索相关证据")
+        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis} {plan.falsification_criteria}")
+        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        self._transition(run, "running", "analysis", 0.45)
+        prompt = self._analysis_prompt(run, plan, evidence)
+        raw, usage = self._structured_completion(prompt, max_tokens=2600)
+        normalized = self._normalize_analysis(raw)
+        run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id, "evidence": evidence}
+        run.result = {"research_plan_id": plan.id, **normalized}
+        self._step(run, 2, "analysis", "completed", f"已得出“{normalized['verdict']}”结论", usage)
+        self._step(run, 3, "saved", "completed", "结果分析已产出，关键结论回链证据", {"evidence_count": len(evidence)})
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="analysis",
+                filename="research_memo.md",
+                mime_type="text/markdown",
+                content=self._analysis_markdown(normalized, evidence),
+                metadata_payload={"research_plan_id": plan.id, "verdict": normalized["verdict"]},
+                validation_status="unreviewed",
+            )
+        )
+        return self._finish_artifacts_ready(
+            run,
+            f"结果分析完成，结论：**{normalized['verdict']}**。产物 `research_memo.md` 已生成，可预览查看。",
+        )
+
+    def _execute_write(self, run: AgentRun) -> dict[str, Any]:
+        """WriteAgent: plan + evidence -> paper section drafts."""
+        plan = self._bound_plan(run)
+        self._step(run, 1, "workspace_retrieval", "running", "正在检索方法与相关证据")
+        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis} {plan.scope_and_assumptions}")
+        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        self._transition(run, "running", "paper_writing", 0.45)
+        prompt = self._draft_prompt(run, plan, evidence)
+        raw, usage = self._structured_completion(prompt, max_tokens=4000)
+        normalized = self._normalize_draft(raw)
+        run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id, "evidence": evidence}
+        run.result = {"research_plan_id": plan.id, **normalized}
+        self._step(run, 2, "paper_writing", "completed", f"已生成论文草稿（{len(normalized['sections'])} 个章节）", usage)
+        self._step(run, 3, "saved", "completed", "论文草稿已产出，引用回链证据", {"evidence_count": len(evidence)})
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="paper_draft",
+                filename="paper_draft.md",
+                mime_type="text/markdown",
+                content=self._draft_markdown(normalized, evidence),
+                metadata_payload={"research_plan_id": plan.id, "title": normalized["title"]},
+                validation_status="unreviewed",
+            )
+        )
+        return self._finish_artifacts_ready(
+            run,
+            f"论文草稿已生成：**{normalized['title']}**。产物 `paper_draft.md` 已生成，可预览查看。",
+        )
+
+    def _execute_respond(self, run: AgentRun) -> dict[str, Any]:
+        """RespondAgent: reviewer comments -> per-point rebuttal draft."""
+        plan = self._bound_plan(run)
+        comments = str(run.input_payload.get("reviewer_comments") or "")
+        self._step(run, 1, "workspace_retrieval", "running", "正在检索相关证据")
+        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis}")
+        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        self._transition(run, "running", "rebuttal", 0.45)
+        prompt = self._rebuttal_prompt(run, plan, comments, evidence)
+        raw, usage = self._structured_completion(prompt, max_tokens=3000)
+        normalized = self._normalize_rebuttal(raw)
+        run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id, "evidence": evidence}
+        run.result = {"research_plan_id": plan.id, **normalized}
+        self._step(run, 2, "rebuttal", "completed", f"已生成 {len(normalized['responses'])} 条审稿回复", usage)
+        self._step(run, 3, "saved", "completed", "审稿回复已产出，回复依据回链证据", {"response_count": len(normalized["responses"])})
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="rebuttal",
+                filename="rebuttal.md",
+                mime_type="text/markdown",
+                content=self._rebuttal_markdown(normalized, evidence),
+                metadata_payload={"research_plan_id": plan.id, "response_count": len(normalized["responses"])},
+                validation_status="unreviewed",
+            )
+        )
+        return self._finish_artifacts_ready(
+            run,
+            f"审稿回复完成，共 **{len(normalized['responses'])}** 条逐条回应。产物 `rebuttal.md` 已生成。",
+        )
+
+    def _finish_artifacts_ready(self, run: AgentRun, message: str) -> dict[str, Any]:
+        run.status = "succeeded"
+        run.current_stage = "artifacts_ready"
+        run.progress = 1.0
+        if run.task_id:
+            TaskService(self.db).transition(
+                run.task_id, "succeeded", progress=1.0, result={"agent_run_id": run.id}
+            )
+        self._finish_assistant(run, message, failed=False)
+        self.db.commit()
+        return {"status": run.status, "run_id": run.id}
+
+    # ---------------------------------------------------------------- prompts
+    def _analysis_prompt(self, run: AgentRun, plan: ResearchPlan, evidence: list[dict[str, Any]]) -> str:
+        results = run.input_payload.get("results") or {}
+        return (
+            "你是结果分析 agent。用户上传了实验结果，请对照研究计划的证伪标准、指标与预期支持结果，"
+            "判定结论。结论必须引用 evidence_id（[En] 标记，仅引用真实存在的证据）。"
+            "返回 JSON：verdict(支持|部分支持|否定|证据不足), conclusion, key_findings(string[]), "
+            "evidence_refs(string[]), risks(string[])。\n\n"
+            f"实验 JSON：{json.dumps(results, ensure_ascii=False)[:6000]}\n"
+            f"研究问题：{plan.research_question}\n核心假设：{plan.hypothesis}\n"
+            f"证伪标准：{plan.falsification_criteria}\n指标：{json.dumps(plan.metrics, ensure_ascii=False)}\n"
+            f"验证步骤：{json.dumps(plan.validation_steps, ensure_ascii=False)}\n"
+            f"预期支持结果：{plan.expected_supporting_result}\n"
+            f"证据：{json.dumps(evidence, ensure_ascii=False)}"
+        )
+
+    def _draft_prompt(self, run: AgentRun, plan: ResearchPlan, evidence: list[dict[str, Any]]) -> str:
+        plan_payload = {
+            "research_question": plan.research_question,
+            "hypothesis": plan.hypothesis,
+            "scope_and_assumptions": plan.scope_and_assumptions,
+            "datasets": plan.datasets,
+            "baselines": plan.baselines,
+            "metrics": plan.metrics,
+            "validation_steps": plan.validation_steps,
+            "expected_supporting_result": plan.expected_supporting_result,
+            "risks": plan.risks,
+        }
+        return (
+            "你是论文写作 agent。基于研究计划与工作区证据生成论文章节草稿。英文标题，正文用中文草稿，"
+            "关键论断用 [En] 标记引用证据（仅引用真实存在的 evidence_id）。"
+            "返回 JSON：title, abstract, introduction, method, experiments, conclusion, "
+            "evidence_refs(string[])。\n\n"
+            f"用户要求：{run.input_payload.get('prompt')}\n"
+            f"研究计划：{json.dumps(plan_payload, ensure_ascii=False)}\n"
+            f"证据：{json.dumps(evidence, ensure_ascii=False)}"
+        )
+
+    def _rebuttal_prompt(self, run: AgentRun, plan: ResearchPlan, comments: str, evidence: list[dict[str, Any]]) -> str:
+        return (
+            "你是审稿回复 agent。对每条审稿意见给出逐条回应，回应需给出依据并回链证据 [En]。"
+            "返回 JSON：responses([{comment, response, evidence_refs(string[])}]), summary, "
+            "evidence_refs(string[])。\n\n"
+            f"审稿意见：{comments[:4000]}\n"
+            f"研究计划：研究问题 {plan.research_question}；假设 {plan.hypothesis}；"
+            f"证伪标准 {plan.falsification_criteria}；数据集 {json.dumps(plan.datasets, ensure_ascii=False)}\n"
+            f"证据：{json.dumps(evidence, ensure_ascii=False)}"
+        )
+
+    # -------------------------------------------------------------- normalize
+    def _normalize_analysis(self, data: dict[str, Any]) -> dict[str, Any]:
+        verdict = str(data.get("verdict") or "证据不足")
+        if verdict not in {"支持", "部分支持", "否定", "证据不足"}:
+            verdict = "证据不足"
+        return {
+            "verdict": verdict,
+            "conclusion": str(data.get("conclusion") or "实验数据不足以得出明确结论。"),
+            "key_findings": self._string_list(data.get("key_findings")),
+            "evidence_refs": self._string_list(data.get("evidence_refs")),
+            "risks": self._string_list(data.get("risks")),
+        }
+
+    def _normalize_draft(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "title": str(data.get("title") or "研究论文草稿"),
+            "abstract": str(data.get("abstract") or ""),
+            "introduction": str(data.get("introduction") or ""),
+            "method": str(data.get("method") or ""),
+            "experiments": str(data.get("experiments") or ""),
+            "conclusion": str(data.get("conclusion") or ""),
+            "evidence_refs": self._string_list(data.get("evidence_refs")),
+            "sections": ["abstract", "introduction", "method", "experiments", "conclusion"],
+        }
+
+    def _normalize_rebuttal(self, data: dict[str, Any]) -> dict[str, Any]:
+        responses: list[dict[str, Any]] = []
+        for raw in data.get("responses") or []:
+            if not isinstance(raw, dict):
+                continue
+            comment = str(raw.get("comment") or "").strip()
+            if not comment:
+                continue
+            responses.append(
+                {
+                    "comment": comment,
+                    "response": str(raw.get("response") or ""),
+                    "evidence_refs": self._string_list(raw.get("evidence_refs")),
+                }
+            )
+        return {
+            "summary": str(data.get("summary") or ""),
+            "responses": responses,
+            "evidence_refs": self._string_list(data.get("evidence_refs")),
+        }
+
+    # -------------------------------------------------------------- markdown
+    @staticmethod
+    def _bullets(values: list[str]) -> str:
+        return "\n".join(f"- {value}" for value in values) or "- 暂无"
+
+    @staticmethod
+    def _evidence_sources(evidence: list[dict[str, Any]]) -> str:
+        return "\n".join(
+            f"- [{item['evidence_id']}] {item.get('paper_title') or '未命名论文'} / {item.get('section') or '未知章节'}"
+            for item in evidence
+        ) or "- 无"
+
+    @classmethod
+    def _analysis_markdown(cls, result: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
+        return (
+            f"# 结果分析\n\n## 结论\n{result['verdict']}\n\n## 分析\n{result['conclusion']}\n\n"
+            f"## 关键发现\n{cls._bullets(result['key_findings'])}\n\n"
+            f"## 风险\n{cls._bullets(result['risks'])}\n\n## 证据来源\n{cls._evidence_sources(evidence)}\n"
+        )
+
+    @classmethod
+    def _draft_markdown(cls, result: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
+        return (
+            f"# {result['title']}\n\n## Abstract\n{result['abstract']}\n\n"
+            f"## Introduction\n{result['introduction']}\n\n## Method\n{result['method']}\n\n"
+            f"## Experiments\n{result['experiments']}\n\n## Conclusion\n{result['conclusion']}\n\n"
+            f"## 证据来源\n{cls._evidence_sources(evidence)}\n"
+        )
+
+    @classmethod
+    def _rebuttal_markdown(cls, result: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
+        points = "\n\n".join(
+            f"### 意见 {index + 1}\n> {r['comment']}\n\n回复：{r['response']}\n"
+            f"依据：{' '.join(f'[{ref}]' for ref in r['evidence_refs']) or '无'}"
+            for index, r in enumerate(result["responses"])
+        )
+        summary = f"## 总结\n{result['summary']}\n\n" if result["summary"] else ""
+        return f"# 审稿回复草稿\n\n{summary}{points}\n\n## 证据来源\n{cls._evidence_sources(evidence)}\n"
 
     def _retrieve(self, run: AgentRun, query: str) -> list[dict[str, Any]]:
         self._transition(run, "running", "workspace_retrieval", 0.18)

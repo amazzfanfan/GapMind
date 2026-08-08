@@ -288,11 +288,11 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W2-1 | 主 Case 跑 1-3 次 Discover Run，人工检查多候选区分度 | ☐ |
-| W2-2 | Critic 反馈注入 OpportunityAgent prompt（challenges 作为约束）| ☐ |
-| W2-3 | 生成审计字段：prompt_version / model / corpus / 检索快照记入 run | ☐ |
-| W2-4 | Unsupported 主张检查（目标 ≤20%，可暂缓）| ☐ |
-| W2-5 | 验收：2-3 个有区分度候选 | ☐ |
+| W2-1 | 主 Case 跑 1-3 次 Discover Run，人工检查多候选区分度 | ⏳ 待真实环境 |
+| W2-2 | Critic 反馈注入 OpportunityAgent prompt（challenges 作为约束）| ✅ `_critic_challenges`（narrow/reject 去重≤3）+ `_synthesize_candidates` 新增 `critic_feedback` prompt 约束 + execute_run 第二轮综合合并（去重 title + `critic_refined` 标记）|
+| W2-3 | 生成审计字段：prompt_version / model / corpus / 检索快照记入 run | ✅ `DISCOVER_PROMPT_VERSION="discover-v2"` + `_corpus_snapshot`（`workspace-v1-Np-Mk` 指纹，create_run + execute_run preflight 刷新）|
+| W2-4 | Unsupported 主张检查（目标 ≤20%，可暂缓）| ⏳ 可暂缓（计划标注）|
+| W2-5 | 验收：2-3 个有区分度候选 | ⏳ 待真实端到端（349 后端测试）|
 
 ### W3 — Evidence Passport 证据可信度
 
@@ -317,11 +317,11 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W7-1 | AnalyzeAgent：输入实验结果 JSON → 对照证伪标准 → 结论 + 证据引用 | ☐ |
-| W7-2 | WriteAgent：计划+证据 → 章节草稿（Abstract/Intro/Method/Experiments）| ☐ |
-| W7-3 | RespondAgent：论文 + 审稿意见 → 逐条回复草稿 | ☐ |
-| W7-4 | 数据模型 + 前端入口（挂 plan / opportunity + Evidence Passport）| ☐ |
-| W7-5 | 验收：确认计划→模拟实验→分析→论文草稿→审稿回复一条链 | ☐ |
+| W7-1 | AnalyzeAgent：输入实验结果 JSON → 对照证伪标准 → 结论 + 证据引用 | ✅ `_execute_analyze`：verdict(支持/部分支持/否定/证据不足) + conclusion + evidence_refs；产物 `analysis`/`research_memo.md`；结果吃手动数据 |
+| W7-2 | WriteAgent：计划+证据 → 章节草稿（Abstract/Intro/Method/Experiments）| ✅ `_execute_write`：title/abstract/intro/method/experiments/conclusion + [En] 回链；产物 `paper_draft`/`paper_draft.md` |
+| W7-3 | RespondAgent：论文 + 审稿意见 → 逐条回复草稿 | ✅ `_execute_respond`：`reviewer_comments` → 逐条 response + evidence_refs；产物 `rebuttal`/`rebuttal.md` |
+| W7-4 | 数据模型 + 前端入口（挂 plan / opportunity + Evidence Passport）| ✅ 零迁移（context_snapshot/metadata_payload 存 research_plan_id）；ChatComposer 加 3 mode + plan Select；ChatAgentRunCard 多态渲染 md 产物；agent_type Literal 扩展（后端+前端）|
+| W7-5 | 验收：确认计划→模拟实验→分析→论文草稿→审稿回复一条链 | ⏳ 代码层完成（354 后端测试 + 5 lifecycle 测试），真实 LLM 一条链待环境 |
 
 ### W5 — 端到端验收 + 失败降级
 
@@ -355,3 +355,5 @@ W3 → W7 ────────────────┼→ W5 → W6
 | 2026-08-08 | v2：合入 PR #15（Agent 框架 / Workspace RAG / 研究中心 / Discover 修复）；MA 改为复用 AgentRun/Step/Artifact 拆分 Discover；纳入 zwx P0-1（readiness）与 P0-2（Evidence Passport）为 W0/W3；284 测试基线 |
 | 2026-08-09 | MA 多智能体（AgentStep 交接流 + Critic + 收窄）完成；W3 Evidence Passport 完成；**W0 研究准备度完成**（`WorkspaceReadinessService` 五维 + `GET /readiness` 端点 + 前端进度条 + Overview/Dashboard 单一来源计数，333 后端测试）|
 | 2026-08-09 | **W1 外部全文核验代码层完成**：`_normalize_pdf_url`（http://→https、arxiv abs→pdf）+ `_judge_external_fulltext_roles`（全文角色重判，幂等+降级）+ evidence_level 升级/resume/failed 路径测试；343 后端测试。真实 OA 端到端（W1-1/2/7）待环境 |
+| 2026-08-09 | **W2 机会质量代码层完成**：`_critic_challenges` + `_synthesize_candidates` critic_feedback 注入 + execute_run 第二轮综合（Critic 挑战→重新综合）；`DISCOVER_PROMPT_VERSION` + `_corpus_snapshot` 审计字段；349 后端测试。真实跑（W2-1/5）待环境 |
+| 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
