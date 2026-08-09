@@ -43,7 +43,9 @@ def fake_gateway(monkeypatch):
 
 
 def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
-    response = client.post("/api/v1/chat/conversations/send", json={"content": "  什么是时间图神经网络？  "})
+    response = client.post(
+        "/api/v1/chat/conversations/send", json={"content": "  什么是时间图神经网络？  "}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -89,12 +91,20 @@ def test_conversation_search_rename_and_soft_delete(client, fake_gateway):
     assert renamed.status_code == 200
     assert renamed.json()["title"] == "新的知识图谱对话"
 
-    assert client.delete(f"/api/v1/chat/conversations/{first['conversation']['id']}").json()["deleted"] is True
-    assert client.get(f"/api/v1/chat/conversations/{first['conversation']['id']}").status_code == 404
-    assert client.post(
-        f"/api/v1/chat/conversations/{first['conversation']['id']}/messages",
-        json={"content": "不能继续"},
-    ).status_code == 404
+    assert (
+        client.delete(f"/api/v1/chat/conversations/{first['conversation']['id']}").json()["deleted"]
+        is True
+    )
+    assert (
+        client.get(f"/api/v1/chat/conversations/{first['conversation']['id']}").status_code == 404
+    )
+    assert (
+        client.post(
+            f"/api/v1/chat/conversations/{first['conversation']['id']}/messages",
+            json={"content": "不能继续"},
+        ).status_code
+        == 404
+    )
 
 
 def test_failed_answer_is_persisted_and_can_be_retried(client, fake_gateway):
@@ -112,12 +122,19 @@ def test_failed_answer_is_persisted_and_can_be_retried(client, fake_gateway):
     assert messages[-1]["content"] == ""
 
     fake_gateway.fail = False
-    retry = client.post(f"/api/v1/chat/conversations/{conversation_id}/messages/{assistant_id}/retry")
+    retry = client.post(
+        f"/api/v1/chat/conversations/{conversation_id}/messages/{assistant_id}/retry"
+    )
     assert retry.status_code == 200
     assert retry.json()["assistant_message"]["status"] == "completed"
     assert len(fake_gateway.calls) == 2
 
-    assert client.post(f"/api/v1/chat/conversations/{conversation_id}/messages/{assistant_id}/retry").status_code == 409
+    assert (
+        client.post(
+            f"/api/v1/chat/conversations/{conversation_id}/messages/{assistant_id}/retry"
+        ).status_code
+        == 409
+    )
 
 
 def test_missing_api_key_is_mapped_to_503_and_persisted(client, fake_gateway):
@@ -126,19 +143,34 @@ def test_missing_api_key_is_mapped_to_503_and_persisted(client, fake_gateway):
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert detail["error"] == "deepseek_unavailable"
-    messages = client.get(f"/api/v1/chat/conversations/{detail['conversation_id']}").json()["messages"]
+    messages = client.get(f"/api/v1/chat/conversations/{detail['conversation_id']}").json()[
+        "messages"
+    ]
     assert messages[-1]["status"] == "failed"
 
 
 def test_validation_and_generating_conflict(client, db_session, fake_gateway):
-    assert client.post("/api/v1/chat/conversations/send", json={"content": "   "}).status_code == 422
-    assert client.post("/api/v1/chat/conversations/send", json={"content": "x" * 12001}).status_code == 400
+    assert (
+        client.post("/api/v1/chat/conversations/send", json={"content": "   "}).status_code == 422
+    )
+    assert (
+        client.post("/api/v1/chat/conversations/send", json={"content": "x" * 12001}).status_code
+        == 400
+    )
 
     created = client.post("/api/v1/chat/conversations", json={}).json()
     # Insert a real generating message through the public model fixture path.
     from app.db.models import ChatMessage
 
-    db_session.add(ChatMessage(conversation_id=created["id"], role="assistant", content="", status="generating", sequence=1))
+    db_session.add(
+        ChatMessage(
+            conversation_id=created["id"],
+            role="assistant",
+            content="",
+            status="generating",
+            sequence=1,
+        )
+    )
     db_session.commit()
 
     response = client.post(
@@ -186,7 +218,7 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
                     artifact_id=artifact.id,
                     chunk_id="chunk-1",
                     section="Methods",
-                    text="Evidence about graph explanations and robust evaluation.",
+                    text="Evidence about graph\x00 explanations and robust evaluation.",
                     score=0.91,
                     retrieval_stage="reranked",
                 )
@@ -218,8 +250,10 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
     assert len(assistant["citations"]) == 1
     citation = assistant["citations"][0]
     assert citation["paper_title"] == "Interpretable Graph Models"
+    assert "\x00" not in citation["excerpt"]
     assert citation["start_char"] == 6
     assert "[E1]" in fake_gateway.calls[-1][0]["content"]
+    assert "\x00" not in fake_gateway.calls[-1][0]["content"]
 
     context = client.get(
         f"/api/v1/chat/conversations/{body['conversation']['id']}"

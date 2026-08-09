@@ -7,8 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-AgentType = Literal["research_plan", "code_generation"]
+AgentType = Literal["research_plan", "deep_research", "code_generation"]
 
 
 class AgentRunCreate(BaseModel):
@@ -44,7 +43,9 @@ class AgentArtifactRead(BaseModel):
     filename: str
     mime_type: str
     content: str
-    metadata: dict[str, Any] = Field(validation_alias="metadata_payload", serialization_alias="metadata")
+    metadata: dict[str, Any] = Field(
+        validation_alias="metadata_payload", serialization_alias="metadata"
+    )
     validation_status: str
     created_at: datetime
     updated_at: datetime
@@ -87,4 +88,3 @@ class AgentRunListResponse(BaseModel):
 class AgentConfirmResponse(BaseModel):
     run: AgentRunDetail
     research_plan_id: str | None = None
-

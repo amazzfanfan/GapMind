@@ -71,7 +71,9 @@ def _attach_celery_id(db: Session, task_id: str, celery_id: str) -> None:
     db.commit()
 
 
-@router.post("/runs", response_model=DiscoverRunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/runs", response_model=DiscoverRunCreateResponse, status_code=status.HTTP_202_ACCEPTED
+)
 def create_run(
     workspace_id: str,
     payload: DiscoverRunCreateRequest,
@@ -93,7 +95,9 @@ def list_runs(
     offset: int = Query(0, ge=0),
     service: DiscoverService = Depends(_service),
 ) -> DiscoverRunListResponse:
-    items, total = service.list_runs(workspace_id, status_filter=status_filter, limit=limit, offset=offset)
+    items, total = service.list_runs(
+        workspace_id, status_filter=status_filter, limit=limit, offset=offset
+    )
     return DiscoverRunListResponse(
         items=[DiscoverRunRead.model_validate(item) for item in items],
         total=total,
@@ -112,7 +116,9 @@ def get_run(
     return DiscoverRunDetail(
         **DiscoverRunRead.model_validate(data["run"]).model_dump(),
         external_candidates=[item for item in data["external_candidates"]],
-        opportunities=[ResearchOpportunityRead.model_validate(item) for item in data["opportunities"]],
+        opportunities=[
+            ResearchOpportunityRead.model_validate(item) for item in data["opportunities"]
+        ],
     )
 
 
@@ -170,7 +176,9 @@ def list_opportunities(
     workspace_id: str,
     status_filter: str | None = Query(None, alias="status"),
     run_id: str | None = None,
-    pending_only: bool = Query(False, description="Only return opportunities awaiting human handling"),
+    pending_only: bool = Query(
+        False, description="Only return opportunities awaiting human handling"
+    ),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     service: DiscoverService = Depends(_service),
@@ -183,7 +191,12 @@ def list_opportunities(
         limit=limit,
         offset=offset,
     )
-    return OpportunityListResponse(items=[ResearchOpportunityRead.model_validate(item) for item in items], total=total, limit=limit, offset=offset)
+    return OpportunityListResponse(
+        items=[ResearchOpportunityRead.model_validate(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/portfolio/opportunities", response_model=OpportunityPortfolioResponse)
@@ -205,9 +218,7 @@ def list_confirmed_portfolio(
                 current_version=OpportunityVersionRead.model_validate(item["current_version"])
                 if item["current_version"]
                 else None,
-                plan=ResearchPlanRead.model_validate(item["plan"])
-                if item["plan"]
-                else None,
+                plan=ResearchPlanRead.model_validate(item["plan"]) if item["plan"] else None,
             )
             for item in items
         ],
@@ -248,7 +259,9 @@ def get_opportunity(
     data = service.opportunity_detail(workspace_id, opportunity_id)
     return OpportunityDetail(
         opportunity=ResearchOpportunityRead.model_validate(data["opportunity"]),
-        current_version=OpportunityVersionRead.model_validate(data["current_version"]) if data["current_version"] else None,
+        current_version=OpportunityVersionRead.model_validate(data["current_version"])
+        if data["current_version"]
+        else None,
         versions=[OpportunityVersionRead.model_validate(item) for item in data["versions"]],
         evidence=[OpportunityEvidenceRead.model_validate(item) for item in data["evidence"]],
         decisions=data["decisions"],
@@ -262,7 +275,10 @@ def list_versions(
     opportunity_id: str,
     service: DiscoverService = Depends(_service),
 ) -> list[OpportunityVersionRead]:
-    return [OpportunityVersionRead.model_validate(item) for item in service.versions(workspace_id, opportunity_id)]
+    return [
+        OpportunityVersionRead.model_validate(item)
+        for item in service.versions(workspace_id, opportunity_id)
+    ]
 
 
 @router.get("/evidence/{evidence_id}/context", response_model=OpportunityEvidenceContext)
@@ -294,7 +310,27 @@ def confirm(
     service: DiscoverService = Depends(_service),
     current_user: str = Depends(get_current_user),
 ) -> ResearchOpportunityRead:
-    return ResearchOpportunityRead.model_validate(service.confirm(workspace_id, opportunity_id, payload.version_id, payload.note, actor=current_user))
+    return ResearchOpportunityRead.model_validate(
+        service.confirm(
+            workspace_id, opportunity_id, payload.version_id, payload.note, actor=current_user
+        )
+    )
+
+
+@router.post("/opportunities/{opportunity_id}/reassess", response_model=ResearchOpportunityRead)
+def reassess_opportunity_gate(
+    workspace_id: str,
+    opportunity_id: str,
+    service: DiscoverService = Depends(_service),
+    current_user: str = Depends(get_current_user),
+) -> ResearchOpportunityRead:
+    return ResearchOpportunityRead.model_validate(
+        service.reassess_opportunity_gate(
+            workspace_id,
+            opportunity_id,
+            actor=current_user,
+        )
+    )
 
 
 @router.patch("/opportunities/{opportunity_id}", response_model=ResearchOpportunityRead)
@@ -305,7 +341,16 @@ def edit_confirm(
     service: DiscoverService = Depends(_service),
     current_user: str = Depends(get_current_user),
 ) -> ResearchOpportunityRead:
-    return ResearchOpportunityRead.model_validate(service.edit_confirm(workspace_id, opportunity_id, payload.base_version_id, payload.changes, payload.note, actor=current_user))
+    return ResearchOpportunityRead.model_validate(
+        service.edit_confirm(
+            workspace_id,
+            opportunity_id,
+            payload.base_version_id,
+            payload.changes,
+            payload.note,
+            actor=current_user,
+        )
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/reject", response_model=ResearchOpportunityRead)
@@ -316,7 +361,9 @@ def reject(
     service: DiscoverService = Depends(_service),
     current_user: str = Depends(get_current_user),
 ) -> ResearchOpportunityRead:
-    return ResearchOpportunityRead.model_validate(service.reject(workspace_id, opportunity_id, payload.note, actor=current_user))
+    return ResearchOpportunityRead.model_validate(
+        service.reject(workspace_id, opportunity_id, payload.note, actor=current_user)
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/defer", response_model=ResearchOpportunityRead)
@@ -327,7 +374,11 @@ def defer(
     service: DiscoverService = Depends(_service),
     current_user: str = Depends(get_current_user),
 ) -> ResearchOpportunityRead:
-    return ResearchOpportunityRead.model_validate(service.defer(workspace_id, opportunity_id, payload.note, payload.defer_condition, actor=current_user))
+    return ResearchOpportunityRead.model_validate(
+        service.defer(
+            workspace_id, opportunity_id, payload.note, payload.defer_condition, actor=current_user
+        )
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/convert", response_model=PlanCreateResponse)
@@ -337,4 +388,8 @@ def convert(
     service: DiscoverService = Depends(_service),
     current_user: str = Depends(get_current_user),
 ) -> PlanCreateResponse:
-    return PlanCreateResponse(plan=ResearchPlanRead.model_validate(service.convert_to_plan(workspace_id, opportunity_id, actor=current_user)))
+    return PlanCreateResponse(
+        plan=ResearchPlanRead.model_validate(
+            service.convert_to_plan(workspace_id, opportunity_id, actor=current_user)
+        )
+    )

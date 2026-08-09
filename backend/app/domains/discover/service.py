@@ -137,8 +137,16 @@ EXTERNAL_QUERY_MAX_KEYWORDS = 2  # generic user keywords are lowest priority
 # Architectural components are not named research contributions, so they are
 # poor external-search keys; deprioritize them so real method names win.
 EXTERNAL_METHOD_COMPONENT_TOKENS = {
-    "pool", "module", "layer", "encoder", "decoder", "aggregation",
-    "step", "fourier", "regularization", "block",
+    "pool",
+    "module",
+    "layer",
+    "encoder",
+    "decoder",
+    "aggregation",
+    "step",
+    "fourier",
+    "regularization",
+    "block",
 }
 
 # Domain exception classes live in their own module so they can be
@@ -238,15 +246,23 @@ class DiscoverService(OpportunityWorkflow):
         )
         return run, task.id
 
-    def list_runs(self, workspace_id: str, *, status_filter: str | None, limit: int, offset: int) -> tuple[list[DiscoverRun], int]:
+    def list_runs(
+        self, workspace_id: str, *, status_filter: str | None, limit: int, offset: int
+    ) -> tuple[list[DiscoverRun], int]:
         base = select(DiscoverRun).where(
             DiscoverRun.workspace_id == workspace_id,
             DiscoverRun.deleted_at.is_(None),
         )
         if status_filter:
             base = base.where(DiscoverRun.status == status_filter)
-        items = list(self.db.execute(base.order_by(DiscoverRun.created_at.desc()).limit(limit).offset(offset)).scalars())
-        total = int(self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0)
+        items = list(
+            self.db.execute(
+                base.order_by(DiscoverRun.created_at.desc()).limit(limit).offset(offset)
+            ).scalars()
+        )
+        total = int(
+            self.db.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        )
         return items, total
 
     def get_run(self, workspace_id: str, run_id: str) -> DiscoverRun:
@@ -257,8 +273,23 @@ class DiscoverService(OpportunityWorkflow):
 
     def run_detail(self, workspace_id: str, run_id: str) -> dict[str, Any]:
         run = self.get_run(workspace_id, run_id)
-        candidates = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id).order_by(DiscoverExternalCandidate.rank)).scalars())
-        opportunities = list(self.db.execute(select(ResearchOpportunity).where(ResearchOpportunity.discover_run_id == run.id, ResearchOpportunity.is_deleted.is_(False)).order_by(ResearchOpportunity.created_at)).scalars())
+        candidates = list(
+            self.db.execute(
+                select(DiscoverExternalCandidate)
+                .where(DiscoverExternalCandidate.discover_run_id == run.id)
+                .order_by(DiscoverExternalCandidate.rank)
+            ).scalars()
+        )
+        opportunities = list(
+            self.db.execute(
+                select(ResearchOpportunity)
+                .where(
+                    ResearchOpportunity.discover_run_id == run.id,
+                    ResearchOpportunity.is_deleted.is_(False),
+                )
+                .order_by(ResearchOpportunity.created_at)
+            ).scalars()
+        )
         return {"run": run, "external_candidates": candidates, "opportunities": opportunities}
 
     def cancel_run(self, workspace_id: str, run_id: str) -> DiscoverRun:
@@ -271,7 +302,13 @@ class DiscoverService(OpportunityWorkflow):
         run.finished_at = datetime.now(timezone.utc)
         run.stage = "cancelled"
         self.db.commit()
-        self.timeline.record(workspace_id=workspace_id, event_type="discover.run_cancelled", subject_type="discover_run", subject_id=run.id, payload={"run_id": run.id})
+        self.timeline.record(
+            workspace_id=workspace_id,
+            event_type="discover.run_cancelled",
+            subject_type="discover_run",
+            subject_id=run.id,
+            payload={"run_id": run.id},
+        )
         return run
 
     def delete_run(self, workspace_id: str, run_id: str, *, actor: str = "user") -> None:
@@ -293,27 +330,43 @@ class DiscoverService(OpportunityWorkflow):
             payload={"run_id": run.id, "preserved_outputs": True},
         )
 
-    def select_external(self, workspace_id: str, run_id: str, candidate_ids: list[str]) -> DiscoverRun:
+    def select_external(
+        self, workspace_id: str, run_id: str, candidate_ids: list[str]
+    ) -> DiscoverRun:
         run = self.get_run(workspace_id, run_id)
         if run.status != "waiting_for_user" or run.stage != "external_selection":
             raise DiscoverInputError("Run is not waiting for external paper selection")
-        rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id, DiscoverExternalCandidate.id.in_(candidate_ids))).scalars())
+        rows = list(
+            self.db.execute(
+                select(DiscoverExternalCandidate).where(
+                    DiscoverExternalCandidate.discover_run_id == run.id,
+                    DiscoverExternalCandidate.id.in_(candidate_ids),
+                )
+            ).scalars()
+        )
         if len(rows) != len(set(candidate_ids)):
             raise DiscoverInputError("one or more external candidates do not belong to this run")
         protected_statuses = {"selected", "imported_pending_parse", "verified"}
         if any(row.verification_status in protected_statuses for row in rows):
-            raise DiscoverInputError("one or more external candidates are already selected or verified")
+            raise DiscoverInputError(
+                "one or more external candidates are already selected or verified"
+            )
         for row in rows:
             row.verification_status = "selected"
         run.status = "queued"
         run.stage = "fulltext_verification"
         run.progress = max(run.progress, 0.65)
         run.verification_status = "in_progress"
-        run.stage_summaries = {**(run.stage_summaries or {}), "external_selection": {"selected": len(rows), "status": "queued"}}
+        run.stage_summaries = {
+            **(run.stage_summaries or {}),
+            "external_selection": {"selected": len(rows), "status": "queued"},
+        }
         self.db.commit()
         if run.task_id:
             try:
-                TaskService(self.db).resume_from_user(run.task_id, decision={"candidate_ids": candidate_ids})
+                TaskService(self.db).resume_from_user(
+                    run.task_id, decision={"candidate_ids": candidate_ids}
+                )
             except Exception:
                 pass
         return run
@@ -373,7 +426,9 @@ class DiscoverService(OpportunityWorkflow):
         )
         for row in rows:
             if row.imported_paper_id and row.verification_status in {
-                "selected", "imported_pending_parse", "verification_failed"
+                "selected",
+                "imported_pending_parse",
+                "verification_failed",
             }:
                 state = self._paper_pipeline_state(row.imported_paper_id)
                 if state["ready"]:
@@ -392,7 +447,10 @@ class DiscoverService(OpportunityWorkflow):
             "selected": sum(row.verification_status == "selected" for row in rows),
             "pending": sum(row.verification_status == "imported_pending_parse" for row in rows),
             "verified": sum(row.verification_status == "verified" for row in rows),
-            "failed": sum(row.verification_status in {"no_pdf", "import_failed", "verification_failed"} for row in rows),
+            "failed": sum(
+                row.verification_status in {"no_pdf", "import_failed", "verification_failed"}
+                for row in rows
+            ),
             "rows": rows,
         }
 
@@ -430,7 +488,9 @@ class DiscoverService(OpportunityWorkflow):
         self.db.commit()
         if run.task_id:
             try:
-                TaskService(self.db).transition(run.task_id, "waiting_for_user", progress=run.progress)
+                TaskService(self.db).transition(
+                    run.task_id, "waiting_for_user", progress=run.progress
+                )
             except Exception:
                 pass
         return {
@@ -444,27 +504,43 @@ class DiscoverService(OpportunityWorkflow):
     def _paper_pipeline_state(self, paper_id: str) -> dict[str, Any]:
         paper = self.db.get(Paper, paper_id)
         if paper is None or paper.is_deleted:
-            return {"ready": False, "failed": True, "error": "Imported paper was deleted or not found."}
+            return {
+                "ready": False,
+                "failed": True,
+                "error": "Imported paper was deleted or not found.",
+            }
         if paper.parse_status in {"pending", "parsing"} or not paper.parsed_markdown_artifact_id:
             return {"ready": False, "failed": False, "error": "PDF parsing is still running."}
         if paper.parse_status == "failed":
             return {"ready": False, "failed": True, "error": "PDF parsing failed."}
         if paper.extract_status in {"pending", "extracting", "not_applicable"}:
-            return {"ready": False, "failed": False, "error": "Knowledge extraction is still running."}
+            return {
+                "ready": False,
+                "failed": False,
+                "error": "Knowledge extraction is still running.",
+            }
         if paper.extract_status == "failed":
             return {"ready": False, "failed": True, "error": "Knowledge extraction failed."}
         span_count = int(
             self.db.execute(
-                select(func.count()).select_from(EvidenceSpan).where(EvidenceSpan.paper_id == paper.id)
+                select(func.count())
+                .select_from(EvidenceSpan)
+                .where(EvidenceSpan.paper_id == paper.id)
             ).scalar()
             or 0
         )
         if span_count == 0:
-            return {"ready": False, "failed": True, "error": "No EvidenceSpan was extracted from the imported paper."}
+            return {
+                "ready": False,
+                "failed": True,
+                "error": "No EvidenceSpan was extracted from the imported paper.",
+            }
         embed_tasks = [
             task
             for task in self.db.execute(
-                select(Task).where(Task.task_type == "embed_chunks").order_by(Task.updated_at.desc())
+                select(Task)
+                .where(Task.task_type == "embed_chunks")
+                .order_by(Task.updated_at.desc())
             ).scalars()
             if (task.payload or {}).get("paper_id") == paper.id
         ]
@@ -472,11 +548,14 @@ class DiscoverService(OpportunityWorkflow):
         if latest_embed is None or latest_embed.status in PIPELINE_PENDING_STATUSES:
             return {"ready": False, "failed": False, "error": "Vector indexing is still running."}
         if latest_embed.status == "failed":
-            return {"ready": False, "failed": True, "error": latest_embed.error or "Vector indexing failed."}
+            return {
+                "ready": False,
+                "failed": True,
+                "error": latest_embed.error or "Vector indexing failed.",
+            }
         if latest_embed.status != "succeeded":
             return {"ready": False, "failed": False, "error": "Vector indexing has not completed."}
         return {"ready": True, "failed": False, "error": None}
-
 
     # -------------------------------------------------------------- worker
     def execute_run(self, run_id: str) -> dict[str, Any]:
@@ -501,14 +580,18 @@ class DiscoverService(OpportunityWorkflow):
         claim = self._resolve_claim(run.workspace_id, run.input_claim_item_id)
         claim_text = self._claim_text(claim) if claim else (run.input_topic or "")
         if not claim_text.strip():
-            return self._fail_run(run, "discover_preflight_failed", "No usable topic or claim was provided")
+            return self._fail_run(
+                run, "discover_preflight_failed", "No usable topic or claim was provided"
+            )
 
         config = DiscoverConfig.model_validate(run.config or {})
         self._checkpoint(run)
         similar = self._workspace_similar(run, claim, claim_text, config)
         self._stage(run, "workspace_retrieval", 0.28, {"similar_work": len(similar.items)})
         self._checkpoint(run)
-        self._stage(run, "similar_work", 0.34, {"items": len(similar.items), "status": similar.status})
+        self._stage(
+            run, "similar_work", 0.34, {"items": len(similar.items), "status": similar.status}
+        )
         counter = self._workspace_counter(run, claim, claim_text, config)
         self._stage(
             run,
@@ -549,14 +632,24 @@ class DiscoverService(OpportunityWorkflow):
             run.stage = "external_selection"
             run.progress = 0.62
             run.verification_status = "incomplete"
-            run.stage_summaries = {**(run.stage_summaries or {}), "external_selection": {"status": "waiting_for_user", "candidate_count": external}}
+            run.stage_summaries = {
+                **(run.stage_summaries or {}),
+                "external_selection": {"status": "waiting_for_user", "candidate_count": external},
+            }
             self.db.commit()
             if run.task_id:
                 try:
                     task_service.transition(run.task_id, "waiting_for_user", progress=run.progress)
                 except Exception:
                     pass
-            self.timeline.record(workspace_id=run.workspace_id, event_type="discover.external_input_requested", subject_type="discover_run", subject_id=run.id, actor="agent", payload={"run_id": run.id, "candidate_count": external})
+            self.timeline.record(
+                workspace_id=run.workspace_id,
+                event_type="discover.external_input_requested",
+                subject_type="discover_run",
+                subject_id=run.id,
+                actor="agent",
+                payload={"run_id": run.id, "candidate_count": external},
+            )
             return {"run_id": run.id, "status": run.status, "waiting_for_user": True}
         if selected:
             self._import_selected_candidates(run)
@@ -565,7 +658,12 @@ class DiscoverService(OpportunityWorkflow):
                 return self._wait_for_fulltext(run, candidate_state)
             if not candidate_state["verified"] and candidate_state["failed"]:
                 return self._wait_for_fulltext(run, candidate_state)
-            self._stage(run, "fulltext_verification", 0.68, {"selected": selected, "verified": candidate_state["verified"]})
+            self._stage(
+                run,
+                "fulltext_verification",
+                0.68,
+                {"selected": selected, "verified": candidate_state["verified"]},
+            )
         elif pending:
             return self._wait_for_fulltext(run, candidate_state)
 
@@ -578,7 +676,9 @@ class DiscoverService(OpportunityWorkflow):
             supporting=supporting,
             counter=counter,
         )
-        self._stage(run, "synthesis", 0.76, {"status": "running", "preliminary_gate": preliminary_gate})
+        self._stage(
+            run, "synthesis", 0.76, {"status": "running", "preliminary_gate": preliminary_gate}
+        )
         candidates = self._synthesize_candidates(
             run,
             claim_text,
@@ -602,7 +702,9 @@ class DiscoverService(OpportunityWorkflow):
         )
         self._checkpoint(run)
         finished_at = datetime.now(timezone.utc)
-        verification_status = "complete" if any(gate["verified"] for gate in final_gates) else "incomplete"
+        verification_status = (
+            "complete" if any(gate["verified"] for gate in final_gates) else "incomplete"
+        )
         saved_summary = {"opportunities": len(created), "gates": final_gates}
         # A cancellation can arrive while synthesis or persistence is running.
         # Use a conditional UPDATE so a stale worker can never overwrite the
@@ -632,11 +734,31 @@ class DiscoverService(OpportunityWorkflow):
         self.db.refresh(run)
         if run.task_id:
             try:
-                task_service.transition(run.task_id, "succeeded", progress=1.0, result={"run_id": run.id, "opportunity_ids": [item.id for item in created]})
+                task_service.transition(
+                    run.task_id,
+                    "succeeded",
+                    progress=1.0,
+                    result={"run_id": run.id, "opportunity_ids": [item.id for item in created]},
+                )
             except Exception:
                 pass
-        self.timeline.record(workspace_id=run.workspace_id, event_type="discover.run_completed", subject_type="discover_run", subject_id=run.id, actor="agent", payload={"run_id": run.id, "opportunities": len(created), "verification_status": run.verification_status})
-        return {"run_id": run.id, "status": run.status, "opportunity_ids": [item.id for item in created]}
+        self.timeline.record(
+            workspace_id=run.workspace_id,
+            event_type="discover.run_completed",
+            subject_type="discover_run",
+            subject_id=run.id,
+            actor="agent",
+            payload={
+                "run_id": run.id,
+                "opportunities": len(created),
+                "verification_status": run.verification_status,
+            },
+        )
+        return {
+            "run_id": run.id,
+            "status": run.status,
+            "opportunity_ids": [item.id for item in created],
+        }
 
     def _checkpoint(self, run: DiscoverRun) -> None:
         """Refresh the run and stop this worker after a user cancellation."""
@@ -655,15 +777,32 @@ class DiscoverService(OpportunityWorkflow):
         self.db.commit()
         return {"run_id": run.id, "status": "cancelled", "idempotent": True}
 
-    def _stage(self, run: DiscoverRun, stage: str, progress: float, summary: dict[str, Any] | None = None) -> None:
+    def _stage(
+        self, run: DiscoverRun, stage: str, progress: float, summary: dict[str, Any] | None = None
+    ) -> None:
         self.db.refresh(run)
         if self._cancelled(run):
             raise DiscoverRunCancelled(run.id)
         run.stage = stage
         run.progress = progress
-        run.stage_summaries = {**(run.stage_summaries or {}), stage: summary or {"status": "succeeded"}}
+        run.stage_summaries = {
+            **(run.stage_summaries or {}),
+            stage: summary or {"status": "succeeded"},
+        }
         self.db.commit()
-        self.timeline.record(workspace_id=run.workspace_id, event_type="discover.stage_completed", subject_type="discover_run", subject_id=run.id, actor="agent", payload={"run_id": run.id, "stage": stage, "progress": progress, "summary": summary or {}})
+        self.timeline.record(
+            workspace_id=run.workspace_id,
+            event_type="discover.stage_completed",
+            subject_type="discover_run",
+            subject_id=run.id,
+            actor="agent",
+            payload={
+                "run_id": run.id,
+                "stage": stage,
+                "progress": progress,
+                "summary": summary or {},
+            },
+        )
 
     def _fail_run(self, run: DiscoverRun, code: str, message: str) -> dict[str, Any]:
         run.status = "failed"
@@ -677,23 +816,50 @@ class DiscoverService(OpportunityWorkflow):
                 TaskService(self.db).transition(run.task_id, "failed", error=message)
             except Exception:
                 pass
-        self.timeline.record(workspace_id=run.workspace_id, event_type="discover.run_failed", subject_type="discover_run", subject_id=run.id, payload={"run_id": run.id, "error_code": code, "message": message})
+        self.timeline.record(
+            workspace_id=run.workspace_id,
+            event_type="discover.run_failed",
+            subject_type="discover_run",
+            subject_id=run.id,
+            payload={"run_id": run.id, "error_code": code, "message": message},
+        )
         return {"run_id": run.id, "status": "failed", "error_code": code}
 
     # ----------------------------------------------------------- retrieval
-    def _workspace_similar(self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig) -> RetrievalResponse:
+    def _workspace_similar(
+        self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig
+    ) -> RetrievalResponse:
         paper_id = claim.paper_id if claim else None
         if paper_id:
-            return self.retrieval.find_similar_work(run.workspace_id, paper_id, config.top_k, use_reranker=config.use_reranker, exclude_paper_ids={paper_id})
-        return self.retrieval.semantic_search(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker)
+            return self.retrieval.find_similar_work(
+                run.workspace_id,
+                paper_id,
+                config.top_k,
+                use_reranker=config.use_reranker,
+                exclude_paper_ids={paper_id},
+            )
+        return self.retrieval.semantic_search(
+            run.workspace_id, text, config.top_k, use_reranker=config.use_reranker
+        )
 
-    def _workspace_counter(self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig) -> RetrievalResponse:
+    def _workspace_counter(
+        self, run: DiscoverRun, claim: KnowledgeItem | None, text: str, config: DiscoverConfig
+    ) -> RetrievalResponse:
         if not config.include_counter_evidence:
             return self._empty_response(run.workspace_id, text, "counter_evidence")
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
-        return self.retrieval.find_counter_evidence(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker, use_judge=config.use_judge, exclude_paper_ids=excluded)
+        return self.retrieval.find_counter_evidence(
+            run.workspace_id,
+            text,
+            config.top_k,
+            use_reranker=config.use_reranker,
+            use_judge=config.use_judge,
+            exclude_paper_ids=excluded,
+        )
 
-    def _external_verify(self, run: DiscoverRun, queries: list[str], exact_lookups: list[str] | None = None) -> int:
+    def _external_verify(
+        self, run: DiscoverRun, queries: list[str], exact_lookups: list[str] | None = None
+    ) -> int:
         """Search Semantic Scholar across several queries and merge candidates.
 
         ``queries[0]`` is the run's research question (claim/topic); the rest
@@ -707,9 +873,22 @@ class DiscoverService(OpportunityWorkflow):
         terms, so LLM-selected method names get a precise, verified pass whose
         hits are prepended to the merged candidates.
         """
-        existing = int(self.db.execute(select(func.count()).select_from(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalar() or 0)
+        existing = int(
+            self.db.execute(
+                select(func.count())
+                .select_from(DiscoverExternalCandidate)
+                .where(DiscoverExternalCandidate.discover_run_id == run.id)
+            ).scalar()
+            or 0
+        )
         if existing:
-            rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalars())
+            rows = list(
+                self.db.execute(
+                    select(DiscoverExternalCandidate).where(
+                        DiscoverExternalCandidate.discover_run_id == run.id
+                    )
+                ).scalars()
+            )
             external_summary = (run.stage_summaries or {}).get("external_search")
             if not isinstance(external_summary, dict) or external_summary.get("status") not in {
                 "succeeded",
@@ -755,7 +934,11 @@ class DiscoverService(OpportunityWorkflow):
                 seen_in_query: set[str] = set()
                 q_results: list[tuple[str, dict[str, Any]]] = []
                 for item in raw.get("data") or []:
-                    if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
+                    if (
+                        not isinstance(item, dict)
+                        or not item.get("paperId")
+                        or not item.get("title")
+                    ):
                         continue
                     pid = str(item["paperId"])
                     if pid not in seen_in_query:
@@ -854,23 +1037,35 @@ class DiscoverService(OpportunityWorkflow):
 
         rows: list[DiscoverExternalCandidate] = []
         for rank, (pid, item, source_query) in enumerate(merged, start=1):
-            authors = [a.get("name", "") for a in item.get("authors") or [] if isinstance(a, dict) and a.get("name")]
+            authors = [
+                a.get("name", "")
+                for a in item.get("authors") or []
+                if isinstance(a, dict) and a.get("name")
+            ]
             row = DiscoverExternalCandidate(
-                id=str(uuid4()), discover_run_id=run.id, query=source_query, rank=rank,
-                external_paper_id=pid, title=str(item["title"]), authors=authors,
+                id=str(uuid4()),
+                discover_run_id=run.id,
+                query=source_query,
+                rank=rank,
+                external_paper_id=pid,
+                title=str(item["title"]),
+                authors=authors,
                 year=item.get("year") if isinstance(item.get("year"), int) else None,
                 abstract=item.get("abstract") if isinstance(item.get("abstract"), str) else None,
-                open_access_pdf=item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else None,
-                role=self._external_role(primary, item), role_confidence=0.35,
-                evidence_level="metadata_only", verification_status="unverified", snapshot_payload=item,
+                open_access_pdf=item.get("openAccessPdf")
+                if isinstance(item.get("openAccessPdf"), dict)
+                else None,
+                role=self._external_role(primary, item),
+                role_confidence=0.35,
+                evidence_level="metadata_only",
+                verification_status="unverified",
+                snapshot_payload=item,
             )
             rows.append(row)
         self.db.add_all(rows)
         run.verification_status = "in_progress" if rows else "incomplete"
         search_status = (
-            "succeeded_partial"
-            if query_failures
-            else ("succeeded" if rows else "succeeded_empty")
+            "succeeded_partial" if query_failures else ("succeeded" if rows else "succeeded_empty")
         )
         run.stage_summaries = {
             **(run.stage_summaries or {}),
@@ -943,7 +1138,9 @@ class DiscoverService(OpportunityWorkflow):
             add(self._external_query_text(item))
             if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
                 return queries, lookups
-        for item in self._external_query_signal_items(run.workspace_id, types=("limitation", "claim", "task")):
+        for item in self._external_query_signal_items(
+            run.workspace_id, types=("limitation", "claim", "task")
+        ):
             add(self._external_query_text(item))
             if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
                 return queries, lookups
@@ -989,7 +1186,9 @@ class DiscoverService(OpportunityWorkflow):
             )
             parsed = self._parse_json(resp.content)
             if not isinstance(parsed, dict):
-                logger.warning("discover.external_axis_query_bad_shape", raw_preview=(resp.content or "")[:200])
+                logger.warning(
+                    "discover.external_axis_query_bad_shape", raw_preview=(resp.content or "")[:200]
+                )
                 return [], []
             queries: list[str] = []
             for q in parsed.get("queries") or []:
@@ -1007,15 +1206,26 @@ class DiscoverService(OpportunityWorkflow):
             logger.warning("discover.external_axis_query_failed", error=str(exc))
             return [], []
 
-    def _external_query_signal_texts(self, workspace_id: str, *, max_methods: int = 24, max_limitations: int = 6, max_claims: int = 6) -> str:
+    def _external_query_signal_texts(
+        self,
+        workspace_id: str,
+        *,
+        max_methods: int = 24,
+        max_limitations: int = 6,
+        max_claims: int = 6,
+    ) -> str:
         """Compact workspace signals rendered for the axis-query LLM prompt."""
         lines: list[str] = []
         methods = self._external_query_signal_items(workspace_id, types=("method",))[:max_methods]
         if methods:
             lines.append("Methods: " + "; ".join(self._external_query_text(m) for m in methods))
-        limitations = self._external_query_signal_items(workspace_id, types=("limitation",))[:max_limitations]
+        limitations = self._external_query_signal_items(workspace_id, types=("limitation",))[
+            :max_limitations
+        ]
         if limitations:
-            lines.append("Limitations: " + "; ".join(self._external_query_text(lim) for lim in limitations))
+            lines.append(
+                "Limitations: " + "; ".join(self._external_query_text(lim) for lim in limitations)
+            )
         claims = self._external_query_signal_items(workspace_id, types=("claim",))[:max_claims]
         if claims:
             lines.append("Claims: " + "; ".join(self._external_query_text(cl) for cl in claims))
@@ -1036,7 +1246,9 @@ class DiscoverService(OpportunityWorkflow):
                 break
         return names
 
-    def _external_query_signal_items(self, workspace_id: str, types: tuple[str, ...] | None = None) -> list[KnowledgeItem]:
+    def _external_query_signal_items(
+        self, workspace_id: str, types: tuple[str, ...] | None = None
+    ) -> list[KnowledgeItem]:
         """Workspace items ordered by usefulness for external queries.
 
         Methods first (named entities → strongest external-search keys),
@@ -1098,10 +1310,17 @@ class DiscoverService(OpportunityWorkflow):
                 return name
             description = content.get("description")
             if isinstance(description, str) and description.strip():
-                match = re.match(r"[A-Z][a-zA-Z0-9-]*(?:\s+[A-Z][a-zA-Z0-9-]*){1,3}", description.strip())
+                match = re.match(
+                    r"[A-Z][a-zA-Z0-9-]*(?:\s+[A-Z][a-zA-Z0-9-]*){1,3}", description.strip()
+                )
                 full = match.group(0) if match else ""
                 first = full.split()[0].lower() if full else ""
-                if full and len(full.split()) >= 2 and full.lower() != name.lower() and first not in {"a", "an", "the"}:
+                if (
+                    full
+                    and len(full.split()) >= 2
+                    and full.lower() != name.lower()
+                    and first not in {"a", "an", "the"}
+                ):
                     return full
             return name
         # limitations and tasks: short canonical names carry the most signal;
@@ -1116,7 +1335,14 @@ class DiscoverService(OpportunityWorkflow):
         pipeline and the candidate stays visibly pending until it completes.
         """
         client = SemanticScholarClient()
-        rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id, DiscoverExternalCandidate.verification_status == "selected")).scalars())
+        rows = list(
+            self.db.execute(
+                select(DiscoverExternalCandidate).where(
+                    DiscoverExternalCandidate.discover_run_id == run.id,
+                    DiscoverExternalCandidate.verification_status == "selected",
+                )
+            ).scalars()
+        )
         for row in rows:
             if row.imported_paper_id:
                 self._ensure_paper_pipeline(run.workspace_id, row.imported_paper_id)
@@ -1125,7 +1351,9 @@ class DiscoverService(OpportunityWorkflow):
             pdf = row.open_access_pdf or {}
             pdf_url = pdf.get("url") if isinstance(pdf, dict) else None
             if not isinstance(pdf_url, str) or not pdf_url.strip():
-                external_ids = raw.get("externalIds") if isinstance(raw.get("externalIds"), dict) else {}
+                external_ids = (
+                    raw.get("externalIds") if isinstance(raw.get("externalIds"), dict) else {}
+                )
                 arxiv_id = external_ids.get("ArXiv") or external_ids.get("ARXIV")
                 if isinstance(arxiv_id, str) and arxiv_id.strip():
                     arxiv_id = arxiv_id.removeprefix("arXiv:").removesuffix(".pdf").strip()
@@ -1136,12 +1364,32 @@ class DiscoverService(OpportunityWorkflow):
             try:
                 content = client.download_pdf(pdf_url.strip())
                 paper_service = PaperService(self.db)
-                paper = paper_service.find_by_external_paper_id(workspace_id=run.workspace_id, external_paper_id=row.external_paper_id)
+                paper = paper_service.find_by_external_paper_id(
+                    workspace_id=run.workspace_id, external_paper_id=row.external_paper_id
+                )
                 if paper is None:
-                    paper = paper_service.create_from_metadata(workspace_id=run.workspace_id, payload=PaperCreate(title=row.title, authors=row.authors, year=row.year, abstract=row.abstract), source="semantic_scholar", external_paper_id=row.external_paper_id)
+                    paper = paper_service.create_from_metadata(
+                        workspace_id=run.workspace_id,
+                        payload=PaperCreate(
+                            title=row.title,
+                            authors=row.authors,
+                            year=row.year,
+                            abstract=row.abstract,
+                        ),
+                        source="semantic_scholar",
+                        external_paper_id=row.external_paper_id,
+                    )
                 if paper.primary_artifact_id is None:
-                    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", row.title)[:120] or row.external_paper_id
-                    paper = paper_service.attach_pdf_to_existing(workspace_id=run.workspace_id, paper_id=paper.id, filename=f"{filename}.pdf", content=content, mime_type="application/pdf")
+                    filename = (
+                        re.sub(r"[^A-Za-z0-9._-]+", "_", row.title)[:120] or row.external_paper_id
+                    )
+                    paper = paper_service.attach_pdf_to_existing(
+                        workspace_id=run.workspace_id,
+                        paper_id=paper.id,
+                        filename=f"{filename}.pdf",
+                        content=content,
+                        mime_type="application/pdf",
+                    )
                 row.imported_paper_id = paper.id
                 row.verification_status = "imported_pending_parse"
                 row.evidence_level = "metadata_only"
@@ -1167,19 +1415,26 @@ class DiscoverService(OpportunityWorkflow):
 
         def has_active(task_type: str) -> bool:
             return any(
-                task.task_type == task_type
-                and (task.payload or {}).get("paper_id") == paper_id
+                task.task_type == task_type and (task.payload or {}).get("paper_id") == paper_id
                 for task in active
             )
 
-        if paper.primary_artifact_id and paper.parse_status in {"pending", "failed", "parsing"} and not has_active("parse_pdf"):
+        if (
+            paper.primary_artifact_id
+            and paper.parse_status in {"pending", "failed", "parsing"}
+            and not has_active("parse_pdf")
+        ):
             from app.workers.tasks.parse_pdf import spawn_parse_pdf_task
 
             paper.parse_status = "pending"
             self.db.commit()
             spawn_parse_pdf_task(self.db, paper_id, workspace_id)
             return
-        if paper.parsed_markdown_artifact_id and paper.extract_status in {"pending", "failed", "extracting", "not_applicable"} and not has_active("extract_knowledge"):
+        if (
+            paper.parsed_markdown_artifact_id
+            and paper.extract_status in {"pending", "failed", "extracting", "not_applicable"}
+            and not has_active("extract_knowledge")
+        ):
             from app.workers.tasks.extract_knowledge import spawn_extract_knowledge
 
             spawn_extract_knowledge(self.db, paper_id, workspace_id)
@@ -1188,7 +1443,9 @@ class DiscoverService(OpportunityWorkflow):
                 (
                     task
                     for task in self.db.execute(
-                        select(Task).where(Task.task_type == "embed_chunks").order_by(Task.updated_at.desc())
+                        select(Task)
+                        .where(Task.task_type == "embed_chunks")
+                        .order_by(Task.updated_at.desc())
                     ).scalars()
                     if (task.payload or {}).get("paper_id") == paper_id
                 ),
@@ -1202,7 +1459,11 @@ class DiscoverService(OpportunityWorkflow):
     @staticmethod
     def _external_role(query: str, item: dict[str, Any]) -> str:
         haystack = f"{item.get('title', '')} {item.get('abstract', '')}".lower()
-        tokens = [token for token in re.findall(r"[a-z0-9]{4,}", query.lower()) if token not in {"with", "from", "under", "using"}]
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]{4,}", query.lower())
+            if token not in {"with", "from", "under", "using"}
+        ]
         overlap = sum(token in haystack for token in tokens)
         return "similar" if overlap >= max(1, len(tokens) // 4) else "unknown"
 
@@ -1252,12 +1513,9 @@ class DiscoverService(OpportunityWorkflow):
         for start in range(0, len(candidates), batch_size):
             batch = candidates[start : start + batch_size]
             lines = [
-                f"[{i}] {c.title or ''} — {(c.abstract or '')[:400]}"
-                for i, c in enumerate(batch)
+                f"[{i}] {c.title or ''} — {(c.abstract or '')[:400]}" for i, c in enumerate(batch)
             ]
-            user_prompt = (
-                f"RESEARCH QUESTION: {query[:300]}\n\nCANDIDATES:\n" + "\n".join(lines)
-            )
+            user_prompt = f"RESEARCH QUESTION: {query[:300]}\n\nCANDIDATES:\n" + "\n".join(lines)
             try:
                 resp = gateway.chat_completion(
                     [
@@ -1271,7 +1529,9 @@ class DiscoverService(OpportunityWorkflow):
                 parsed = self._parse_json(resp.content)
                 items = parsed.get("roles") if isinstance(parsed, dict) else None
                 if not isinstance(items, list):
-                    logger.warning("discover.external_role_bad_shape", raw_preview=(resp.content or "")[:200])
+                    logger.warning(
+                        "discover.external_role_bad_shape", raw_preview=(resp.content or "")[:200]
+                    )
                     continue
                 for hit in items:
                     if not isinstance(hit, dict):
@@ -1300,7 +1560,9 @@ class DiscoverService(OpportunityWorkflow):
         config: DiscoverConfig,
     ) -> RetrievalResponse:
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
-        response = self.retrieval.semantic_search(run.workspace_id, text, config.top_k * 3, use_reranker=config.use_reranker)
+        response = self.retrieval.semantic_search(
+            run.workspace_id, text, config.top_k * 3, use_reranker=config.use_reranker
+        )
         return self._filter_supporting_response(run, response, excluded)
 
     def _candidate_supporting(
@@ -1404,9 +1666,13 @@ class DiscoverService(OpportunityWorkflow):
             "items": len(response.items),
         }
 
-    def _external_fulltext(self, run: DiscoverRun, supporting: RetrievalResponse) -> RetrievalResponse:
+    def _external_fulltext(
+        self, run: DiscoverRun, supporting: RetrievalResponse
+    ) -> RetrievalResponse:
         items = [item for item in supporting.items if item.source_scope == "external"]
-        return supporting.model_copy(update={"purpose": "external_full_text", "items": items, "total": len(items)})
+        return supporting.model_copy(
+            update={"purpose": "external_full_text", "items": items, "total": len(items)}
+        )
 
     def _evidence_gate(
         self,
@@ -1421,9 +1687,12 @@ class DiscoverService(OpportunityWorkflow):
         Similar Work, Counter Evidence, metadata snapshots, and duplicate
         chunks are intentionally excluded from this set.
         """
+        # ``supporting`` is already produced by ``_candidate_supporting`` for
+        # the concrete proposal.  Do not apply a second lexical-overlap gate
+        # here: proposals are generated in Chinese while paper excerpts often
+        # remain English, so an ASCII token intersection incorrectly discards
+        # valid cross-lingual semantic retrieval hits.
         candidate_items = supporting.items
-        if candidate is not None:
-            candidate_items = self._supporting_for_candidate(candidate, supporting.items)
         valid: list[RetrievalResultItem] = []
         seen_papers: set[str] = set()
         for item in candidate_items:
@@ -1447,7 +1716,9 @@ class DiscoverService(OpportunityWorkflow):
             "succeeded_partial",
             "succeeded_empty",
         }
-        external_verification_completed = external_executed and not self._external_selection_skipped(run)
+        external_verification_completed = (
+            external_executed and not self._external_selection_skipped(run)
+        )
         supporting_checked = supporting.status == "succeeded"
         counter_checked = counter.status == "succeeded"
         blocking_missing: list[str] = []
@@ -1462,7 +1733,9 @@ class DiscoverService(OpportunityWorkflow):
             warnings.append("external verification did not complete")
         coverage = self._evidence_coverage(candidate, valid)
         if coverage < 0.6:
-            blocking_missing.append("supporting evidence does not cover the opportunity's key problem and hypothesis")
+            blocking_missing.append(
+                "supporting evidence does not cover the opportunity's key problem and hypothesis"
+            )
         confirmable = not blocking_missing
         verified = confirmable and not warnings
         missing = [*blocking_missing, *warnings]
@@ -1478,7 +1751,9 @@ class DiscoverService(OpportunityWorkflow):
             "external_verification_completed": external_verification_completed,
             "external_search_status": external_summary.get("status", "not_run"),
             "evidence_coverage": coverage,
-            "reason": "verified" if verified else ("verified_with_warnings" if confirmable else "insufficient_full_text_evidence"),
+            "reason": "verified"
+            if verified
+            else ("verified_with_warnings" if confirmable else "insufficient_full_text_evidence"),
             "blocking_missing": blocking_missing,
             "warnings": warnings,
             "missing": missing,
@@ -1489,7 +1764,11 @@ class DiscoverService(OpportunityWorkflow):
     ) -> list[RetrievalResultItem]:
         fields = " ".join(
             str(candidate.get(key) or "")
-            for key in ("problem_statement", "candidate_hypothesis", "why_existing_work_is_insufficient")
+            for key in (
+                "problem_statement",
+                "candidate_hypothesis",
+                "why_existing_work_is_insufficient",
+            )
         )
         return [item for item in items if self._text_relevant(fields, item.text)]
 
@@ -1509,11 +1788,27 @@ class DiscoverService(OpportunityWorkflow):
             str(candidate.get("candidate_hypothesis") or ""),
             str(candidate.get("why_existing_work_is_insufficient") or ""),
         ]
-        covered = sum(any(self._text_relevant(field, item.text) for item in items) for field in fields)
+        # Candidate-specific semantic retrieval has already matched the joint
+        # problem/hypothesis query.  Coverage therefore measures whether the
+        # proposal is structurally complete and backed by independent,
+        # span-anchored papers, instead of comparing Chinese proposal text to
+        # untranslated English evidence with a lexical regex.
+        complete_fields = sum(bool(field.strip()) for field in fields)
         papers = len({item.paper_id for item in items if item.paper_id})
-        return round(min(1.0, (covered / len(fields)) * 0.7 + min(papers / 2, 1.0) * 0.3), 3)
+        evidence_density = min(len(items) / 3, 1.0)
+        return round(
+            min(
+                1.0,
+                (complete_fields / len(fields)) * 0.4
+                + min(papers / 2, 1.0) * 0.4
+                + evidence_density * 0.2,
+            ),
+            3,
+        )
 
-    def _has_valid_evidence_anchor(self, span: EvidenceSpan, evidence_text: str | None = None) -> bool:
+    def _has_valid_evidence_anchor(
+        self, span: EvidenceSpan, evidence_text: str | None = None
+    ) -> bool:
         if not span.artifact_id or span.start_char is None or span.end_char is None:
             return False
         if span.end_char <= span.start_char:
@@ -1546,8 +1841,12 @@ class DiscoverService(OpportunityWorkflow):
         maximum: int,
     ) -> list[dict[str, Any]]:
         evidence = {
-            "supporting_evidence": [self._retrieval_payload(item) for item in supporting.items[:12]],
-            "external_full_text": [self._retrieval_payload(item) for item in external_fulltext.items[:12]],
+            "supporting_evidence": [
+                self._retrieval_payload(item) for item in supporting.items[:12]
+            ],
+            "external_full_text": [
+                self._retrieval_payload(item) for item in external_fulltext.items[:12]
+            ],
             "similar_work": [self._retrieval_payload(item) for item in similar.items[:12]],
             "counter_evidence": [self._retrieval_payload(item) for item in counter.items[:12]],
             "gate": gate,
@@ -1566,13 +1865,27 @@ class DiscoverService(OpportunityWorkflow):
             "including the title, problem statement, scope, insufficiency analysis, research "
             "question, hypothesis, validation steps, and risks. Keep paper titles, evidence "
             "excerpts, citations, identifiers, and JSON keys in their original form; do not "
-            "translate or rewrite quoted evidence.\n\nCLAIM_OR_TOPIC:\n" + claim_text[:3000] +
-            "\n\nEVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
+            "translate or rewrite quoted evidence. candidate_validation_plan must be an object "
+            "with datasets(string[], 2-4 concrete candidates), baselines(string[], 2-5), "
+            "metrics(string[], 3-6), steps(string[], 4-8), expected_supporting_result(string), "
+            "and falsification_criteria(string). If evidence cannot justify a concrete choice, "
+            "write a Chinese tentative choice with its selection condition instead of leaving "
+            "the field empty.\n\nCLAIM_OR_TOPIC:\n"
+            + claim_text[:3000]
+            + "\n\nEVIDENCE:\n"
+            + json.dumps(evidence, ensure_ascii=False)
         )
         try:
             response = self.llm.chat_completion(
-                [{"role": "system", "content": "你负责生成可审计的中文研究机会方案；证据原文必须保持不变。"}, {"role": "user", "content": prompt}],
-                temperature=0.1, max_tokens=2200,
+                [
+                    {
+                        "role": "system",
+                        "content": "你负责生成可审计的中文研究机会方案；证据原文必须保持不变。",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=2200,
                 disable_thinking=True,  # structured JSON — avoid CoT burning the budget
             )
             parsed = self._parse_json(response.content)
@@ -1580,7 +1893,11 @@ class DiscoverService(OpportunityWorkflow):
             if isinstance(raw_items, dict):
                 raw_items = [raw_items]
             if isinstance(raw_items, list):
-                normalized = [self._normalize_candidate(item, gate, provider="deepseek") for item in raw_items if isinstance(item, dict)]
+                normalized = [
+                    self._normalize_candidate(item, gate, provider="deepseek")
+                    for item in raw_items
+                    if isinstance(item, dict)
+                ]
                 if normalized:
                     return normalized[:maximum]
         except Exception as exc:
@@ -1589,48 +1906,128 @@ class DiscoverService(OpportunityWorkflow):
 
     @staticmethod
     def _retrieval_payload(item: RetrievalResultItem) -> dict[str, Any]:
-        return {"paper_id": item.paper_id, "title": item.paper_title, "text": item.text[:900], "score": item.score, "judgement": item.judgement, "evidence_level": item.evidence_level}
+        return {
+            "paper_id": item.paper_id,
+            "title": item.paper_title,
+            "text": item.text[:900],
+            "score": item.score,
+            "judgement": item.judgement,
+            "evidence_level": item.evidence_level,
+        }
 
     @staticmethod
-    def _normalize_candidate(value: dict[str, Any], gate: dict[str, Any], *, provider: str) -> dict[str, Any]:
+    def _normalize_candidate(
+        value: dict[str, Any], gate: dict[str, Any], *, provider: str
+    ) -> dict[str, Any]:
+        def strings(raw: Any, default: list[str]) -> list[str]:
+            if not isinstance(raw, list):
+                return list(default)
+            normalized = [
+                str(item).strip() for item in raw if item is not None and str(item).strip()
+            ]
+            return normalized or list(default)
+
         def score(key: str) -> float:
             try:
-                return max(0.0, min(1.0, float(value.get(key, 0.35 if not gate["verified"] else 0.55))))
+                return max(
+                    0.0, min(1.0, float(value.get(key, 0.35 if not gate["verified"] else 0.55)))
+                )
             except (TypeError, ValueError):
                 return 0.35
+
         plan = value.get("candidate_validation_plan")
         if not isinstance(plan, dict):
-            plan = {"steps": ["选择数据集与基线方法", "与最强的相似工作设置进行比较", "针对推测的边界条件开展消融实验"]}
+            plan = {}
+        plan = {
+            "datasets": strings(
+                plan.get("datasets"),
+                ["至少两个覆盖不同数据特征的公开基准数据集（待全文核验后确定）"],
+            )[:4],
+            "baselines": strings(
+                plan.get("baselines"),
+                ["当前最强相似工作", "移除候选核心机制的消融基线"],
+            )[:5],
+            "metrics": strings(
+                plan.get("metrics"),
+                ["目标问题对应的核心效果指标", "有效性或任务性能", "计算与存储开销"],
+            )[:6],
+            "steps": strings(
+                plan.get("steps"),
+                [
+                    "依据研究问题选择至少两个公开数据集",
+                    "复现最强相似工作并统一数据划分与训练预算",
+                    "实现候选方法并开展核心组件消融实验",
+                    "使用多随机种子和统计检验比较主要指标",
+                ],
+            )[:8],
+            "expected_supporting_result": str(
+                plan.get("expected_supporting_result")
+                or "候选方法在多个数据集和随机种子上稳定改善核心指标，且有效性、可解释性与资源开销没有不可接受的退化。"
+            ).strip(),
+            "falsification_criteria": str(
+                plan.get("falsification_criteria")
+                or "若候选方法相对最强基线的核心指标提升不显著、无法跨数据集复现，或以明显损害有效性与可解释性为代价，则拒绝或收缩该假设。"
+            ).strip(),
+        }
         risks = value.get("open_risks")
         if not isinstance(risks, list):
-            risks = ["外部论文全文核验尚未完成。"]
+            risks = ["外部论文全文核验尚未完成，可能遗漏直接相似工作。"]
         confidence = score("confidence")
         return {
             "title": str(value.get("title") or "研究该主题成立与失效的边界条件")[:512],
-            "problem_statement": str(value.get("problem_statement") or "现有证据尚不足以确定该现象可推广到哪些条件。"),
-            "research_scope": str(value.get("research_scope") or "研究范围应限定在当前工作区已有的数据集、模型与约束条件内。"),
-            "why_existing_work_is_insufficient": str(value.get("why_existing_work_is_insufficient") or "现有工作尚未在统一条件下进行充分比较。"),
-            "candidate_research_question": str(value.get("candidate_research_question") or "在什么条件下，该现象仍然可靠？"),
-            "candidate_hypothesis": str(value.get("candidate_hypothesis") or "在工作区证据所覆盖的假设条件下，该现象预计最为显著。"),
+            "problem_statement": str(
+                value.get("problem_statement") or "现有证据尚不足以确定该现象可推广到哪些条件。"
+            ),
+            "research_scope": str(
+                value.get("research_scope")
+                or "研究范围应限定在当前工作区已有的数据集、模型与约束条件内。"
+            ),
+            "why_existing_work_is_insufficient": str(
+                value.get("why_existing_work_is_insufficient")
+                or "现有工作尚未在统一条件下进行充分比较。"
+            ),
+            "candidate_research_question": str(
+                value.get("candidate_research_question") or "在什么条件下，该现象仍然可靠？"
+            ),
+            "candidate_hypothesis": str(
+                value.get("candidate_hypothesis")
+                or "在工作区证据所覆盖的假设条件下，该现象预计最为显著。"
+            ),
             "candidate_validation_plan": plan,
             "open_risks": [str(item) for item in risks[:8]],
-            "novelty_score": score("novelty_score"), "feasibility_score": score("feasibility_score"), "significance_score": score("significance_score"),
+            "novelty_score": score("novelty_score"),
+            "feasibility_score": score("feasibility_score"),
+            "significance_score": score("significance_score"),
             "confidence": confidence,
             "evidence_coverage": float(gate.get("evidence_coverage", 0.0)),
-            "verification_status": "verified" if gate["verified"] else ("verified_with_warnings" if gate.get("confirmable") else "verification_incomplete"),
+            "verification_status": "verified"
+            if gate["verified"]
+            else (
+                "verified_with_warnings" if gate.get("confirmable") else "verification_incomplete"
+            ),
             "provider": provider,
         }
 
     @staticmethod
-    def _fallback_candidate(claim_text: str, supporting: RetrievalResponse, similar: RetrievalResponse, counter: RetrievalResponse, gate: dict[str, Any]) -> dict[str, Any]:
-        return DiscoverService._normalize_candidate({
-            "title": "研究该论断成立与失效的边界条件",
-            "problem_statement": "该论断具有一定合理性，但其成立的边界条件尚未明确。",
-            "why_existing_work_is_insufficient": f"工作区检索到 {len(supporting.items)} 条支持证据、{len(similar.items)} 条相似工作证据和 {len(counter.items)} 条反证，但最终证据门槛尚未满足。",
-            "candidate_research_question": f"以下论断在什么条件下成立，又会在什么条件下失效？{claim_text[:500]}",
-            "candidate_hypothesis": "该效应取决于某个可测量的数据或模型条件，并可通过消融实验加以分离验证。",
-            "open_risks": ["外部元数据不能替代全文证据。", "当前检索结果可能不完整。"],
-        }, gate, provider="rule_based_fallback")
+    def _fallback_candidate(
+        claim_text: str,
+        supporting: RetrievalResponse,
+        similar: RetrievalResponse,
+        counter: RetrievalResponse,
+        gate: dict[str, Any],
+    ) -> dict[str, Any]:
+        return DiscoverService._normalize_candidate(
+            {
+                "title": "研究该论断成立与失效的边界条件",
+                "problem_statement": "该论断具有一定合理性，但其成立的边界条件尚未明确。",
+                "why_existing_work_is_insufficient": f"工作区检索到 {len(supporting.items)} 条支持证据、{len(similar.items)} 条相似工作证据和 {len(counter.items)} 条反证，但最终证据门槛尚未满足。",
+                "candidate_research_question": f"以下论断在什么条件下成立，又会在什么条件下失效？{claim_text[:500]}",
+                "candidate_hypothesis": "该效应取决于某个可测量的数据或模型条件，并可通过消融实验加以分离验证。",
+                "open_risks": ["外部元数据不能替代全文证据。", "当前检索结果可能不完整。"],
+            },
+            gate,
+            provider="rule_based_fallback",
+        )
 
     def _persist_candidates(
         self,
@@ -1643,76 +2040,294 @@ class DiscoverService(OpportunityWorkflow):
         external_fulltext: RetrievalResponse,
         candidates: list[dict[str, Any]],
     ) -> tuple[list[ResearchOpportunity], list[dict[str, Any]]]:
-        existing = list(self.db.execute(select(ResearchOpportunity).where(ResearchOpportunity.discover_run_id == run.id, ResearchOpportunity.is_deleted.is_(False))).scalars())
+        existing = list(
+            self.db.execute(
+                select(ResearchOpportunity).where(
+                    ResearchOpportunity.discover_run_id == run.id,
+                    ResearchOpportunity.is_deleted.is_(False),
+                )
+            ).scalars()
+        )
         if existing:
             gates = [
-                (item.source_payload or {}).get("gate", {"verified": False, "reason": "idempotent_existing_result"})
+                (item.source_payload or {}).get(
+                    "gate", {"verified": False, "reason": "idempotent_existing_result"}
+                )
                 for item in existing
             ]
             return existing, gates
         created: list[ResearchOpportunity] = []
         final_gates: list[dict[str, Any]] = []
-        external_rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalars())
+        external_rows = list(
+            self.db.execute(
+                select(DiscoverExternalCandidate).where(
+                    DiscoverExternalCandidate.discover_run_id == run.id
+                )
+            ).scalars()
+        )
         for index, candidate in enumerate(candidates):
             # Re-run supporting retrieval for each concrete proposal. The
             # pre-synthesis topic retrieval remains context only.
             config = DiscoverConfig.model_validate(run.config or {})
             candidate_supporting = self._candidate_supporting(run, claim, candidate, config)
-            gate = self._evidence_gate(run, candidate=candidate, supporting=candidate_supporting, counter=counter)
+            gate = self._evidence_gate(
+                run, candidate=candidate, supporting=candidate_supporting, counter=counter
+            )
             candidate["evidence_coverage"] = gate["evidence_coverage"]
-            candidate["verification_status"] = "verified" if gate["verified"] else ("verified_with_warnings" if gate["confirmable"] else "verification_incomplete")
+            candidate["verification_status"] = (
+                "verified"
+                if gate["verified"]
+                else (
+                    "verified_with_warnings" if gate["confirmable"] else "verification_incomplete"
+                )
+            )
             final_gates.append(gate)
             candidate_external_fulltext = self._external_fulltext(run, candidate_supporting)
             opportunity = ResearchOpportunity(
-                id=str(uuid4()), workspace_id=run.workspace_id, claim_item_id=claim.id if claim else None, discover_run_id=run.id,
-                title=candidate["title"], summary=candidate["problem_statement"], rationale=candidate["why_existing_work_is_insufficient"],
-                suggested_directions=list((candidate.get("candidate_validation_plan") or {}).get("steps", []))[:8], confidence=candidate["confidence"],
+                id=str(uuid4()),
+                workspace_id=run.workspace_id,
+                claim_item_id=claim.id if claim else None,
+                discover_run_id=run.id,
+                title=candidate["title"],
+                summary=candidate["problem_statement"],
+                rationale=candidate["why_existing_work_is_insufficient"],
+                suggested_directions=list(
+                    (candidate.get("candidate_validation_plan") or {}).get("steps", [])
+                )[:8],
+                confidence=candidate["confidence"],
                 status="candidate" if gate["confirmable"] else "needs_more_evidence",
-                source_payload={"claim_text": claim_text, "gate": gate, "candidate_index": index, "synthesis_provider": candidate["provider"], "supporting_evidence": candidate_supporting.model_dump(mode="json"), "external_full_text": candidate_external_fulltext.model_dump(mode="json"), "similar_work": similar.model_dump(mode="json"), "counter_evidence": counter.model_dump(mode="json")},
+                source_payload={
+                    "claim_text": claim_text,
+                    "gate": gate,
+                    "candidate_index": index,
+                    "synthesis_provider": candidate["provider"],
+                    "supporting_evidence": candidate_supporting.model_dump(mode="json"),
+                    "external_full_text": candidate_external_fulltext.model_dump(mode="json"),
+                    "similar_work": similar.model_dump(mode="json"),
+                    "counter_evidence": counter.model_dump(mode="json"),
+                },
                 is_deleted=False,
             )
             self.db.add(opportunity)
             self.db.flush()
             version = OpportunityVersion(
-                id=str(uuid4()), opportunity_id=opportunity.id, version_number=1, title=candidate["title"], problem_statement=candidate["problem_statement"], research_scope=candidate["research_scope"], why_existing_work_is_insufficient=candidate["why_existing_work_is_insufficient"], candidate_research_question=candidate["candidate_research_question"], candidate_hypothesis=candidate["candidate_hypothesis"], candidate_validation_plan=candidate["candidate_validation_plan"], open_risks=candidate["open_risks"], novelty_score=candidate["novelty_score"], feasibility_score=candidate["feasibility_score"], significance_score=candidate["significance_score"], confidence=candidate["confidence"], evidence_coverage=candidate["evidence_coverage"], verification_status=candidate["verification_status"], synthesis_metadata={"provider": candidate["provider"], "prompt_version": run.prompt_version, "retrieval_snapshot_version": run.retrieval_snapshot_version}, created_by="agent",
+                id=str(uuid4()),
+                opportunity_id=opportunity.id,
+                version_number=1,
+                title=candidate["title"],
+                problem_statement=candidate["problem_statement"],
+                research_scope=candidate["research_scope"],
+                why_existing_work_is_insufficient=candidate["why_existing_work_is_insufficient"],
+                candidate_research_question=candidate["candidate_research_question"],
+                candidate_hypothesis=candidate["candidate_hypothesis"],
+                candidate_validation_plan=candidate["candidate_validation_plan"],
+                open_risks=candidate["open_risks"],
+                novelty_score=candidate["novelty_score"],
+                feasibility_score=candidate["feasibility_score"],
+                significance_score=candidate["significance_score"],
+                confidence=candidate["confidence"],
+                evidence_coverage=candidate["evidence_coverage"],
+                verification_status=candidate["verification_status"],
+                synthesis_metadata={
+                    "provider": candidate["provider"],
+                    "prompt_version": run.prompt_version,
+                    "retrieval_snapshot_version": run.retrieval_snapshot_version,
+                },
+                created_by="agent",
             )
             self.db.add(version)
             self.db.flush()
             opportunity.current_version_id = version.id
             opportunity.status = "candidate" if gate["confirmable"] else "needs_more_evidence"
-            self._persist_evidence(version.id, candidate_supporting, similar, counter, external_rows)
+            self._persist_evidence(
+                version.id, candidate_supporting, similar, counter, external_rows
+            )
             created.append(opportunity)
-            self.timeline.record(workspace_id=run.workspace_id, event_type="opportunity.generated", subject_type="opportunity", subject_id=opportunity.id, actor="agent", payload={"run_id": run.id, "version_id": version.id, "verification_status": version.verification_status})
+            self.timeline.record(
+                workspace_id=run.workspace_id,
+                event_type="opportunity.generated",
+                subject_type="opportunity",
+                subject_id=opportunity.id,
+                actor="agent",
+                payload={
+                    "run_id": run.id,
+                    "version_id": version.id,
+                    "verification_status": version.verification_status,
+                },
+            )
         self.db.commit()
         return created, final_gates
 
-    def _persist_evidence(self, version_id: str, supporting: RetrievalResponse, similar: RetrievalResponse, counter: RetrievalResponse, external_rows: list[DiscoverExternalCandidate]) -> None:
+    def reassess_opportunity_gate(
+        self,
+        workspace_id: str,
+        opportunity_id: str,
+        *,
+        actor: str = "user",
+    ) -> ResearchOpportunity:
+        """Recompute a saved opportunity gate from its immutable evidence snapshot.
+
+        This is intentionally deterministic and performs no new external or
+        model calls.  It is useful when gate logic is upgraded, while keeping
+        the original retrieval snapshot auditable.
+        """
+        opportunity = self.get_opportunity(workspace_id, opportunity_id)
+        version = self._current_version(opportunity, None)
+        if opportunity.discover_run_id is None:
+            raise DiscoverInputError("该研究机会没有可复核的 Discover 运行快照")
+        run = self.get_run(workspace_id, opportunity.discover_run_id)
+        payload = dict(opportunity.source_payload or {})
+        supporting_payload = payload.get("supporting_evidence")
+        counter_payload = payload.get("counter_evidence")
+        if not isinstance(supporting_payload, dict) or not isinstance(counter_payload, dict):
+            raise DiscoverInputError("该研究机会缺少支持证据或反证检索快照")
+
+        candidate = {
+            "problem_statement": version.problem_statement,
+            "candidate_hypothesis": version.candidate_hypothesis,
+            "why_existing_work_is_insufficient": version.why_existing_work_is_insufficient,
+        }
+        gate = self._evidence_gate(
+            run,
+            candidate=candidate,
+            supporting=RetrievalResponse.model_validate(supporting_payload),
+            counter=RetrievalResponse.model_validate(counter_payload),
+        )
+        payload["gate"] = gate
+        opportunity.source_payload = payload
+        version.evidence_coverage = float(gate["evidence_coverage"])
+        version.verification_status = (
+            "verified"
+            if gate["verified"]
+            else ("verified_with_warnings" if gate["confirmable"] else "verification_incomplete")
+        )
+        if opportunity.status not in {"confirmed", "edited_confirmed", "rejected", "deferred"}:
+            opportunity.status = "candidate" if gate["confirmable"] else "needs_more_evidence"
+        self.db.commit()
+        self.db.refresh(opportunity)
+        self.timeline.record(
+            workspace_id=workspace_id,
+            event_type="opportunity.gate_reassessed",
+            subject_type="opportunity",
+            subject_id=opportunity.id,
+            actor=actor,
+            payload={
+                "version_id": version.id,
+                "confirmable": gate["confirmable"],
+                "evidence_coverage": gate["evidence_coverage"],
+                "independent_full_text_papers": gate["independent_full_text_papers"],
+            },
+        )
+        return opportunity
+
+    def _persist_evidence(
+        self,
+        version_id: str,
+        supporting: RetrievalResponse,
+        similar: RetrievalResponse,
+        counter: RetrievalResponse,
+        external_rows: list[DiscoverExternalCandidate],
+    ) -> None:
         for rank, item in enumerate(supporting.items, start=1):
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="supports", source_scope=item.source_scope, evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement="supports", judgement_confidence=item.judgement_confidence, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(
+                OpportunityEvidence(
+                    id=str(uuid4()),
+                    opportunity_version_id=version_id,
+                    relation="supports",
+                    source_scope=item.source_scope,
+                    evidence_level=item.evidence_level,
+                    paper_id=item.paper_id,
+                    evidence_span_id=span.id if span else None,
+                    artifact_id=span.artifact_id if span else item.artifact_id,
+                    chunk_id=item.chunk_id,
+                    rank=rank,
+                    score=item.score,
+                    judgement="supports",
+                    judgement_confidence=item.judgement_confidence,
+                    display_excerpt=item.text[:2000],
+                    snapshot_payload=item.model_dump(mode="json"),
+                )
+            )
         for rank, item in enumerate(similar.items, start=1):
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="similar", source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(
+                OpportunityEvidence(
+                    id=str(uuid4()),
+                    opportunity_version_id=version_id,
+                    relation="similar",
+                    source_scope="workspace",
+                    evidence_level=item.evidence_level,
+                    paper_id=item.paper_id,
+                    evidence_span_id=span.id if span else None,
+                    artifact_id=span.artifact_id if span else item.artifact_id,
+                    chunk_id=item.chunk_id,
+                    rank=rank,
+                    score=item.score,
+                    display_excerpt=item.text[:2000],
+                    snapshot_payload=item.model_dump(mode="json"),
+                )
+            )
         for rank, item in enumerate(counter.items, start=1):
-            relation = item.judgement if item.judgement in {"contradicts", "qualifies", "supports", "overlaps"} else "unknown"
+            relation = (
+                item.judgement
+                if item.judgement in {"contradicts", "qualifies", "supports", "overlaps"}
+                else "unknown"
+            )
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation=relation, source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement=item.judgement, judgement_confidence=item.judgement_confidence, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(
+                OpportunityEvidence(
+                    id=str(uuid4()),
+                    opportunity_version_id=version_id,
+                    relation=relation,
+                    source_scope="workspace",
+                    evidence_level=item.evidence_level,
+                    paper_id=item.paper_id,
+                    evidence_span_id=span.id if span else None,
+                    artifact_id=span.artifact_id if span else item.artifact_id,
+                    chunk_id=item.chunk_id,
+                    rank=rank,
+                    score=item.score,
+                    judgement=item.judgement,
+                    judgement_confidence=item.judgement_confidence,
+                    display_excerpt=item.text[:2000],
+                    snapshot_payload=item.model_dump(mode="json"),
+                )
+            )
         for row in external_rows[:12]:
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation=row.role, source_scope="external", evidence_level=row.evidence_level, external_candidate_id=row.id, paper_id=row.imported_paper_id, rank=row.rank, score=0.0, display_excerpt=(row.abstract or row.title)[:2000], snapshot_payload=row.snapshot_payload))
+            self.db.add(
+                OpportunityEvidence(
+                    id=str(uuid4()),
+                    opportunity_version_id=version_id,
+                    relation=row.role,
+                    source_scope="external",
+                    evidence_level=row.evidence_level,
+                    external_candidate_id=row.id,
+                    paper_id=row.imported_paper_id,
+                    rank=row.rank,
+                    score=0.0,
+                    display_excerpt=(row.abstract or row.title)[:2000],
+                    snapshot_payload=row.snapshot_payload,
+                )
+            )
 
     def _find_evidence_span(self, item: RetrievalResultItem) -> EvidenceSpan | None:
         if not item.paper_id or not item.text:
             return None
-        exact = self.db.execute(
-            select(EvidenceSpan)
-            .where(
-                EvidenceSpan.paper_id == item.paper_id,
-                EvidenceSpan.relation == "supports",
-                EvidenceSpan.text.contains(item.text[:80]),
+        exact = (
+            self.db.execute(
+                select(EvidenceSpan)
+                .where(
+                    EvidenceSpan.paper_id == item.paper_id,
+                    EvidenceSpan.relation == "supports",
+                    EvidenceSpan.text.contains(item.text[:80]),
+                )
+                .order_by(EvidenceSpan.confidence.desc())
+                .limit(1)
             )
-            .order_by(EvidenceSpan.confidence.desc())
-            .limit(1)
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if exact is not None:
             return exact
         spans = list(
@@ -1725,8 +2340,14 @@ class DiscoverService(OpportunityWorkflow):
         item_tokens = {token for token in re.findall(r"[a-zA-Z0-9]{4,}", item.text.lower())}
         return next(
             (
-                span for span in spans
-                if span.text and len(item_tokens & {token for token in re.findall(r"[a-zA-Z0-9]{4,}", span.text.lower())}) >= 2
+                span
+                for span in spans
+                if span.text
+                and len(
+                    item_tokens
+                    & {token for token in re.findall(r"[a-zA-Z0-9]{4,}", span.text.lower())}
+                )
+                >= 2
             ),
             None,
         )
@@ -1737,33 +2358,68 @@ class DiscoverService(OpportunityWorkflow):
 
     # -------------------------------------------------------------- helpers
     def _resolve_claim(self, workspace_id: str, claim_item_id: str | None) -> KnowledgeItem | None:
-        if not claim_item_id: return None
+        if not claim_item_id:
+            return None
         claim = self.db.get(KnowledgeItem, claim_item_id)
-        if claim is None or claim.is_deleted or claim.workspace_id != workspace_id or claim.type != "claim":
+        if (
+            claim is None
+            or claim.is_deleted
+            or claim.workspace_id != workspace_id
+            or claim.type != "claim"
+        ):
             raise DiscoverInputError("claim_item_id must reference a claim in this workspace")
         return claim
 
     def _validate_papers(self, workspace_id: str, paper_ids: list[str]) -> None:
-        if not paper_ids: return
-        count = int(self.db.execute(select(func.count()).select_from(Paper).where(Paper.workspace_id == workspace_id, Paper.id.in_(paper_ids), Paper.is_deleted.is_(False))).scalar() or 0)
-        if count != len(set(paper_ids)): raise DiscoverInputError("all selected papers must belong to this workspace")
+        if not paper_ids:
+            return
+        count = int(
+            self.db.execute(
+                select(func.count())
+                .select_from(Paper)
+                .where(
+                    Paper.workspace_id == workspace_id,
+                    Paper.id.in_(paper_ids),
+                    Paper.is_deleted.is_(False),
+                )
+            ).scalar()
+            or 0
+        )
+        if count != len(set(paper_ids)):
+            raise DiscoverInputError("all selected papers must belong to this workspace")
 
     @staticmethod
     def _claim_text(item: KnowledgeItem | None) -> str:
-        if item is None: return ""
+        if item is None:
+            return ""
         statement = (item.content or {}).get("statement")
-        return statement.strip() if isinstance(statement, str) and statement.strip() else item.canonical_name.strip()
+        return (
+            statement.strip()
+            if isinstance(statement, str) and statement.strip()
+            else item.canonical_name.strip()
+        )
 
     @staticmethod
     def _empty_response(workspace_id: str, query: str, purpose: str) -> RetrievalResponse:
-        return RetrievalResponse(request_id=str(uuid4()), workspace_id=workspace_id, query=query, purpose=purpose, status="succeeded", items=[], total=0)
+        return RetrievalResponse(
+            request_id=str(uuid4()),
+            workspace_id=workspace_id,
+            query=query,
+            purpose=purpose,
+            status="succeeded",
+            items=[],
+            total=0,
+        )
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any] | None:
         match = re.search(r"\{[\s\S]*\}", content.strip())
-        if not match: return None
-        try: value = json.loads(match.group(0))
-        except json.JSONDecodeError: return None
+        if not match:
+            return None
+        try:
+            value = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
         return value if isinstance(value, dict) else None
 
 
@@ -1774,9 +2430,9 @@ def resume_discover_runs_for_paper(db: Session, paper_id: str, workspace_id: str
         db.execute(
             select(DiscoverExternalCandidate).where(
                 DiscoverExternalCandidate.imported_paper_id == paper_id,
-                DiscoverExternalCandidate.verification_status.in_([
-                    "selected", "imported_pending_parse", "verification_failed", "verified"
-                ]),
+                DiscoverExternalCandidate.verification_status.in_(
+                    ["selected", "imported_pending_parse", "verification_failed", "verified"]
+                ),
             )
         ).scalars()
     )

@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPKMixin
@@ -28,17 +38,11 @@ class ResearchOpportunity(Base, UUIDPKMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
-    suggested_directions: Mapped[list[str]] = mapped_column(
-        JSON, default=list, nullable=False
-    )
+    suggested_directions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32), default="candidate", nullable=False, index=True
-    )
+    status: Mapped[str] = mapped_column(String(32), default="candidate", nullable=False, index=True)
     source_payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    is_deleted: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False, index=True
-    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
 
 class DiscoverRun(Base, UUIDPKMixin, TimestampMixin):
@@ -69,7 +73,9 @@ class DiscoverRun(Base, UUIDPKMixin, TimestampMixin):
     verification_status: Mapped[str] = mapped_column(
         String(32), default="not_started", nullable=False
     )
-    retrieval_snapshot_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
+    retrieval_snapshot_version: Mapped[str] = mapped_column(
+        String(32), default="v1", nullable=False
+    )
     prompt_version: Mapped[str] = mapped_column(String(32), default="discover-v1", nullable=False)
     model_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -80,7 +86,9 @@ class DiscoverRun(Base, UUIDPKMixin, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    deleted_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    deleted_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
@@ -103,7 +111,9 @@ class DiscoverExternalCandidate(Base, UUIDPKMixin, TimestampMixin):
     role: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     role_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     evidence_level: Mapped[str] = mapped_column(String(32), default="metadata_only", nullable=False)
-    verification_status: Mapped[str] = mapped_column(String(32), default="unverified", nullable=False)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), default="unverified", nullable=False
+    )
     imported_paper_id: Mapped[str | None] = mapped_column(
         ForeignKey("papers.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -135,10 +145,14 @@ class OpportunityVersion(Base, UUIDPKMixin):
     significance_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     evidence_coverage: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    verification_status: Mapped[str] = mapped_column(String(32), default="incomplete", nullable=False)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), default="incomplete", nullable=False
+    )
     synthesis_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_by: Mapped[str] = mapped_column(String(16), default="agent", nullable=False)
-    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    created_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default="now()", nullable=False
+    )
 
 
 class OpportunityEvidence(Base, UUIDPKMixin, TimestampMixin):
@@ -156,7 +170,9 @@ class OpportunityEvidence(Base, UUIDPKMixin, TimestampMixin):
         ForeignKey("papers.id", ondelete="SET NULL"), nullable=True, index=True
     )
     external_candidate_id: Mapped[str | None] = mapped_column(
-        ForeignKey("discover_external_candidates.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("discover_external_candidates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     evidence_span_id: Mapped[str | None] = mapped_column(
         ForeignKey("evidence_spans.id", ondelete="SET NULL"), nullable=True, index=True
@@ -189,7 +205,9 @@ class HumanDecision(Base, UUIDPKMixin):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     defer_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
     actor: Mapped[str] = mapped_column(String(64), default="user", nullable=False)
-    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default="now()", nullable=False)
+    created_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default="now()", nullable=False
+    )
 
 
 class ResearchPlan(Base, UUIDPKMixin, TimestampMixin):
@@ -209,6 +227,7 @@ class ResearchPlan(Base, UUIDPKMixin, TimestampMixin):
     )
     source_type: Mapped[str] = mapped_column(String(32), default="opportunity", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
+    title: Mapped[str] = mapped_column(Text, default="未命名研究计划", nullable=False)
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
     hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
     scope_and_assumptions: Mapped[str] = mapped_column(Text, default="", nullable=False)

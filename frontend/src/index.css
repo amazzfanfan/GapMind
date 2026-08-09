@@ -350,6 +350,27 @@ body,
 .gm-chat-markdown table { min-width: 480px; border-collapse: collapse; }
 .gm-chat-markdown th, .gm-chat-markdown td { padding: 6px 10px; border: 1px solid #dfe5ec; text-align: left; }
 .gm-chat-markdown blockquote { margin-left: 0; padding-left: 12px; color: #66758a; border-left: 3px solid #b9c7d8; }
+.gm-research-report { line-height: 1.8; }
+.gm-research-report h2 { margin-top: 30px; padding-bottom: 8px; border-bottom: 1px solid #e8edf3; }
+.gm-research-report h3 { margin-top: 22px; }
+.gm-research-report .katex-display { margin: 14px 0; padding: 18px 20px; overflow-x: auto; overflow-y: hidden; color: #172033; background: #f6f8fb; border: 1px solid #dfe6ef; border-radius: 10px; }
+.gm-research-report .katex { font-size: 1.08em; }
+.gm-research-report-modal .ant-modal-title { overflow: hidden; color: #172033; font-size: 17px; font-weight: 650; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.gm-research-report-modal .ant-modal-close { top: 14px; inset-inline-end: 16px; }
+.gm-research-report-layout { display: flex; height: 100%; min-height: 0; flex-direction: column; background: #fff; }
+.gm-research-report-summary { flex: 0 0 auto; padding: 14px 24px 16px; border-bottom: 1px solid #edf1f5; background: #fafbfd; }
+.gm-research-report-steps { margin-top: 10px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+.gm-research-report-steps .ant-steps { min-width: 760px; }
+.gm-research-report-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 8px 30px 36px; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.gm-research-report-scroll .gm-research-report { max-width: 980px; margin: 0 auto; }
+.gm-research-report-empty { display: grid; height: 100%; min-height: 280px; place-items: center; }
+
+@media (max-width: 720px) {
+  .gm-research-report-modal .ant-modal { max-width: calc(100vw - 20px); margin: 10px auto; padding-bottom: 0; }
+  .gm-research-report-modal .ant-modal-content { height: 92vh !important; }
+  .gm-research-report-summary { padding: 12px 16px 14px; }
+  .gm-research-report-scroll { padding: 4px 16px 28px; }
+}
 .gm-chat-message-actions { opacity: .65; }
 .gm-chat-citations { width: 100%; margin-top: 14px; padding-top: 12px; border-top: 1px solid #e4e9ef; }
 .gm-chat-citations .ant-list-item { padding-inline: 0; align-items: flex-start; }

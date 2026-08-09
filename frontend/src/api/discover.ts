@@ -173,6 +173,7 @@ export interface ResearchPlan {
   agent_run_id?: string | null;
   source_type?: string;
   status: string;
+  title: string;
   research_question: string;
   hypothesis: string;
   scope_and_assumptions: string;
@@ -258,6 +259,9 @@ export const discoverApi = {
   },
   async confirm(workspaceId: string, opportunityId: string, versionId?: string, note?: string): Promise<ResearchOpportunity> {
     return (await apiClient.post(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}/confirm`, { version_id: versionId, note })).data;
+  },
+  async reassess(workspaceId: string, opportunityId: string): Promise<ResearchOpportunity> {
+    return (await apiClient.post(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}/reassess`)).data;
   },
   async editConfirm(workspaceId: string, opportunityId: string, payload: { base_version_id: string; changes: Record<string, unknown>; note?: string }): Promise<ResearchOpportunity> {
     return (await apiClient.patch(`/workspaces/${workspaceId}/discover/opportunities/${opportunityId}`, payload)).data;
