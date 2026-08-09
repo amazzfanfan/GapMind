@@ -56,6 +56,14 @@ function agentStepColor(status: string): string {
   return "processing";
 }
 
+function externalSearchHasNoResults(run: DiscoverRun | null): boolean {
+  const rawSummary = run?.stage_summaries?.external_search;
+  if (!rawSummary || typeof rawSummary !== "object" || Array.isArray(rawSummary)) return false;
+  const summary = rawSummary as { status?: unknown; candidate_count?: unknown };
+  if (summary.status === "failed" || summary.status === "succeeded_empty") return true;
+  return summary.status === "succeeded" && Number(summary.candidate_count ?? 0) === 0;
+}
+
 function verificationStatusLabel(status: string): string {
   switch (status) {
     case "selected": return "已选择，正在启动核验";
@@ -393,6 +401,8 @@ export default function DiscoverPage() {
             <Card size="small" title="Multi-agent handoff">
               {!runDetail?.agent_steps?.length ? <Empty description="The run records Planner → Evidence → External → Critic → Gate as it executes" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : <List size="small" dataSource={runDetail.agent_steps} renderItem={(step) => { const verdicts = step.stage === "critic" ? (step.details?.verdicts as Record<string, number> | undefined) : undefined; const narrowing = step.stage === "narrowing" ? (step.details?.narrowed as number | undefined) : undefined; return <List.Item><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color={agentStepColor(step.status)}>{step.status}</Tag><Text strong style={{ textTransform: "capitalize" }}>{step.stage.replaceAll("_", " ")}</Text><Text type="secondary">step {step.sequence}</Text></Space><Text type="secondary">{step.summary}</Text>{verdicts ? <Space wrap>{(["keep", "narrow", "reject"] as const).map((key) => <Tag key={key} color={key === "reject" ? "red" : key === "narrow" ? "orange" : "green"}>{key}: {verdicts[key] ?? 0}</Tag>)}</Space> : null}{narrowing ? <Text type="secondary">Focused counter-evidence pass narrowed {narrowing} candidate(s)</Text> : null}</Space></List.Item>; }} />}
             </Card>
+            <Card title={`Opportunity candidates for this run (${selectedOpportunities.length})`}>
+      {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "Candidates will appear after full-text verification" : "Candidates will appear after synthesis"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>Open details</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{item.title}</Text><Tag color={statusColor(displayStatus)}>{displayStatus}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.summary}</Paragraph>} /><Tag>{Math.round(item.confidence * 100)}% agent confidence</Tag></List.Item>; }} />}
             <Card title={`本次运行的研究机会候选（${selectedOpportunities.length}）`}>
       {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "完成全文核验后将生成候选结果" : "候选综合完成后将在这里显示结果"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>查看详情</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{localizedGeneratedText(item.title)}</Text><Tag color={statusColor(displayStatus)}>{opportunityStatusLabel(displayStatus)}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{localizedGeneratedText(item.summary)}</Paragraph>} /><Tag>智能体置信度 {Math.round(item.confidence * 100)}%</Tag></List.Item>; }} />}
             </Card>
