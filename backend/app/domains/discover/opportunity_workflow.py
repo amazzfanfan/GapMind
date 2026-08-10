@@ -105,9 +105,7 @@ class OpportunityWorkflow:
         )
         opportunities = list(
             self.db.execute(
-                base.order_by(ResearchOpportunity.updated_at.desc())
-                .limit(limit)
-                .offset(offset)
+                base.order_by(ResearchOpportunity.updated_at.desc()).limit(limit).offset(offset)
             ).scalars()
         )
         total = int(
@@ -117,12 +115,16 @@ class OpportunityWorkflow:
             return [], total
 
         version_ids = [item.current_version_id for item in opportunities if item.current_version_id]
-        versions = {
-            item.id: item
-            for item in self.db.execute(
-                select(OpportunityVersion).where(OpportunityVersion.id.in_(version_ids))
-            ).scalars()
-        } if version_ids else {}
+        versions = (
+            {
+                item.id: item
+                for item in self.db.execute(
+                    select(OpportunityVersion).where(OpportunityVersion.id.in_(version_ids))
+                ).scalars()
+            }
+            if version_ids
+            else {}
+        )
         opportunity_ids = [item.id for item in opportunities]
         plans: dict[str, ResearchPlan] = {}
         for plan in self.db.execute(
@@ -322,7 +324,11 @@ class OpportunityWorkflow:
             raise OpportunityNotFoundError(evidence_id)
         version = self.db.get(OpportunityVersion, evidence.opportunity_version_id)
         opportunity = self.db.get(ResearchOpportunity, version.opportunity_id) if version else None
-        if opportunity is None or opportunity.workspace_id != workspace_id or opportunity.is_deleted:
+        if (
+            opportunity is None
+            or opportunity.workspace_id != workspace_id
+            or opportunity.is_deleted
+        ):
             raise OpportunityNotFoundError(evidence_id)
 
         result: dict[str, Any] = {
@@ -451,7 +457,9 @@ class OpportunityWorkflow:
 
         old_evidence = list(
             self.db.execute(
-                select(OpportunityEvidence).where(OpportunityEvidence.opportunity_version_id == base.id)
+                select(OpportunityEvidence).where(
+                    OpportunityEvidence.opportunity_version_id == base.id
+                )
             ).scalars()
         )
         for ev in old_evidence:
@@ -494,7 +502,9 @@ class OpportunityWorkflow:
         note: str | None,
         actor: str = "user",
     ) -> ResearchOpportunity:
-        return self._simple_decision(workspace_id, opportunity_id, "rejected", "reject", note, None, actor=actor)
+        return self._simple_decision(
+            workspace_id, opportunity_id, "rejected", "reject", note, None, actor=actor
+        )
 
     def defer(
         self,
@@ -504,7 +514,9 @@ class OpportunityWorkflow:
         condition: str | None,
         actor: str = "user",
     ) -> ResearchOpportunity:
-        return self._simple_decision(workspace_id, opportunity_id, "deferred", "defer", note, condition, actor=actor)
+        return self._simple_decision(
+            workspace_id, opportunity_id, "deferred", "defer", note, condition, actor=actor
+        )
 
     def convert_to_plan(
         self,
@@ -519,15 +531,37 @@ class OpportunityWorkflow:
                 "Only a confirmed opportunity can become a research plan",
             )
         version = self._current_version(item, None)
-        existing = self.db.execute(
-            select(ResearchPlan).where(
-                ResearchPlan.opportunity_id == item.id,
-                ResearchPlan.opportunity_version_id == version.id,
+        existing = (
+            self.db.execute(
+                select(ResearchPlan).where(
+                    ResearchPlan.opportunity_id == item.id,
+                    ResearchPlan.opportunity_version_id == version.id,
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if existing:
             return existing
         plan_data = version.candidate_validation_plan or {}
+        translations = {
+            "Select datasets and baselines": "依据研究问题选择数据集与基线方法",
+            "Compare against the strongest similar-work setting": "在统一数据划分与训练预算下比较最强相似工作",
+            "Run an ablation for the suspected boundary condition": "针对候选机制与边界条件开展消融实验",
+            "External full-text verification is incomplete.": "外部论文全文核验尚未完成，可能遗漏直接相似工作。",
+        }
+
+        def plan_values(key: str, defaults: list[str]) -> list[str]:
+            raw = plan_data.get(key)
+            if not isinstance(raw, list):
+                return defaults
+            values = [
+                translations.get(str(value).strip(), str(value).strip())
+                for value in raw
+                if value is not None and str(value).strip()
+            ]
+            return values or defaults
+
         run = self.get_run(workspace_id, item.discover_run_id) if item.discover_run_id else None
         constraints = (run.input_payload or {}).get("constraints", "") if run else ""
         plan = ResearchPlan(
@@ -537,16 +571,45 @@ class OpportunityWorkflow:
             opportunity_version_id=version.id,
             source_type="opportunity",
             status="draft",
+            title=version.title or item.title or "未命名研究计划",
             research_question=version.candidate_research_question,
             hypothesis=version.candidate_hypothesis,
             scope_and_assumptions=version.research_scope,
-            datasets=list(plan_data.get("datasets", [])),
-            baselines=list(plan_data.get("baselines", [])),
-            metrics=list(plan_data.get("metrics", [])),
-            validation_steps=list(plan_data.get("steps", [])),
-            expected_supporting_result=str(plan_data.get("expected_supporting_result", "")),
-            falsification_criteria=str(plan_data.get("falsification_criteria", "")),
-            risks=list(version.open_risks),
+            datasets=plan_values(
+                "datasets",
+                ["至少两个覆盖不同数据特征的公开基准数据集（待深度研究后确定）"],
+            ),
+            baselines=plan_values(
+                "baselines",
+                ["当前最强相似工作", "移除候选核心机制的消融基线"],
+            ),
+            metrics=plan_values(
+                "metrics",
+                ["目标问题对应的核心效果指标", "有效性或任务性能", "计算与存储开销"],
+            ),
+            validation_steps=plan_values(
+                "steps",
+                [
+                    "依据研究问题选择至少两个公开数据集",
+                    "复现最强相似工作并统一数据划分与训练预算",
+                    "实现候选方法并开展核心组件消融实验",
+                    "使用多随机种子和统计检验比较主要指标",
+                ],
+            ),
+            expected_supporting_result=str(
+                plan_data.get("expected_supporting_result")
+                or "候选方法在多个数据集和随机种子上稳定改善核心指标，且不会造成不可接受的性能或资源开销退化。"
+            ),
+            falsification_criteria=str(
+                plan_data.get("falsification_criteria")
+                or "若核心指标提升不显著、无法跨数据集复现，或以明显损害有效性与可解释性为代价，则拒绝或收缩该假设。"
+            ),
+            risks=[
+                translations.get(str(value).strip(), str(value).strip())
+                for value in version.open_risks
+                if value is not None and str(value).strip()
+            ]
+            or ["直接相似工作可能尚未被当前语料和外部检索完整覆盖。"],
             resource_constraints=str(constraints),
         )
         self.db.add(plan)
@@ -616,7 +679,9 @@ class OpportunityWorkflow:
             )
         )
 
-    def _current_version(self, item: ResearchOpportunity, version_id: str | None) -> OpportunityVersion:
+    def _current_version(
+        self, item: ResearchOpportunity, version_id: str | None
+    ) -> OpportunityVersion:
         target_id = version_id or item.current_version_id
         version = self.db.get(OpportunityVersion, target_id) if target_id else None
         if version is None or version.opportunity_id != item.id:
@@ -651,7 +716,8 @@ class OpportunityWorkflow:
                     blocking_missing = [
                         value
                         for value in raw_missing
-                        if isinstance(value, str) and value != "external verification did not complete"
+                        if isinstance(value, str)
+                        and value != "external verification did not complete"
                     ]
         elif version.verification_status not in {"verified", "verified_with_warnings"}:
             blocking_missing = [f"verification status is {version.verification_status}"]

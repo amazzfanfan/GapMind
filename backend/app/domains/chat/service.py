@@ -34,21 +34,39 @@ class ChatInputError(ValueError):
 
 
 class ChatConfigurationError(RuntimeError):
-    def __init__(self, message: str, *, conversation_id: str | None = None, assistant_message_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        conversation_id: str | None = None,
+        assistant_message_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
         self.assistant_message_id = assistant_message_id
 
 
 class ChatUpstreamError(RuntimeError):
-    def __init__(self, message: str, *, conversation_id: str | None = None, assistant_message_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        conversation_id: str | None = None,
+        assistant_message_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
         self.assistant_message_id = assistant_message_id
 
 
 class ChatRetrievalError(RuntimeError):
-    def __init__(self, message: str, *, conversation_id: str | None = None, assistant_message_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        conversation_id: str | None = None,
+        assistant_message_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
         self.assistant_message_id = assistant_message_id
@@ -86,7 +104,9 @@ class ChatService:
                 stmt.order_by(
                     ChatConversation.last_message_at.desc().nullslast(),
                     ChatConversation.updated_at.desc(),
-                ).offset(offset).limit(limit)
+                )
+                .offset(offset)
+                .limit(limit)
             )
         )
         return items, total
@@ -157,7 +177,12 @@ class ChatService:
         self.db.flush()
         user_message, assistant_message = self._create_pending_messages(conversation, content)
         self.db.commit()
-        return self._complete(conversation.id, user_message.id, assistant_message.id, [{"role": "user", "content": content}])
+        return self._complete(
+            conversation.id,
+            user_message.id,
+            assistant_message.id,
+            [{"role": "user", "content": content}],
+        )
 
     def send(
         self,
@@ -176,7 +201,9 @@ class ChatService:
         context = self._build_context(existing, content)
         return self._complete(conversation.id, user_message.id, assistant_message.id, context)
 
-    def retry(self, conversation_id: str, assistant_message_id: str) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
+    def retry(
+        self, conversation_id: str, assistant_message_id: str
+    ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         conversation = self.get_conversation(conversation_id)
         assistant = self.db.scalar(
             select(ChatMessage).where(
@@ -211,12 +238,18 @@ class ChatService:
             conversation.id,
             user_message.id,
             assistant.id,
-            self._build_context([item for item in prior if item.id != user_message.id], user_message.content),
+            self._build_context(
+                [item for item in prior if item.id != user_message.id], user_message.content
+            ),
         )
 
-    def _create_pending_messages(self, conversation: ChatConversation, content: str) -> tuple[ChatMessage, ChatMessage]:
+    def _create_pending_messages(
+        self, conversation: ChatConversation, content: str
+    ) -> tuple[ChatMessage, ChatMessage]:
         max_sequence = self.db.scalar(
-            select(func.max(ChatMessage.sequence)).where(ChatMessage.conversation_id == conversation.id)
+            select(func.max(ChatMessage.sequence)).where(
+                ChatMessage.conversation_id == conversation.id
+            )
         )
         sequence = int(max_sequence or 0) + 1
         user_message = ChatMessage(
@@ -247,11 +280,13 @@ class ChatService:
 
     def _ensure_not_generating(self, conversation_id: str) -> None:
         active = self.db.scalar(
-            select(ChatMessage.id).where(
+            select(ChatMessage.id)
+            .where(
                 ChatMessage.conversation_id == conversation_id,
                 ChatMessage.role == "assistant",
                 ChatMessage.status == "generating",
-            ).limit(1)
+            )
+            .limit(1)
         )
         if active:
             raise ChatConflictError("a response is already being generated")
@@ -260,7 +295,10 @@ class ChatService:
         return list(
             self.db.scalars(
                 select(ChatMessage)
-                .where(ChatMessage.conversation_id == conversation_id, ChatMessage.status == "completed")
+                .where(
+                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.status == "completed",
+                )
                 .order_by(ChatMessage.sequence.desc())
                 .limit(settings.chat_history_message_limit)
             )
@@ -279,7 +317,9 @@ class ChatService:
         context.append({"role": "user", "content": content})
         return context
 
-    def _complete(self, conversation_id: str, user_id: str, assistant_id: str, context: list[dict[str, str]]) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
+    def _complete(
+        self, conversation_id: str, user_id: str, assistant_id: str, context: list[dict[str, str]]
+    ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         assistant = self.db.get(ChatMessage, assistant_id)
         conversation = self.db.get(ChatConversation, conversation_id)
         user_message = self.db.get(ChatMessage, user_id)
@@ -304,13 +344,19 @@ class ChatService:
             response = gateway.chat_completion(context, temperature=0.2)
         except ChatConfigurationError as exc:
             self._mark_failed(assistant, str(exc))
-            raise ChatConfigurationError(str(exc), conversation_id=conversation_id, assistant_message_id=assistant_id) from exc
+            raise ChatConfigurationError(
+                str(exc), conversation_id=conversation_id, assistant_message_id=assistant_id
+            ) from exc
         except ChatRetrievalError:
             raise
         except Exception as exc:
             safe_error = _safe_error_message(exc)
             self._mark_failed(assistant, safe_error)
-            raise ChatUpstreamError("DeepSeek request failed", conversation_id=conversation_id, assistant_message_id=assistant_id) from exc
+            raise ChatUpstreamError(
+                "DeepSeek request failed",
+                conversation_id=conversation_id,
+                assistant_message_id=assistant_id,
+            ) from exc
 
         assistant.status = "completed"
         assistant.content = response.content
@@ -345,7 +391,11 @@ class ChatService:
         )
         if result.status == "failed":
             assistant = self.db.get(ChatMessage, assistant_id)
-            self._mark_failed(assistant, result.error or "Workspace retrieval failed", grounding_status="retrieval_failed")
+            self._mark_failed(
+                assistant,
+                result.error or "Workspace retrieval failed",
+                grounding_status="retrieval_failed",
+            )
             raise ChatRetrievalError(
                 "工作区论文检索失败，请检查向量化服务与 Milvus 后重试",
                 conversation_id=conversation.id,
@@ -388,9 +438,7 @@ class ChatService:
             if paper is None or paper.is_deleted or paper.workspace_id != workspace.id:
                 continue
             chunk = (
-                find_chunk_record(workspace.id, paper.id, item.chunk_id)
-                if item.chunk_id
-                else None
+                find_chunk_record(workspace.id, paper.id, item.chunk_id) if item.chunk_id else None
             )
             artifact_id = chunk.source_artifact_id if chunk else item.artifact_id
             artifact = self.db.get(Artifact, artifact_id) if artifact_id else None
@@ -398,7 +446,7 @@ class ChatService:
                 artifact.is_deleted or artifact.workspace_id != workspace.id
             ):
                 artifact_id = None
-            excerpt = item.text.strip()[:4000]
+            excerpt = self._postgres_safe_text(item.text).strip()[:4000]
             if not excerpt:
                 continue
             evidence.append(
@@ -407,9 +455,9 @@ class ChatService:
                     workspace_id=workspace.id,
                     paper_id=paper.id,
                     artifact_id=artifact_id,
-                    chunk_id=item.chunk_id,
-                    paper_title=paper.title,
-                    section=item.section,
+                    chunk_id=self._postgres_safe_text(item.chunk_id) or None,
+                    paper_title=self._postgres_safe_text(paper.title) or None,
+                    section=self._postgres_safe_text(item.section) or None,
                     excerpt=excerpt,
                     start_char=chunk.start_char if chunk else None,
                     end_char=chunk.end_char if chunk else None,
@@ -418,6 +466,18 @@ class ChatService:
                 )
             )
         return evidence
+
+    @staticmethod
+    def _postgres_safe_text(value: object | None) -> str:
+        """Remove NUL bytes that PostgreSQL rejects in text and JSON values.
+
+        PDF extraction can preserve embedded ``0x00`` characters inside an
+        otherwise valid chunk.  They are not meaningful prose, so removing
+        them at the persistence boundary keeps evidence offsets and source
+        artifacts auditable while preventing an entire Agent run from failing.
+        """
+
+        return str(value or "").replace("\x00", "")
 
     @staticmethod
     def _workspace_profile(workspace: Workspace) -> str:
@@ -490,7 +550,11 @@ class ChatService:
         if not evidence.artifact_id:
             return evidence, None, None, "证据没有可定位的原文文件"
         artifact = self.db.get(Artifact, evidence.artifact_id)
-        if artifact is None or artifact.is_deleted or artifact.workspace_id != evidence.workspace_id:
+        if (
+            artifact is None
+            or artifact.is_deleted
+            or artifact.workspace_id != evidence.workspace_id
+        ):
             return evidence, None, None, "证据原文文件已不可用"
         path = ArtifactService(self.db).resolve_abs_path(artifact)
         if not path.exists():

@@ -50,7 +50,9 @@ class AgentArtifactRead(BaseModel):
     filename: str
     mime_type: str
     content: str
-    metadata: dict[str, Any] = Field(validation_alias="metadata_payload", serialization_alias="metadata")
+    metadata: dict[str, Any] = Field(
+        validation_alias="metadata_payload", serialization_alias="metadata"
+    )
     validation_status: str
     created_at: datetime
     updated_at: datetime
@@ -93,4 +95,3 @@ class AgentRunListResponse(BaseModel):
 class AgentConfirmResponse(BaseModel):
     run: AgentRunDetail
     research_plan_id: str | None = None
-

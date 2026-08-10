@@ -271,6 +271,19 @@ export default function DiscoverPage() {
     finally { setActionLoading(false); }
   };
 
+  const reassessOpportunity = async () => {
+    if (!workspaceId || !selectedOpportunity) return;
+    setActionLoading(true);
+    try {
+      const item = selectedOpportunity.opportunity;
+      await discoverApi.reassess(workspaceId, item.id);
+      message.success("已根据保存的全文证据重新计算覆盖率与确认门槛");
+      await openOpportunity(item.id);
+      await load();
+    } catch (error) { message.error(`证据重新评估失败：${errorMessage(error)}`); }
+    finally { setActionLoading(false); }
+  };
+
   const convert = async () => {
     if (!workspaceId || !selectedOpportunity) return;
     setActionLoading(true);
@@ -478,7 +491,7 @@ export default function DiscoverPage() {
       </Modal>
 
       <Drawer title={localizedGeneratedText(selectedOpportunity?.opportunity.title)} open={selectedOpportunity !== null} width="min(760px, 100vw)" onClose={() => setSelectedOpportunity(null)}>
-        {selectedOpportunity && <OpportunityPanel workspaceId={workspaceId} detail={selectedOpportunity} loading={actionLoading} onAction={openDecision} onEdit={() => { const version = selectedOpportunity.current_version; if (version) { editForm.setFieldsValue({ ...version, note: "" }); setEditModalOpen(true); } }} onConvert={() => void convert()} />}
+        {selectedOpportunity && <OpportunityPanel workspaceId={workspaceId} detail={selectedOpportunity} loading={actionLoading} onAction={openDecision} onEdit={() => { const version = selectedOpportunity.current_version; if (version) { editForm.setFieldsValue({ ...version, note: "" }); setEditModalOpen(true); } }} onConvert={() => void convert()} onReassess={() => void reassessOpportunity()} />}
       </Drawer>
 
       <Modal title={decisionAction === "confirm" ? "确认研究机会" : decisionAction === "reject" ? "驳回研究机会" : "暂缓研究机会"} open={decisionModalOpen} confirmLoading={actionLoading} okText="提交" cancelText="取消" onCancel={() => setDecisionModalOpen(false)} onOk={() => void decisionForm.submit()}>
@@ -495,7 +508,7 @@ function AlertText({ text }: { text: string }) {
   return <Paragraph type="secondary" style={{ background: "#f5f5f5", padding: 10, borderRadius: 6 }}>{text}</Paragraph>;
 }
 
-function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onConvert }: { workspaceId: string; detail: OpportunityDetail; loading: boolean; onAction: (action: "confirm" | "reject" | "defer") => void; onEdit: () => void; onConvert: () => void }) {
+function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onConvert, onReassess }: { workspaceId: string; detail: OpportunityDetail; loading: boolean; onAction: (action: "confirm" | "reject" | "defer") => void; onEdit: () => void; onConvert: () => void; onReassess: () => void }) {
   const version = detail.current_version;
   const gate = gateDetails(detail.opportunity.source_payload);
   const confirmable = gate?.confirmable ?? detail.opportunity.status !== "needs_more_evidence";
@@ -504,11 +517,12 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
   const counter = detail.evidence.filter((item) => ["contradicts", "qualifies", "overlaps", "unknown"].includes(item.relation));
   return <Space direction="vertical" style={{ width: "100%" }}>
     <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatusLabel(opportunityStatus(detail.opportunity))}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{verificationDisplayLabel(version?.verification_status)}</Tag><Tag>证据覆盖率 {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>智能体置信度 {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
-    {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } />}
+    {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } action={supporting.length ? <Button size="small" onClick={onReassess} loading={loading}>重新评估证据</Button> : undefined} />}
     {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="可以确认，但仍有核验警告" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} />} /> : null}
     <EvidencePassportCard manifest={detail.evidence_manifest} />
     <Divider orientation="left">概述</Divider><Paragraph>{localizedGeneratedText(version?.problem_statement || detail.opportunity.summary)}</Paragraph>
     <Descriptions column={1} size="small"><Descriptions.Item label="研究范围">{localizedGeneratedText(version?.research_scope)}</Descriptions.Item><Descriptions.Item label="现有工作为何不足">{localizedGeneratedText(version?.why_existing_work_is_insufficient || detail.opportunity.rationale)}</Descriptions.Item><Descriptions.Item label="研究问题">{localizedGeneratedText(version?.candidate_research_question)}</Descriptions.Item><Descriptions.Item label="候选假设">{localizedGeneratedText(version?.candidate_hypothesis)}</Descriptions.Item></Descriptions>
+    {gate && <Alert type="info" showIcon message={`界面展示 ${supporting.length} 条支持类证据；其中 ${Number((detail.opportunity.source_payload.gate as Record<string, unknown> | undefined)?.supporting_evidence_count || 0)} 篇独立全文证据通过当前确认门槛`} description="支持类证据还可能包含反证检索阶段被判定为支持的片段；确认门槛只统计候选问题专门检索得到、具有全文锚点且来自不同论文的证据。" />}
     <EvidenceGroup workspaceId={workspaceId} title={`支持证据（${supporting.length}）`} items={supporting} empty="暂无可定位到原文的支持证据" />
     <EvidenceGroup workspaceId={workspaceId} title={`相似工作（${similar.length}）`} items={similar} empty="暂无已保存的相似工作" />
     <EvidenceGroup workspaceId={workspaceId} title={`反证／限定性证据（${counter.length}）`} items={counter} empty="暂无已保存的反证或限定性证据" />

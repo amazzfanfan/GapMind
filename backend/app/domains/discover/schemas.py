@@ -221,6 +221,7 @@ class ResearchPlanRead(BaseModel):
     agent_run_id: str | None = None
     source_type: str = "opportunity"
     status: str
+    title: str
     research_question: str
     hypothesis: str
     scope_and_assumptions: str
