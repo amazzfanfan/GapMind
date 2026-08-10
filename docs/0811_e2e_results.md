@@ -40,14 +40,14 @@
 ## 四、耗时 / token（W6-3 部分）
 
 - **耗时**：Discover 单次 ~2.5min（检索 + S2 + LLM 合成 + Critic）；全新起点另 +45s（导入解析抽取 1 篇）
-- **token**：⚠️ **AgentStep.details 未记录 usage**（`_agent_step` 未传 token），无法从运行记录聚合 LLM 成本——**审计缺口**，建议后续在 `_agent_step` 补 token usage
+- **token**：✅ 已补——`utils.accumulate_tokens` 在 synthesis/critic/external role/fulltext role/axis query 共 5 处 LLM 调用后累计到 `run.stage_summaries["token_usage"]`（prompt/completion/total），可从 run 行聚合 LLM 成本（368 测试）|
 
 ## 五、发现的问题
 
 | 问题 | 状态 |
 |---|---|
 | **run 详情 API 漏传 agent_steps**（Multi-agent handoff 卡片空）| ✅ 已修复（`d04ebe2`）|
-| AgentStep 未记录 token usage（W6-3 成本审计缺口）| ⚠️ 待补（建议 `_agent_step` 加 usage）|
+| **AgentStep 未记录 token usage**（W6-3 成本审计缺口）| ✅ 已补：`utils.accumulate_tokens` 累计到 `run.stage_summaries["token_usage"]`（5 处 LLM 调用点，368 测试）|
 
 ## 六、结论
 
