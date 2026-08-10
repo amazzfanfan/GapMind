@@ -14,6 +14,7 @@ AgentType = Literal[
     "analyze",
     "write",
     "respond",
+    "deep_research",
 ]
 
 

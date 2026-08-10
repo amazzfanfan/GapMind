@@ -74,6 +74,9 @@ logger = get_logger(__name__)
 
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 
+# W2: prompt version stamped on every DiscoverRun for audit trails.
+DISCOVER_PROMPT_VERSION = "discover-v2"
+
 # LLM prompt for external candidate role judgement (Stage 3).
 EXTERNAL_ROLE_SYSTEM_PROMPT = """\
 You classify whether external research papers serve as counter-evidence for a \
@@ -1580,9 +1583,7 @@ class DiscoverService(OpportunityWorkflow):
                 EvidenceSpan.relation == "supports",
                 EvidenceSpan.text.contains(fragment),
             )
-            .scalars()
-            .first()
-        )
+        ).scalars().first()
         if exact is not None:
             return exact
         spans = list(

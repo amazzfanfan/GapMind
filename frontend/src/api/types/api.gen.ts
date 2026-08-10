@@ -967,6 +967,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/discover/opportunities/{opportunity_id}/reassess": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reassess Opportunity Gate */
+        post: operations["reassess_opportunity_gate_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__reassess_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/discover/opportunities/{opportunity_id}/reject": {
         parameters: {
             query?: never;
@@ -1393,7 +1410,7 @@ export interface components {
              * Agent Type
              * @enum {string}
              */
-            agent_type: "research_plan" | "code_generation" | "analyze" | "write" | "respond";
+            agent_type: "research_plan" | "code_generation" | "analyze" | "write" | "respond" | "deep_research";
             /** Prompt */
             prompt: string;
             /** Conversation Id */
@@ -3277,6 +3294,8 @@ export interface components {
             source_type: string;
             /** Status */
             status: string;
+            /** Title */
+            title: string;
             /** Research Question */
             research_question: string;
             /** Hypothesis */
@@ -5999,6 +6018,40 @@ export interface operations {
                 "application/json": components["schemas"]["ConfirmRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchOpportunityRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reassess_opportunity_gate_api_v1_workspaces__workspace_id__discover_opportunities__opportunity_id__reassess_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -55,9 +55,10 @@ SUPPORTED_AGENT_TYPES = {
     "analyze",
     "write",
     "respond",
+    "deep_research",
 }
 # Agents that must be attached to an existing research plan.
-PLAN_BOUND_AGENT_TYPES = {"code_generation", "analyze", "write", "respond"}
+PLAN_BOUND_AGENT_TYPES = {"code_generation", "analyze", "write", "respond", "deep_research"}
 
 
 class AgentService:
@@ -86,6 +87,7 @@ class AgentService:
         payload["prompt"] = prompt.strip()
         if not payload["prompt"]:
             raise AgentInputError("任务描述不能为空")
+        plan = None
         if agent_type in PLAN_BOUND_AGENT_TYPES:
             plan_id = str(payload.get("research_plan_id") or "")
             plan = self.db.get(ResearchPlan, plan_id) if plan_id else None

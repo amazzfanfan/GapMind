@@ -34,6 +34,7 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
   const { message } = App.useApp();
   const [preview, setPreview] = useState<{ filename: string; content: string } | null>(null);
   const isPlan = run.agent_type === "research_plan";
+  const isDeep = run.agent_type === "deep_research";
   const isCode = run.agent_type === "code_generation";
   const active = ["queued", "running"].includes(run.status);
   const result = run.result ?? {};
