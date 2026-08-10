@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.domains.discover.models import DiscoverRun
-from app.domains.discover.utils import parse_json, retrieval_payload
+from app.domains.discover.utils import accumulate_tokens, parse_json, retrieval_payload
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 from app.gateway.llm import LLMGateway
 
@@ -162,6 +162,7 @@ class SynthesisService:
                 max_tokens=2200,
                 disable_thinking=True,  # structured JSON — avoid CoT burning the budget
             )
+            accumulate_tokens(run, response)
             parsed = parse_json(response.content)
             raw_items = parsed.get("opportunities") if isinstance(parsed, dict) else None
             if isinstance(raw_items, dict):

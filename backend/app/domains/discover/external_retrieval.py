@@ -28,7 +28,7 @@ from app.domains.artifact.service import ArtifactService
 from app.domains.discover.models import DiscoverExternalCandidate, DiscoverRun
 from app.domains.discover.ports import ExternalSearchPort
 from app.domains.discover.schemas import DiscoverConfig, DiscoverScope
-from app.domains.discover.utils import parse_json
+from app.domains.discover.utils import accumulate_tokens, parse_json
 from app.domains.knowledge.models import EvidenceSpan, KnowledgeItem
 from app.domains.paper.models import Paper
 from app.domains.paper.schemas import PaperCreate
@@ -427,6 +427,7 @@ class ExternalRetrievalService:
                 max_tokens=800,
                 disable_thinking=True,
             )
+            accumulate_tokens(run, resp)
             parsed = parse_json(resp.content)
             if not isinstance(parsed, dict):
                 logger.warning("discover.external_axis_query_bad_shape", raw_preview=(resp.content or "")[:200])
@@ -764,6 +765,7 @@ class ExternalRetrievalService:
                     max_tokens=2000,
                     disable_thinking=True,
                 )
+                accumulate_tokens(run, resp)
                 parsed = parse_json(resp.content)
                 items = parsed.get("roles") if isinstance(parsed, dict) else None
                 if not isinstance(items, list):

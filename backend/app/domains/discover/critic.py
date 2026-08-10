@@ -19,7 +19,7 @@ from app.core.logging import get_logger
 from app.domains.discover.models import DiscoverRun
 from app.domains.discover.ports import RetrievalPort
 from app.domains.discover.schemas import DiscoverConfig
-from app.domains.discover.utils import parse_json, retrieval_payload
+from app.domains.discover.utils import accumulate_tokens, parse_json, retrieval_payload
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 from app.gateway.llm import LLMGateway
 
@@ -204,6 +204,7 @@ class CriticService:
                 max_tokens=2000,
                 disable_thinking=True,
             )
+            accumulate_tokens(run, resp)
             parsed = parse_json(resp.content)
             reviews = parsed.get("reviews") if isinstance(parsed, dict) else None
             if not isinstance(reviews, list):
