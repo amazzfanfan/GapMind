@@ -339,7 +339,7 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W6-1 | 冻结版本清单：语料 / 标注 / Prompt / 模型 / 解析器 / Schema | ☐ |
+| W6-1 | 冻结版本清单：语料 / 标注 / Prompt / 模型 / 解析器 / Schema | ✅ `0809_freeze_version.md`（清单已整理：18 篇语料 / 3 个 Gold Set / discover-v2 Prompt / deepseek-v4-flash + zf Qwen3 + BGE-m3 / PyMuPDF ≥11.5 / alembic 0015）；正式冻结待 W6-2 三次端到端 |
 | W6-2 | 3 次全新数据库端到端演练 | ☐ |
 | W6-3 | 记录解析/抽取/检索/发现的耗时、错误率、token 成本 | ☐ |
 | W6-4 | 演示脚本打磨（agent 交接 + 证据回链 + 可信度卡片）| ☐ |
@@ -359,3 +359,5 @@ W3 → W7 ────────────────┼→ W5 → W6
 | 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
 | 2026-08-09 | **W5 端到端/降级代码层完成**：HITL 4 决策 × API + Timeline/HumanDecision 追溯（修 `HumanDecision.created_at` SQLite 兼容）+ 四类降级验证 + execute_run 幂等 + synthesis fallback；363 后端测试。真实环境端到端待做 |
 | 2026-08-09 | **MA-1 DiscoverService 拆分完成**：`critic.py` / `synthesis.py` / `external_retrieval.py` 三个子模块（各含独立类 + 模块函数 + 常量），service.py 2481→1472 行（Orchestrator/Gate/证据装配保留 + 20 个 thin delegate）；363 后端测试全过 |
+| 2026-08-09 | **MA-1 简化审查清理**：`_parse_json`/`retrieval_payload` 提取到 `utils.py`，删除 service.py 残留死代码（12 常量 + 5 import + 2 方法），service.py 2481→1340 行；363 测试全过 |
+| 2026-08-09 | **W6-1 冻结版本清单完成**：`0809_freeze_version.md`（语料 18 篇 / 3 个 Gold Set / discover-v2 Prompt / 模型 / PyMuPDF ≥11.5 / alembic 0015）；正式冻结待 W6-2 三次端到端 |
