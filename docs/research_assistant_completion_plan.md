@@ -250,7 +250,7 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| MA-1 | 拆分 `DiscoverService`（~1800 行）：运行生命周期 / 外部检索 / 证据装配 / 综合 / Gate / 持久化 | ☐ |
+| MA-1 | 拆分 `DiscoverService`（~1800 行）：运行生命周期 / 外部检索 / 证据装配 / 综合 / Gate / 持久化 | ✅ 2481→1472 行：`critic.py`（CriticAgent + 模块函数）、`synthesis.py`（OpportunityAgent + normalize/fallback）、`external_retrieval.py`（外部检索 + query 构造 + OA 导入 + 全文状态机）；DiscoverService 保留 Orchestrator/Gate/证据装配，`_critic_*`/`_synthesize_candidates`/`_external_*` 变 thin delegate（测试零改动，363 通过）|
 | MA-2 | 复用 `AgentRun/AgentStep` 协议：定义 Discover 编排的 step 序列（planner→evidence→external→opportunity→critic→gate）| ☐ |
 | MA-3 | `execute_run` 重构为 Orchestrator：Planner 分解 → 调度 → 收集 → decide | ☐ |
 | MA-4 | EvidenceAgent：包装 `_workspace_similar/_counter/_supporting` | ☐ |
@@ -358,3 +358,4 @@ W3 → W7 ────────────────┼→ W5 → W6
 | 2026-08-09 | **W2 机会质量代码层完成**：`_critic_challenges` + `_synthesize_candidates` critic_feedback 注入 + execute_run 第二轮综合（Critic 挑战→重新综合）；`DISCOVER_PROMPT_VERSION` + `_corpus_snapshot` 审计字段；349 后端测试。真实跑（W2-1/5）待环境 |
 | 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
 | 2026-08-09 | **W5 端到端/降级代码层完成**：HITL 4 决策 × API + Timeline/HumanDecision 追溯（修 `HumanDecision.created_at` SQLite 兼容）+ 四类降级验证 + execute_run 幂等 + synthesis fallback；363 后端测试。真实环境端到端待做 |
+| 2026-08-09 | **MA-1 DiscoverService 拆分完成**：`critic.py` / `synthesis.py` / `external_retrieval.py` 三个子模块（各含独立类 + 模块函数 + 常量），service.py 2481→1472 行（Orchestrator/Gate/证据装配保留 + 20 个 thin delegate）；363 后端测试全过 |

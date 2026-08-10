@@ -27,6 +27,7 @@ from app.domains.discover.models import (  # noqa: E402
     DiscoverExternalCandidate,
     DiscoverRun,
 )
+from app.domains.discover.external_retrieval import ExternalRetrievalService  # noqa: E402
 from app.domains.discover.service import DiscoverService  # noqa: E402
 from app.domains.knowledge.models import EvidenceSpan, KnowledgeItem  # noqa: E402
 from app.domains.paper.models import Paper  # noqa: E402
@@ -295,7 +296,7 @@ def test_fulltext_role_judge_updates_role_and_is_idempotent(db_session):
 
     llm = _RoleLLM(role="contradicts", confidence=0.9)
     svc = _service(db_session, llm=llm)
-    with patch.object(DiscoverService, "_read_paper_text", return_value="full text showing evidence against the research question"):
+    with patch.object(ExternalRetrievalService, "_read_paper_text", return_value="full text showing evidence against the research question"):
         judged = svc._judge_external_fulltext_roles(run, "Is graph rationalization stable under shift?")
 
     assert judged == 1
@@ -307,7 +308,7 @@ def test_fulltext_role_judge_updates_role_and_is_idempotent(db_session):
     assert "full text showing evidence" in llm.messages[0][-1]["content"]
 
     # Idempotent: already-judged rows are not re-judged (no second LLM call).
-    with patch.object(DiscoverService, "_read_paper_text", return_value="x"):
+    with patch.object(ExternalRetrievalService, "_read_paper_text", return_value="x"):
         judged2 = svc._judge_external_fulltext_roles(run, "Is graph rationalization stable under shift?")
     assert judged2 == 0
     assert len(llm.messages) == 1
@@ -321,7 +322,7 @@ def test_fulltext_role_judge_degrades_on_llm_failure(db_session):
     _service(db_session)._external_candidate_state(run)  # pipeline ready -> verified
 
     svc = _service(db_session, llm=_BoomLLM())
-    with patch.object(DiscoverService, "_read_paper_text", return_value="full text"):
+    with patch.object(ExternalRetrievalService, "_read_paper_text", return_value="full text"):
         judged = svc._judge_external_fulltext_roles(run, "question")
 
     assert judged == 0
@@ -336,7 +337,7 @@ def test_fulltext_role_judge_skips_without_imported_paper(db_session):
     row = _candidate(db_session, run, status="verified", url=None)  # no imported_paper_id
 
     svc = _service(db_session)
-    with patch.object(DiscoverService, "_read_paper_text") as fake:
+    with patch.object(ExternalRetrievalService, "_read_paper_text") as fake:
         judged = svc._judge_external_fulltext_roles(run, "question")
 
     assert judged == 0

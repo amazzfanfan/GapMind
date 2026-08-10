@@ -14,10 +14,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from app.domains.discover.models import DiscoverRun  # noqa: E402
-from app.domains.discover.service import (  # noqa: E402
-    EXTERNAL_QUERY_MAX_TOTAL,
-    DiscoverService,
-)
+from app.domains.discover.external_retrieval import EXTERNAL_QUERY_MAX_TOTAL  # noqa: E402
+from app.domains.discover.service import DiscoverService  # noqa: E402
 from app.domains.knowledge.models import KnowledgeItem  # noqa: E402
 from app.gateway.semantic_scholar import SemanticScholarError  # noqa: E402
 from app.domains.workspace.models import Workspace  # noqa: E402
