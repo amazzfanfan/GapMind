@@ -11,6 +11,10 @@ export type Workspace = components["schemas"]["WorkspaceRead"];
 export type WorkspaceCreate = components["schemas"]["WorkspaceCreate"];
 export type WorkspaceUpdate = components["schemas"]["WorkspaceUpdate"];
 export type WorkspaceListResponse = components["schemas"]["WorkspaceListResponse"];
+export type WorkspaceReadiness = components["schemas"]["WorkspaceReadiness"];
+export type ReadinessDimension = components["schemas"]["ReadinessDimension"];
+export type ReadinessBlockingAction = components["schemas"]["ReadinessBlockingAction"];
+export type ReadinessRecommendedAction = components["schemas"]["ReadinessRecommendedAction"];
 
 export interface WorkspaceListParams {
   include_archived?: boolean;

@@ -104,6 +104,29 @@ export interface paths {
         patch: operations["update_workspace_api_v1_workspaces__workspace_id__patch"];
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Readiness
+         * @description Research readiness for one workspace (W0): five dimensions + next action.
+         *
+         *     Single source of truth for the overview progress bar and "why not /
+         *     where to go" explanations. Raises 404 if the workspace is missing.
+         */
+        get: operations["get_workspace_readiness_api_v1_workspaces__workspace_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/archive": {
         parameters: {
             query?: never;
@@ -1370,7 +1393,7 @@ export interface components {
              * Agent Type
              * @enum {string}
              */
-            agent_type: "research_plan" | "code_generation";
+            agent_type: "research_plan" | "code_generation" | "analyze" | "write" | "respond";
             /** Prompt */
             prompt: string;
             /** Conversation Id */
@@ -1723,6 +1746,7 @@ export interface components {
             grounding_status: string;
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
+            citation_check?: components["schemas"]["CitationCheckRead"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1739,6 +1763,26 @@ export interface components {
             conversation: components["schemas"]["ChatConversationRead"];
             user_message: components["schemas"]["ChatMessageRead"];
             assistant_message: components["schemas"]["ChatMessageRead"];
+        };
+        /**
+         * CitationCheckRead
+         * @description Result of validating [En] markers in an assistant message against its citations.
+         */
+        CitationCheckRead: {
+            /** Referenced */
+            referenced?: number[];
+            /** Broken */
+            broken?: number[];
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Grounded Without Citations
+             * @default false
+             */
+            grounded_without_citations: boolean;
         };
         /** ConfirmRequest */
         ConfirmRequest: {
@@ -1951,6 +1995,8 @@ export interface components {
             external_candidates?: components["schemas"]["DiscoverExternalCandidateRead"][];
             /** Opportunities */
             opportunities?: components["schemas"]["ResearchOpportunityRead"][];
+            /** Agent Steps */
+            agent_steps?: components["schemas"]["AgentStepRead"][];
         };
         /**
          * DiscoverRunListResponse
@@ -2073,6 +2119,110 @@ export interface components {
             content: string;
             /** Spans */
             spans?: components["schemas"]["EvidenceSpanRead"][];
+        };
+        /**
+         * EvidenceManifest
+         * @description Unified evidence-credibility passport for an AI-generated research artifact.
+         *
+         *     Aggregates what the artifact can honestly claim: how much evidence, from
+         *     how many independent papers, full-text vs metadata, gate status, versions,
+         *     and human-review state — so a "confidence" number is never conflated with
+         *     evidence coverage. Reused across Opportunity / Plan / Chat / AgentArtifact.
+         */
+        EvidenceManifest: {
+            /** Source Type */
+            source_type: string;
+            /** Source Id */
+            source_id: string;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Supports
+             * @default 0
+             */
+            supports: number;
+            /**
+             * Similar
+             * @default 0
+             */
+            similar: number;
+            /**
+             * Counter
+             * @default 0
+             */
+            counter: number;
+            /**
+             * Independent Papers
+             * @default 0
+             */
+            independent_papers: number;
+            /**
+             * Full Text Papers
+             * @default 0
+             */
+            full_text_papers: number;
+            /**
+             * Metadata Only Papers
+             * @default 0
+             */
+            metadata_only_papers: number;
+            /**
+             * External Sources
+             * @default 0
+             */
+            external_sources: number;
+            /** Gate Verified */
+            gate_verified?: boolean | null;
+            /** Gate Confirmable */
+            gate_confirmable?: boolean | null;
+            /** Evidence Coverage */
+            evidence_coverage?: number | null;
+            /** Verification Status */
+            verification_status?: string | null;
+            /** Critic Verdict */
+            critic_verdict?: string | null;
+            /** Narrowing Outcome */
+            narrowing_outcome?: string | null;
+            /** Prompt Version */
+            prompt_version?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Corpus Version */
+            corpus_version?: string | null;
+            /** Human Status */
+            human_status?: string | null;
+            /** Items */
+            items?: components["schemas"]["EvidenceManifestItem"][];
+        };
+        /**
+         * EvidenceManifestItem
+         * @description One evidence row in the passport — a single support/similar/counter entry.
+         */
+        EvidenceManifestItem: {
+            /** Relation */
+            relation: string;
+            /** Source Scope */
+            source_scope: string;
+            /** Evidence Level */
+            evidence_level: string;
+            /** Paper Id */
+            paper_id?: string | null;
+            /** External Candidate Id */
+            external_candidate_id?: string | null;
+            /** Rank */
+            rank?: number | null;
+            /** Judgement */
+            judgement?: string | null;
+            /** Judgement Confidence */
+            judgement_confidence?: number | null;
+            /**
+             * Display Excerpt
+             * @default
+             */
+            display_excerpt: string;
         };
         /** EvidenceSpanListResponse */
         EvidenceSpanListResponse: {
@@ -2736,6 +2886,7 @@ export interface components {
             versions?: components["schemas"]["OpportunityVersionRead"][];
             /** Evidence */
             evidence?: components["schemas"]["OpportunityEvidenceRead"][];
+            evidence_manifest?: components["schemas"]["EvidenceManifest"] | null;
             /** Decisions */
             decisions?: components["schemas"]["HumanDecisionRead"][];
             plan?: components["schemas"]["ResearchPlanRead"] | null;
@@ -3010,6 +3161,54 @@ export interface components {
         /** PlanCreateResponse */
         PlanCreateResponse: {
             plan: components["schemas"]["ResearchPlanRead"];
+        };
+        /**
+         * ReadinessBlockingAction
+         * @description One explainable blocking step: what to do, why, and where.
+         */
+        ReadinessBlockingAction: {
+            /** Action */
+            action: string;
+            /** Reason */
+            reason: string;
+            /** Href */
+            href: string;
+        };
+        /**
+         * ReadinessDimension
+         * @description One readiness dimension (corpus / retrieval / knowledge / discover / research).
+         *
+         *     ``ready`` means usable; ``waiting`` means a background pipeline task is
+         *     still running (not a user action); otherwise the dimension is blocked and
+         *     ``blocking_actions`` explains what to do and where.
+         */
+        ReadinessDimension: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Ready */
+            ready: boolean;
+            /** Waiting */
+            waiting: boolean;
+            /** Summary */
+            summary: string;
+            /** Blocking Actions */
+            blocking_actions?: components["schemas"]["ReadinessBlockingAction"][];
+        };
+        /**
+         * ReadinessRecommendedAction
+         * @description The single next step the user should take.
+         */
+        ReadinessRecommendedAction: {
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Href */
+            href: string;
+            /** Label */
+            label: string;
         };
         /** ResearchOpportunityRead */
         ResearchOpportunityRead: {
@@ -3587,6 +3786,94 @@ export interface components {
             updated_at: string;
         };
         /**
+         * WorkspaceReadiness
+         * @description Full readiness document returned by GET /workspaces/{id}/readiness.
+         */
+        WorkspaceReadiness: {
+            /** Workspace Id */
+            workspace_id: string;
+            counts: components["schemas"]["WorkspaceReadinessCounts"];
+            /** Dimensions */
+            dimensions: components["schemas"]["ReadinessDimension"][];
+            recommended_next_action: components["schemas"]["ReadinessRecommendedAction"];
+        };
+        /**
+         * WorkspaceReadinessCounts
+         * @description Single-source counts used by the overview progress bar and stats.
+         */
+        WorkspaceReadinessCounts: {
+            /**
+             * Papers
+             * @default 0
+             */
+            papers: number;
+            /**
+             * Papers With Pdf
+             * @default 0
+             */
+            papers_with_pdf: number;
+            /**
+             * Parsed Papers
+             * @default 0
+             */
+            parsed_papers: number;
+            /**
+             * Extracted Papers
+             * @default 0
+             */
+            extracted_papers: number;
+            /**
+             * Knowledge Items
+             * @default 0
+             */
+            knowledge_items: number;
+            /**
+             * Confirmed Items
+             * @default 0
+             */
+            confirmed_items: number;
+            /**
+             * Pending Knowledge
+             * @default 0
+             */
+            pending_knowledge: number;
+            /**
+             * Runs
+             * @default 0
+             */
+            runs: number;
+            /**
+             * Pending Runs
+             * @default 0
+             */
+            pending_runs: number;
+            /**
+             * Active Tasks
+             * @default 0
+             */
+            active_tasks: number;
+            /**
+             * Opportunities
+             * @default 0
+             */
+            opportunities: number;
+            /**
+             * Pending Opportunities
+             * @default 0
+             */
+            pending_opportunities: number;
+            /**
+             * Confirmed Opportunities
+             * @default 0
+             */
+            confirmed_opportunities: number;
+            /**
+             * Research Plans
+             * @default 0
+             */
+            research_plans: number;
+        };
+        /**
          * WorkspaceUpdate
          * @description Body for PATCH /api/v1/workspaces/{id}.
          *
@@ -3835,6 +4122,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_readiness_api_v1_workspaces__workspace_id__readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReadiness"];
                 };
             };
             /** @description Validation Error */

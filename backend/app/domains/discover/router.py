@@ -24,6 +24,7 @@ from app.domains.discover.schemas import (
     DiscoverRunCreateRequest,
     DiscoverRunCreateResponse,
     DiscoverRunDetail,
+    AgentStepRead,
     DiscoverRunListResponse,
     DiscoverRunRead,
     EditConfirmRequest,
@@ -116,9 +117,8 @@ def get_run(
     return DiscoverRunDetail(
         **DiscoverRunRead.model_validate(data["run"]).model_dump(),
         external_candidates=[item for item in data["external_candidates"]],
-        opportunities=[
-            ResearchOpportunityRead.model_validate(item) for item in data["opportunities"]
-        ],
+        opportunities=[ResearchOpportunityRead.model_validate(item) for item in data["opportunities"]],
+        agent_steps=[AgentStepRead.model_validate(item) for item in data["agent_steps"]],
     )
 
 

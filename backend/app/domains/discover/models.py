@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPKMixin
+
+
+def _now_utc() -> datetime:
+    """Python-side default so SQLite tests get a real timestamp.
+
+    The created_at columns below keep ``server_default="now()"`` for
+    PostgreSQL; SQLite treats "now()" as a literal string and would fail to
+    parse it back, so this ORM-side default fills a real value on INSERT.
+    """
+    return datetime.now(timezone.utc)
 
 
 class ResearchOpportunity(Base, UUIDPKMixin, TimestampMixin):
@@ -150,9 +152,7 @@ class OpportunityVersion(Base, UUIDPKMixin):
     )
     synthesis_metadata: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_by: Mapped[str] = mapped_column(String(16), default="agent", nullable=False)
-    created_at: Mapped[object] = mapped_column(
-        DateTime(timezone=True), server_default="now()", nullable=False
-    )
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default="now()", default=_now_utc, nullable=False)
 
 
 class OpportunityEvidence(Base, UUIDPKMixin, TimestampMixin):
@@ -205,9 +205,7 @@ class HumanDecision(Base, UUIDPKMixin):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     defer_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
     actor: Mapped[str] = mapped_column(String(64), default="user", nullable=False)
-    created_at: Mapped[object] = mapped_column(
-        DateTime(timezone=True), server_default="now()", nullable=False
-    )
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default="now()", default=_now_utc, nullable=False)
 
 
 class ResearchPlan(Base, UUIDPKMixin, TimestampMixin):

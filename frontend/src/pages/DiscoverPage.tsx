@@ -25,7 +25,7 @@ import {
 } from "antd";
 import { BulbOutlined, CloseCircleOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useParams, useSearchParams } from "react-router-dom";
-import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
+import { discoverApi, type DiscoverExternalCandidate, type DiscoverRun, type EvidenceManifest, type OpportunityDetail, type ResearchOpportunity } from "../api/discover";
 import { OpportunityEvidenceViewer } from "../components/EvidenceViewer";
 import { getStatusMeta } from "../components/common/StatusBadge";
 import { currentRunStage, currentRunStatus, DISCOVER_STAGE_LABELS, DISCOVER_STAGES, pollingInterval, selectedOpportunityCount, stageIndex, stageSummaryMessage, stageSummaryStatus, TERMINAL_RUN_STATUSES } from "../state/discoverState";
@@ -46,6 +46,14 @@ function statusColor(status: string): string {
   if (["failed", "cancelled", "rejected", "verification_failed"].includes(status)) return "red";
   if (["waiting_for_user", "waiting_for_fulltext", "needs_more_evidence", "reviewable_with_warning", "verification_incomplete", "verified_with_warnings", "deferred"].includes(status)) return "orange";
   return "blue";
+}
+
+function agentStepColor(status: string): string {
+  if (status === "completed") return "green";
+  if (status === "waiting") return "orange";
+  if (status === "failed") return "red";
+  if (status === "skipped") return "default";
+  return "processing";
 }
 
 function verificationStatusLabel(status: string): string {
@@ -395,6 +403,9 @@ export default function DiscoverPage() {
                 {selectedRun.error_message && <Paragraph type="danger" style={{ marginTop: 16 }}>{selectedRun.error_message}</Paragraph>}
               </>}
             </Card>
+            <Card size="small" title="Multi-agent handoff">
+              {!runDetail?.agent_steps?.length ? <Empty description="The run records Planner → Evidence → External → Critic → Gate as it executes" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : <List size="small" dataSource={runDetail.agent_steps} renderItem={(step) => { const verdicts = step.stage === "critic" ? (step.details?.verdicts as Record<string, number> | undefined) : undefined; const narrowing = step.stage === "narrowing" ? (step.details?.narrowed as number | undefined) : undefined; return <List.Item><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color={agentStepColor(step.status)}>{step.status}</Tag><Text strong style={{ textTransform: "capitalize" }}>{step.stage.replaceAll("_", " ")}</Text><Text type="secondary">step {step.sequence}</Text></Space><Text type="secondary">{step.summary}</Text>{verdicts ? <Space wrap>{(["keep", "narrow", "reject"] as const).map((key) => <Tag key={key} color={key === "reject" ? "red" : key === "narrow" ? "orange" : "green"}>{key}: {verdicts[key] ?? 0}</Tag>)}</Space> : null}{narrowing ? <Text type="secondary">Focused counter-evidence pass narrowed {narrowing} candidate(s)</Text> : null}</Space></List.Item>; }} />}
+            </Card>
             <Card title={`本次运行的研究机会候选（${selectedOpportunities.length}）`}>
       {selectedOpportunities.length === 0 ? <Empty description={selectedRun?.status === "waiting_for_fulltext" ? "完成全文核验后将生成候选结果" : "候选综合完成后将在这里显示结果"} /> : <List dataSource={selectedOpportunities} renderItem={(item) => { const displayStatus = opportunityStatus(item); return <List.Item actions={[<Button key="open" type="link" onClick={() => void openOpportunity(item.id)}>查看详情</Button>]}><List.Item.Meta title={<Space wrap><Text strong>{localizedGeneratedText(item.title)}</Text><Tag color={statusColor(displayStatus)}>{opportunityStatusLabel(displayStatus)}</Tag></Space>} description={<Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{localizedGeneratedText(item.summary)}</Paragraph>} /><Tag>智能体置信度 {Math.round(item.confidence * 100)}%</Tag></List.Item>; }} />}
             </Card>
@@ -508,6 +519,7 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
     <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatusLabel(opportunityStatus(detail.opportunity))}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{verificationDisplayLabel(version?.verification_status)}</Tag><Tag>证据覆盖率 {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>智能体置信度 {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
     {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } action={supporting.length ? <Button size="small" onClick={onReassess} loading={loading}>重新评估证据</Button> : undefined} />}
     {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="可以确认，但仍有核验警告" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} />} /> : null}
+    <EvidencePassportCard manifest={detail.evidence_manifest} />
     <Divider orientation="left">概述</Divider><Paragraph>{localizedGeneratedText(version?.problem_statement || detail.opportunity.summary)}</Paragraph>
     <Descriptions column={1} size="small"><Descriptions.Item label="研究范围">{localizedGeneratedText(version?.research_scope)}</Descriptions.Item><Descriptions.Item label="现有工作为何不足">{localizedGeneratedText(version?.why_existing_work_is_insufficient || detail.opportunity.rationale)}</Descriptions.Item><Descriptions.Item label="研究问题">{localizedGeneratedText(version?.candidate_research_question)}</Descriptions.Item><Descriptions.Item label="候选假设">{localizedGeneratedText(version?.candidate_hypothesis)}</Descriptions.Item></Descriptions>
     {gate && <Alert type="info" showIcon message={`界面展示 ${supporting.length} 条支持类证据；其中 ${Number((detail.opportunity.source_payload.gate as Record<string, unknown> | undefined)?.supporting_evidence_count || 0)} 篇独立全文证据通过当前确认门槛`} description="支持类证据还可能包含反证检索阶段被判定为支持的片段；确认门槛只统计候选问题专门检索得到、具有全文锚点且来自不同论文的证据。" />}
@@ -522,4 +534,29 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
 
 function EvidenceGroup({ workspaceId, title, items, empty }: { workspaceId: string; title: string; items: OpportunityDetail["evidence"]; empty: string }) {
   return <Card size="small" title={title}><List size="small" dataSource={items} locale={{ emptyText: empty }} renderItem={(evidence) => <List.Item><Space direction="vertical" style={{ width: "100%" }}><Space wrap><Tag color={evidence.relation === "contradicts" ? "red" : evidence.relation === "supports" ? "green" : "blue"}>{evidenceRelationLabel(evidence.relation)}</Tag><Tag>{evidenceSourceScopeLabel(evidence.source_scope)}</Tag><Tag color={evidence.evidence_level === "full_text" ? "green" : "orange"}>{evidenceLevelDisplayLabel(evidence.evidence_level)}</Tag></Space><Text>{evidence.display_excerpt || "暂无证据摘录"}</Text><OpportunityEvidenceViewer workspaceId={workspaceId} evidence={evidence} /></Space></List.Item>} /></Card>;
+}
+
+function EvidencePassportCard({ manifest }: { manifest: EvidenceManifest | null }) {
+  if (!manifest) return null;
+  const gateLabel = manifest.gate_verified ? "已通过" : manifest.gate_confirmable ? "可确认（带警告）" : "未通过";
+  const criticLabel = manifest.critic_verdict === "reject" ? <Tag color="red">reject</Tag> : manifest.critic_verdict === "narrow" ? <Tag color="orange">narrow</Tag> : manifest.critic_verdict ? <Tag color="green">{manifest.critic_verdict}</Tag> : null;
+  const narrowingLabel = manifest.narrowing_outcome === "obstacle_found" ? "发现反证障碍" : manifest.narrowing_outcome === "direction_clear" ? "收窄方向可行" : null;
+  return (
+    <Card size="small" title="证据可信度（Evidence Passport）">
+      <Descriptions column={{ xs: 1, sm: 2 }} size="small">
+        <Descriptions.Item label="证据覆盖">{manifest.evidence_coverage != null ? `${Math.round(manifest.evidence_coverage * 100)}%` : "—"}（{manifest.total} 条）</Descriptions.Item>
+        <Descriptions.Item label="独立论文">{manifest.independent_papers} 篇</Descriptions.Item>
+        <Descriptions.Item label="全文来源">{manifest.full_text_papers} 篇</Descriptions.Item>
+        <Descriptions.Item label="元数据来源">{manifest.metadata_only_papers} 篇</Descriptions.Item>
+        <Descriptions.Item label="支持 / 相似 / 反证">{manifest.supports} / {manifest.similar} / {manifest.counter}</Descriptions.Item>
+        <Descriptions.Item label="外部来源">{manifest.external_sources} 条</Descriptions.Item>
+        <Descriptions.Item label="证据门">{gateLabel}</Descriptions.Item>
+        <Descriptions.Item label="核验状态">{verificationDisplayLabel(manifest.verification_status ?? "")}</Descriptions.Item>
+        {criticLabel && <Descriptions.Item label="Critic 判定">{criticLabel}</Descriptions.Item>}
+        {narrowingLabel && <Descriptions.Item label="收窄结果">{narrowingLabel}</Descriptions.Item>}
+        <Descriptions.Item label="人工状态">{opportunityStatusLabel(manifest.human_status ?? "")}</Descriptions.Item>
+        <Descriptions.Item label="Prompt / 模型">{manifest.prompt_version || "—"} / {manifest.model_name || "—"}</Descriptions.Item>
+      </Descriptions>
+    </Card>
+  );
 }

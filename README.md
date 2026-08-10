@@ -53,6 +53,7 @@ This starts PostgreSQL (5432), Redis (6379), and Milvus (19530).
 ```bash
 cd backend
 python -m venv .venv
+# or uv venv --python 3.11.15 --seed --managed-python
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/Mac
 pip install -r requirements.txt

@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.domains.agent.schemas import AgentStepRead
+
 
 class DiscoverInput(BaseModel):
     topic: str | None = Field(default=None, max_length=4000)
@@ -112,6 +114,7 @@ class DiscoverRunRead(BaseModel):
 class DiscoverRunDetail(DiscoverRunRead):
     external_candidates: list[DiscoverExternalCandidateRead] = Field(default_factory=list)
     opportunities: list["ResearchOpportunityRead"] = Field(default_factory=list)
+    agent_steps: list[AgentStepRead] = Field(default_factory=list)
 
 
 class ResearchOpportunityRead(BaseModel):
@@ -234,11 +237,58 @@ class ResearchPlanRead(BaseModel):
     updated_at: datetime
 
 
+class EvidenceManifestItem(BaseModel):
+    """One evidence row in the passport — a single support/similar/counter entry."""
+    relation: str
+    source_scope: str
+    evidence_level: str
+    paper_id: str | None = None
+    external_candidate_id: str | None = None
+    rank: int | None = None
+    judgement: str | None = None
+    judgement_confidence: float | None = None
+    display_excerpt: str = ""
+
+
+class EvidenceManifest(BaseModel):
+    """Unified evidence-credibility passport for an AI-generated research artifact.
+
+    Aggregates what the artifact can honestly claim: how much evidence, from
+    how many independent papers, full-text vs metadata, gate status, versions,
+    and human-review state — so a "confidence" number is never conflated with
+    evidence coverage. Reused across Opportunity / Plan / Chat / AgentArtifact.
+    """
+    model_config = {"protected_namespaces": ()}
+
+    source_type: str
+    source_id: str
+    total: int = 0
+    supports: int = 0
+    similar: int = 0
+    counter: int = 0
+    independent_papers: int = 0
+    full_text_papers: int = 0
+    metadata_only_papers: int = 0
+    external_sources: int = 0
+    gate_verified: bool | None = None
+    gate_confirmable: bool | None = None
+    evidence_coverage: float | None = None
+    verification_status: str | None = None
+    critic_verdict: str | None = None
+    narrowing_outcome: str | None = None
+    prompt_version: str | None = None
+    model_name: str | None = None
+    corpus_version: str | None = None
+    human_status: str | None = None
+    items: list[EvidenceManifestItem] = Field(default_factory=list)
+
+
 class OpportunityDetail(BaseModel):
     opportunity: ResearchOpportunityRead
     current_version: OpportunityVersionRead | None = None
     versions: list[OpportunityVersionRead] = Field(default_factory=list)
     evidence: list[OpportunityEvidenceRead] = Field(default_factory=list)
+    evidence_manifest: EvidenceManifest | None = None
     decisions: list[HumanDecisionRead] = Field(default_factory=list)
     plan: ResearchPlanRead | None = None
 

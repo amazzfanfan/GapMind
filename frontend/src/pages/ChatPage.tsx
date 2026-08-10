@@ -105,15 +105,23 @@ export default function ChatPage() {
         targetConversationId = created.id;
         setConversation(created);
       }
+      const agentInput = mode === "research_plan"
+        ? {}
+        : mode === "code_generation"
+          ? { research_plan_id: researchPlanId, framework: "PyTorch" }
+          : mode === "respond"
+            ? { research_plan_id: researchPlanId, reviewer_comments: content }
+            : { research_plan_id: researchPlanId };
       const run = await agentApi.start(activeWorkspaceId, {
         agent_type: mode,
         prompt: content,
         conversation_id: targetConversationId,
-        input: mode === "code_generation" ? { research_plan_id: researchPlanId, framework: "PyTorch" } : {},
+        input: agentInput,
       });
       if (!conversationId) navigate(`/workspaces/${activeWorkspaceId}/assistant/${targetConversationId}`, { replace: true });
       await Promise.all([loadConversation(targetConversationId), loadAgentRuns(activeWorkspaceId, targetConversationId)]);
-      message.success(`${mode === "research_plan" ? "研究计划" : "代码生成"} Agent 已启动`);
+      const agentLabel = mode === "research_plan" ? "研究计划" : mode === "code_generation" ? "代码生成" : mode === "analyze" ? "结果分析" : mode === "write" ? "论文写作" : mode === "respond" ? "审稿回复" : "Agent";
+      message.success(`${agentLabel} Agent 已启动`);
       setAgentActionId(run.id);
       window.setTimeout(() => setAgentActionId(undefined), 500);
       void loadHistory();
