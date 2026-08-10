@@ -11,7 +11,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
-from urllib.parse import quote
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -26,6 +25,27 @@ from app.domains.discover.adapters import (
     RetrievalAdapter,
     assert_protocol,
 )
+from app.domains.discover.critic import (
+    CriticService,
+    apply_reviews,
+    collect_challenges,
+    narrowing_obstacle,
+)
+from app.domains.discover.synthesis import (
+    SynthesisService,
+    fallback_candidate,
+    normalize_candidate,
+    retrieval_payload,
+)
+from app.domains.discover.external_retrieval import (
+    ExternalRetrievalService,
+    external_role,
+    normalize_pdf_url,
+    title_verified,
+)
+
+
+
 from app.domains.discover.models import (
     DiscoverExternalCandidate,
     DiscoverRun,
@@ -45,18 +65,13 @@ from app.domains.discover.schemas import (
 )
 from app.domains.knowledge.models import EvidenceSpan, KnowledgeItem
 from app.domains.paper.models import Paper
-from app.domains.paper.schemas import PaperCreate
-from app.domains.paper.service import PaperService
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
-from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
 from app.domains.timeline.service import TimelineService
-from app.gateway.semantic_scholar import SemanticScholarClient, SemanticScholarError
 
 logger = get_logger(__name__)
 
-S2_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf,url,publicationDate"
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 
 # W2: prompt version stamped on every DiscoverRun so the audit trail can tell
@@ -64,153 +79,7 @@ TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 # Bump this whenever the orchestration prompts change.
 DISCOVER_PROMPT_VERSION = "discover-v2"
 
-# LLM prompt for external candidate role judgement (Stage 3).
-EXTERNAL_ROLE_SYSTEM_PROMPT = """\
-You classify whether external research papers serve as counter-evidence for a \
-research question.
-
-Categories:
-- similar: same research area, closely related approach
-- overlap: partially overlapping topic but different focus
-- qualifies: adds caveats or limitations that constrain the research question
-- contradicts: provides evidence against the research question
-- unknown: cannot determine from the metadata alone
-
-Rules:
-- Be conservative: use "unknown" if ambiguous
-- "contradicts" requires clear opposing evidence, not just a different focus
-- Base your judgement on the title and abstract only
-- A candidate that merely resembles the question is "similar"; only call it \
-"qualifies" or "contradicts" when it explicitly challenges or constrains it
-
-Output a JSON object, nothing else:
-{"roles": [{"index": 0, "role": "similar|overlap|qualifies|contradicts|unknown", \
-"confidence": 0.0-1.0}, ...]}"""
-
-# W1: role re-judgement against an imported paper's FULL TEXT (once the
-# parse/extract/embed pipeline is ready). The metadata prompt above judges on
-# title+abstract; a full-text verdict is strictly stronger and can flip a
-# candidate from "similar" to "contradicts" once the paper is actually read.
-EXTERNAL_FULLTEXT_ROLE_SYSTEM_PROMPT = """\
-You classify whether an external research paper serves as counter-evidence for \
-a research question, based on its FULL TEXT.
-
-Categories:
-- similar: same research area, closely related approach
-- overlap: partially overlapping topic but different focus
-- qualifies: adds caveats or limitations that constrain the research question
-- contradicts: provides evidence against the research question
-- unknown: cannot determine from the text
-
-Rules:
-- Be conservative: use "unknown" if ambiguous
-- "contradicts" requires clear opposing evidence, not just a different focus
-- Base your judgement on the FULL TEXT (not just the abstract) — e.g. an
-  experiment that directly challenges the question's core assumption
-- A paper that merely resembles the question is "similar"; only call it
-  "qualifies" or "contradicts" when it explicitly challenges or constrains it
-
-Output a JSON object, nothing else:
-{"role": "similar|overlap|qualifies|contradicts|unknown", \
-"confidence": 0.0-1.0}"""
-
 WAITING_RUN_STATUSES = {"waiting_for_user", "waiting_for_fulltext"}
-PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
-
-# LLM prompt for external-query axis decomposition (Stage 3). The research
-# question alone (long prose) is a poor Semantic Scholar relevance query; the
-# LLM decomposes it into concise, term-rich search queries that target
-# foundational methods, overlapping work, counter-evidence, and evaluation /
-# critique literature — with the workspace's extracted methods/limitations as
-# context so queries cross research axes with the workspace's named methods.
-EXTERNAL_QUERY_AXIS_SYSTEM_PROMPT = """\
-You write effective search queries to find EXTERNAL papers that challenge, \
-overlap with, or foundationally support a research question. The papers must \
-be relevant to the question but are NOT required to be in the user's workspace.
-
-Rules:
-- Write CONCISE keyword-style queries (3-8 words), never full sentences
-- Prefer SPECIFIC method names and established concept terms over generic \
-topic phrases (e.g. "graph information bottleneck" or "invariant risk \
-minimization", not just "interpretable GNN")
-- Turn at least 2 of the workspace's abbreviated method names into concrete \
-queries using their FULL names, so the search finds the method's paper plus \
-its variants and critiques
-- Cover distinct angles: foundational methods, overlapping prior work, \
-counter-evidence / critiques, evaluation benchmarks, and the domain axis \
-(e.g. distribution shift) when present
-- Do not quote the workspace paper titles verbatim
-- Never repeat the same idea in two queries
-
-Also choose up to 4 workspace method names whose papers you want surfaced
-PRECISELY (these are searched by exact title, so give the full descriptive
-name — expand abbreviations). Prefer methods that are foundational or likely
-to have counter-evidence / variants. Do not list the same method twice.
-
-Examples of good queries:
-- "graph information bottleneck"
-- "invariant risk minimization out-of-distribution"
-- "saliency maps sanity checks"
-- "explanation robustness adversarial perturbations"
-- "graph rationalization environment augmentation"
-
-Output a JSON object, nothing else:
-{"queries": ["...", "...", "..."], "exact_lookups": ["Method Full Name", "...", "..."]}"""
-
-# LLM prompt for the CriticAgent (Stage MA). After OpportunityAgent proposes
-# candidates, CriticAgent adversarially reviews each against the evidence
-# ledger and returns challenges + a verdict. The Orchestrator uses the verdict
-# to keep, narrow, or down-weight weak opportunities — this is the visible
-# "multi-agent collaboration" the demo shows (not raw model reasoning).
-CRITIC_SYSTEM_PROMPT = """\
-You are a rigorous, adversarial reviewer of proposed research opportunities. \
-For each candidate, identify weaknesses it must address before it can be \
-considered novel and viable.
-
-Challenge categories:
-- counter_evidence: the evidence ledger already contains work covering the claim
-- overlap: the proposal overlaps too much with existing similar work
-- assumption: a stated assumption is unsupported or brittle
-- framing: the research question is too broad or ill-defined
-- evaluation: the proposed validation cannot falsify the hypothesis
-
-Rules:
-- Be specific; reference the evidence roles (supporting / similar / counter / external)
-- Verdict per candidate: "keep" (novel and viable), "narrow" (viable after \
-tightening focus), or "reject" (not novel or fatally flawed)
-- Be conservative: do not invent evidence that is not in the ledger
-
-Output a JSON object, nothing else:
-{"reviews": [{"index": 0, "verdict": "keep|narrow|reject", "challenges": ["..."], \
-"suggested_narrowing": "..."}, ...]}"""
-
-# Bounded Critic narrowing loop (MA). When the Critic marks a candidate
-# "narrow", the Orchestrator runs ONE focused counter-evidence pass on the
-# suggested narrower focus instead of unbounded re-synthesis. The outcome
-# (obstacle found vs direction clear) is recorded on the candidate and
-# surfaced to the user, keeping the multi-agent loop cheap and predictable.
-MA_NARROW_MAX_ITERATIONS = 1
-MA_NARROW_COUNTER_TOP_K = 8
-MA_NARROW_OBSTACLE_CONFIDENCE = 0.6  # counter evidence at/above this confidence counts as an obstacle
-
-# Stage 3 external-query construction budget. A handful of focused queries
-# covers more angles than the literal claim wording while keeping S2 API
-# calls and the LLM role-judge batches bounded. The LLM-decomposed axis
-# queries are the highest-value external-search keys, so they are prioritized
-# over raw workspace signals and generic keywords.
-EXTERNAL_QUERY_MAX_TOTAL = 12  # max external search queries per run
-EXTERNAL_QUERY_AXIS_COUNT = 6  # LLM-generated axis queries to request
-EXTERNAL_QUERY_MAX_EXACT_LOOKUPS = 4  # LLM-selected method names to look up by exact title
-EXTERNAL_QUERY_SIGNAL_TYPES = ("method", "claim", "task", "limitation")
-EXTERNAL_QUERY_MIN_CONFIDENCE = 0.3  # skip low-confidence extracted signals
-EXTERNAL_QUERY_MAX_KEYWORDS = 2  # generic user keywords are lowest priority
-# Architectural components are not named research contributions, so they are
-# poor external-search keys; deprioritize them so real method names win.
-EXTERNAL_METHOD_COMPONENT_TOKENS = {
-    "pool", "module", "layer", "encoder", "decoder", "aggregation",
-    "step", "fourier", "regularization", "block",
-}
-
 # Domain exception classes live in their own module so they can be
 # imported by submodules (and tests) without dragging the whole service.
 from app.domains.discover.exceptions import (  # noqa: E402
@@ -249,6 +118,9 @@ class DiscoverService(OpportunityWorkflow):
         assert_protocol(self.retrieval, RetrievalPort)
         assert_protocol(self.external_search, ExternalSearchPort)
         assert_protocol(self.llm, LLMGatewayPort)
+        self.critic = CriticService(db, llm=self.llm, retrieval=self.retrieval, empty_response=self._empty_response)
+        self.synthesis = SynthesisService(db, llm=self.llm)
+        self.external = ExternalRetrievalService(db, llm=self.llm, external_search=self.external_search, service=self)
 
     # ---------------------------------------------------------------- runs
     def create_run(
@@ -458,120 +330,16 @@ class DiscoverService(OpportunityWorkflow):
         summary = (run.stage_summaries or {}).get("external_selection") or {}
         return summary.get("status") == "skipped"
 
-    def _external_candidate_state(self, run: DiscoverRun) -> dict[str, Any]:
-        rows = list(
-            self.db.execute(
-                select(DiscoverExternalCandidate)
-                .where(DiscoverExternalCandidate.discover_run_id == run.id)
-                .order_by(DiscoverExternalCandidate.rank)
-            ).scalars()
-        )
-        for row in rows:
-            if row.imported_paper_id and row.verification_status in {
-                "selected", "imported_pending_parse", "verification_failed"
-            }:
-                state = self._paper_pipeline_state(row.imported_paper_id)
-                if state["ready"]:
-                    row.verification_status = "verified"
-                    row.evidence_level = "full_text"
-                elif state["failed"]:
-                    row.verification_status = "verification_failed"
-                    row.snapshot_payload = {
-                        **(row.snapshot_payload or {}),
-                        "verification_error": state["error"],
-                    }
-                else:
-                    row.verification_status = "imported_pending_parse"
-        self.db.commit()
-        return {
-            "selected": sum(row.verification_status == "selected" for row in rows),
-            "pending": sum(row.verification_status == "imported_pending_parse" for row in rows),
-            "verified": sum(row.verification_status == "verified" for row in rows),
-            "failed": sum(row.verification_status in {"no_pdf", "import_failed", "verification_failed"} for row in rows),
-            "rows": rows,
-        }
+    # ---------------------------------------------------------- external (MA-1)
+    # Delegate to ExternalRetrievalService (app.domains.discover.external_retrieval).
+    def _external_candidate_state(self, run):
+        return self.external._external_candidate_state(run)
 
-    def _wait_for_fulltext(self, run: DiscoverRun, state: dict[str, Any]) -> dict[str, Any]:
-        self.db.refresh(run)
-        if self._cancelled(run):
-            return self._cancelled_result(run)
-        pending = int(state.get("pending", 0))
-        failed = int(state.get("failed", 0))
-        if pending:
-            run.status = "waiting_for_fulltext"
-            run.stage = "fulltext_verification"
-            run.progress = max(run.progress, 0.68)
-            run.verification_status = "in_progress"
-            summary = {
-                "status": "waiting_for_fulltext",
-                "pending": pending,
-                "verified": int(state.get("verified", 0)),
-                "failed": failed,
-                "message": "Waiting for PDF parsing, knowledge extraction, and vector indexing.",
-            }
-        else:
-            run.status = "waiting_for_user"
-            run.stage = "external_selection"
-            run.progress = max(run.progress, 0.62)
-            run.verification_status = "failed" if failed else "incomplete"
-            summary = {
-                "status": "waiting_for_user",
-                "pending": 0,
-                "verified": int(state.get("verified", 0)),
-                "failed": failed,
-                "message": "Select another candidate or retry the failed full-text verification.",
-            }
-        run.stage_summaries = {**(run.stage_summaries or {}), "fulltext_verification": summary}
-        self.db.commit()
-        if run.task_id:
-            try:
-                TaskService(self.db).transition(run.task_id, "waiting_for_user", progress=run.progress)
-            except Exception:
-                pass
-        return {
-            "run_id": run.id,
-            "status": run.status,
-            "waiting_for_fulltext": pending > 0,
-            "waiting_for_user": pending == 0,
-            "verification": summary,
-        }
+    def _wait_for_fulltext(self, run, state):
+        return self.external._wait_for_fulltext(run, state)
 
-    def _paper_pipeline_state(self, paper_id: str) -> dict[str, Any]:
-        paper = self.db.get(Paper, paper_id)
-        if paper is None or paper.is_deleted:
-            return {"ready": False, "failed": True, "error": "Imported paper was deleted or not found."}
-        if paper.parse_status in {"pending", "parsing"} or not paper.parsed_markdown_artifact_id:
-            return {"ready": False, "failed": False, "error": "PDF parsing is still running."}
-        if paper.parse_status == "failed":
-            return {"ready": False, "failed": True, "error": "PDF parsing failed."}
-        if paper.extract_status in {"pending", "extracting", "not_applicable"}:
-            return {"ready": False, "failed": False, "error": "Knowledge extraction is still running."}
-        if paper.extract_status == "failed":
-            return {"ready": False, "failed": True, "error": "Knowledge extraction failed."}
-        span_count = int(
-            self.db.execute(
-                select(func.count()).select_from(EvidenceSpan).where(EvidenceSpan.paper_id == paper.id)
-            ).scalar()
-            or 0
-        )
-        if span_count == 0:
-            return {"ready": False, "failed": True, "error": "No EvidenceSpan was extracted from the imported paper."}
-        embed_tasks = [
-            task
-            for task in self.db.execute(
-                select(Task).where(Task.task_type == "embed_chunks").order_by(Task.updated_at.desc())
-            ).scalars()
-            if (task.payload or {}).get("paper_id") == paper.id
-        ]
-        latest_embed = embed_tasks[0] if embed_tasks else None
-        if latest_embed is None or latest_embed.status in PIPELINE_PENDING_STATUSES:
-            return {"ready": False, "failed": False, "error": "Vector indexing is still running."}
-        if latest_embed.status == "failed":
-            return {"ready": False, "failed": True, "error": latest_embed.error or "Vector indexing failed."}
-        if latest_embed.status != "succeeded":
-            return {"ready": False, "failed": False, "error": "Vector indexing has not completed."}
-        return {"ready": True, "failed": False, "error": None}
-
+    def _paper_pipeline_state(self, paper_id):
+        return self.external._paper_pipeline_state(paper_id)
 
     def _corpus_snapshot(self, workspace_id: str) -> str:
         """Short corpus fingerprint for run audit (W2): papers + knowledge counts.
@@ -983,185 +751,26 @@ class DiscoverService(OpportunityWorkflow):
         agent_run.progress = run.progress
         self.db.commit()
 
-    # -------------------------------------------------------------- CriticAgent
-    def _critic_review(
-        self,
-        run: DiscoverRun,
-        claim_text: str,
-        candidates: list[dict[str, Any]],
-        supporting: RetrievalResponse,
-        similar: RetrievalResponse,
-        counter: RetrievalResponse,
-    ) -> list[dict[str, Any]]:
-        """Adversarially review proposed candidates (CriticAgent).
-
-        Returns per-candidate verdicts (keep/narrow/reject) with challenges,
-        used by the Orchestrator to down-weight or flag weak opportunities.
-        On LLM failure it returns ``[]`` — the run keeps the candidates and
-        records a critic-failed step, so the pipeline never blocks on the
-        critic.
-        """
-        if not candidates:
-            return []
-        briefs = [
-            f"[{i}] {str(c.get('title') or '')[:120]} — {str(c.get('problem_statement') or '')[:220]}"
-            for i, c in enumerate(candidates)
-        ]
-        evidence_brief = {
-            "supporting": [self._retrieval_payload(item) for item in supporting.items[:6]],
-            "similar": [self._retrieval_payload(item) for item in similar.items[:6]],
-            "counter": [self._retrieval_payload(item) for item in counter.items[:6]],
-        }
-        user_prompt = (
-            f"RESEARCH QUESTION: {claim_text[:300]}\n\n"
-            f"EVIDENCE LEDGER:\n{json.dumps(evidence_brief, ensure_ascii=False)}\n\n"
-            f"CANDIDATES:\n" + "\n".join(briefs)
-        )
-        try:
-            resp = self.llm.chat_completion(
-                [
-                    {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.0,
-                max_tokens=2000,
-                disable_thinking=True,
-            )
-            parsed = self._parse_json(resp.content)
-            reviews = parsed.get("reviews") if isinstance(parsed, dict) else None
-            if not isinstance(reviews, list):
-                logger.warning("discover.critic_bad_shape", raw_preview=(resp.content or "")[:200])
-                return []
-            out: list[dict[str, Any]] = []
-            for review in reviews:
-                if not isinstance(review, dict) or not isinstance(review.get("index"), int):
-                    continue
-                idx = int(review["index"])
-                if not (0 <= idx < len(candidates)):
-                    continue
-                verdict = str(review.get("verdict") or "keep").lower()
-                if verdict not in {"keep", "narrow", "reject"}:
-                    verdict = "keep"
-                out.append(
-                    {
-                        "index": idx,
-                        "verdict": verdict,
-                        "challenges": [s for s in review.get("challenges") or [] if isinstance(s, str)],
-                        "suggested_narrowing": str(review.get("suggested_narrowing") or ""),
-                    }
-                )
-            return out
-        except Exception as exc:
-            logger.warning("discover.critic_failed", run_id=run.id, error=str(exc))
-            return []
+    # -------------------------------------------------------------- CriticAgent (MA-1)
+    # Delegate to CriticService (app.domains.discover.critic). Kept as thin
+    # wrappers so existing callers (orchestrator + tests) continue to work.
+    def _critic_review(self, run, claim_text, candidates, supporting, similar, counter):
+        return self.critic.review(run, claim_text, candidates, supporting, similar, counter)
 
     @staticmethod
-    def _apply_critic_reviews(candidates: list[dict[str, Any]], critic_reviews: list[dict[str, Any]]) -> dict[str, int]:
-        """Attach critic reviews and down-weight weak candidates.
-
-        Returns verdict counts. ``reject`` candidates are down-weighted to at
-        most 0.3 confidence and ``narrow`` to 0.45, so they surface as weaker
-        opportunities without being silently dropped (HITL preserves them).
-        """
-        verdict_counts = {"keep": 0, "narrow": 0, "reject": 0}
-        for review in critic_reviews:
-            verdict = str(review.get("verdict") or "keep")
-            if verdict not in verdict_counts:
-                verdict = "keep"
-            verdict_counts[verdict] += 1
-            idx = review.get("index")
-            idx = int(idx) if isinstance(idx, int) else -1
-            if not (0 <= idx < len(candidates)):
-                continue
-            candidate = candidates[idx]
-            candidate["critic_review"] = review
-            confidence = float(candidate.get("confidence") or 0.5)
-            candidate["confidence"] = min(confidence, 0.3 if verdict == "reject" else (0.45 if verdict == "narrow" else confidence))
-        return verdict_counts
+    def _apply_critic_reviews(candidates, critic_reviews):
+        return apply_reviews(candidates, critic_reviews)
 
     @staticmethod
-    def _critic_challenges(critic_reviews: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
-        """Collect deduped challenges from narrow/reject verdicts (W2).
+    def _critic_challenges(critic_reviews, *, limit=3):
+        return collect_challenges(critic_reviews, limit=limit)
 
-        Fed back into the second synthesis pass as constraints so refined
-        opportunities explicitly respond to the critic's gaps.
-        """
-        seen: set[str] = set()
-        out: list[str] = []
-        for review in critic_reviews:
-            if str(review.get("verdict") or "keep") not in {"narrow", "reject"}:
-                continue
-            for ch in review.get("challenges") or []:
-                s = str(ch).strip()
-                if s and s not in seen:
-                    seen.add(s)
-                    out.append(s)
-                    if len(out) >= limit:
-                        return out
-        return out
-
-    def _narrowing_pass(self, run: DiscoverRun, candidates: list[dict[str, Any]], critic_reviews: list[dict[str, Any]]) -> int:
-        """One bounded narrowing pass for Critic-flagged "narrow" candidates.
-
-        For each narrow candidate with a suggested narrowing, runs a focused
-        counter-evidence retrieval on the narrowed focus and records whether an
-        obstacle was found. The candidate is never silently dropped — the
-        outcome is recorded on ``candidate["narrowing_pass"]`` so HITL can see
-        the narrowing trail. Returns the number of candidates narrowed.
-        """
-        by_index: dict[int, dict[str, Any]] = {}
-        for review in critic_reviews:
-            idx = review.get("index")
-            if isinstance(idx, int):
-                by_index[idx] = review
-        narrow = [
-            (idx, r)
-            for idx, r in by_index.items()
-            if r.get("verdict") == "narrow" and r.get("suggested_narrowing") and 0 <= idx < len(candidates)
-        ]
-        if not narrow:
-            return 0
-        config = DiscoverConfig.model_validate(run.config or {})
-        excluded = {claim_paper} if (claim_paper := (run.input_payload or {}).get("claim_paper_id")) else set()
-        narrowed = 0
-        for idx, review in narrow:
-            candidate = candidates[idx]
-            narrowing = str(review.get("suggested_narrowing") or "").strip()
-            base = str(candidate.get("candidate_research_question") or candidate.get("title") or "")
-            query = f"{base[:300]} {narrowing[:120]}".strip()
-            if not query:
-                continue
-            try:
-                counter = self.retrieval.find_counter_evidence(
-                    run.workspace_id,
-                    query,
-                    MA_NARROW_COUNTER_TOP_K,
-                    use_reranker=config.use_reranker,
-                    use_judge=config.use_judge,
-                    exclude_paper_ids=excluded or None,
-                )
-            except Exception as exc:
-                logger.warning("discover.narrowing_retrieval_failed", run_id=run.id, error=str(exc))
-                counter = self._empty_response(run.workspace_id, query, "counter_evidence")
-            obstacle = self._narrowing_obstacle(counter)
-            candidate["narrowing_pass"] = {
-                "query": query[:300],
-                "counter_candidates": len(counter.items),
-                "obstacle": obstacle,
-                "outcome": "obstacle_found" if obstacle else "direction_clear",
-            }
-            if obstacle:
-                candidate["confidence"] = min(float(candidate.get("confidence") or 0.5), 0.25)
-            narrowed += 1
-        return narrowed
+    def _narrowing_pass(self, run, candidates, critic_reviews):
+        return self.critic.narrowing_pass(run, candidates, critic_reviews)
 
     @staticmethod
-    def _narrowing_obstacle(counter: RetrievalResponse) -> bool:
-        """True when focused counter evidence already covers the narrowed claim."""
-        for item in counter.items:
-            if item.judgement in {"contradicts", "qualifies"} and (item.judgement_confidence or 0.0) >= MA_NARROW_OBSTACLE_CONFIDENCE:
-                return True
-        return False
+    def _narrowing_obstacle(counter):
+        return narrowing_obstacle(counter)
 
     def _stage(self, run: DiscoverRun, stage: str, progress: float, summary: dict[str, Any] | None = None) -> None:
         self.db.refresh(run)
@@ -1201,718 +810,56 @@ class DiscoverService(OpportunityWorkflow):
         excluded = {claim.paper_id} if claim and claim.paper_id else set()
         return self.retrieval.find_counter_evidence(run.workspace_id, text, config.top_k, use_reranker=config.use_reranker, use_judge=config.use_judge, exclude_paper_ids=excluded)
 
-    def _external_verify(self, run: DiscoverRun, queries: list[str], exact_lookups: list[str] | None = None) -> int:
-        """Search Semantic Scholar across several queries and merge candidates.
+    def _external_verify(self, run, queries, exact_lookups=None):
+        return self.external._external_verify(run, queries, exact_lookups)
 
-        ``queries[0]`` is the run's research question (claim/topic); the rest
-        are extra angles built by ``_external_query_plan``. Results are
-        deduped by ``external_paper_id`` and assigned fresh sequential ranks.
-        Each candidate records the query that surfaced it, so the audit trail
-        shows which workspace signal produced which candidate.
+    def _build_external_queries(self, run, primary):
+        return self.external._build_external_queries(run, primary)
 
-        ``exact_lookups`` are method names searched by exact title with
-        title-verification — relevance search can be diluted by axis-suffix
-        terms, so LLM-selected method names get a precise, verified pass whose
-        hits are prepended to the merged candidates.
-        """
-        existing = int(self.db.execute(select(func.count()).select_from(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalar() or 0)
-        if existing:
-            rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id)).scalars())
-            external_summary = (run.stage_summaries or {}).get("external_search")
-            if not isinstance(external_summary, dict) or external_summary.get("status") not in {
-                "succeeded",
-                "succeeded_partial",
-                "succeeded_empty",
-            }:
-                run.stage_summaries = {
-                    **(run.stage_summaries or {}),
-                    "external_search": {
-                        **(external_summary if isinstance(external_summary, dict) else {}),
-                        "status": "succeeded",
-                        "executed": True,
-                        "candidate_count": existing,
-                    },
-                }
-                self.db.commit()
-            self._external_candidate_state(run)
-            return existing
-        queries = [q.strip() for q in queries if q and q.strip()]
-        if not queries:
-            run.verification_status = "incomplete"
-            self.db.commit()
-            return 0
-        primary = queries[0]
-        config = DiscoverConfig.model_validate(run.config or {})
-        top_k = config.top_k
-        scope = DiscoverScope.model_validate(run.scope or {})
-        year = None
-        if scope.year_from is not None or scope.year_to is not None:
-            year = f"{scope.year_from or ''}-{scope.year_to or ''}"
-        per_query: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = []
-        query_failures: list[dict[str, Any]] = []
-        for position, query in enumerate(queries):
-            try:
-                limit = top_k if position == 0 else max(3, top_k // 2)
-                raw = self.external_search.search(
-                    query=query[:200],
-                    fields=S2_FIELDS,
-                    sort="relevance",
-                    limit=limit,
-                    year=year,
-                )
-                seen_in_query: set[str] = set()
-                q_results: list[tuple[str, dict[str, Any]]] = []
-                for item in raw.get("data") or []:
-                    if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
-                        continue
-                    pid = str(item["paperId"])
-                    if pid not in seen_in_query:
-                        seen_in_query.add(pid)
-                        q_results.append((pid, item))
-                per_query.append((query, q_results))
-            except SemanticScholarError as exc:
-                query_failures.append(
-                    {
-                        "query": query[:120],
-                        "error": str(exc),
-                        "status_code": exc.status_code,
-                        "retryable": exc.status_code in {429, 502, 504},
-                    }
-                )
-                logger.warning(
-                    "discover.external_query_failed",
-                    run_id=run.id,
-                    query=query[:120],
-                    error=str(exc),
-                )
+    def _external_query_plan(self, run, primary):
+        return self.external._external_query_plan(run, primary)
 
-        if not per_query:
-            last_failure = query_failures[-1] if query_failures else {}
-            run.verification_status = "failed"
-            run.stage_summaries = {
-                **(run.stage_summaries or {}),
-                "external_search": {
-                    "status": "failed",
-                    "error": last_failure.get("error", "all external search queries failed"),
-                    "retryable": any(item["retryable"] for item in query_failures),
-                    "executed": False,
-                    "queries": [q[:120] for q in queries],
-                    "successful_query_count": 0,
-                    "failed_query_count": len(query_failures),
-                    "query_failures": query_failures,
-                },
-            }
-            self.db.commit()
-            logger.warning(
-                "discover.external_search_failed",
-                run_id=run.id,
-                error=last_failure.get("error", "all external search queries failed"),
-            )
-            return 0
+    def _axis_queries_from_llm(self, run, primary):
+        return self.external._axis_queries_from_llm(run, primary)
 
-        # Exact-title lookups for LLM-selected method names (title-verified).
-        # Best-effort: a failed lookup only skips that name, never fails the run.
-        lookup_hits: list[tuple[str, dict[str, Any], str]] = []
-        for name in exact_lookups or []:
-            name = (name or "").strip()
-            if not name:
-                continue
-            try:
-                raw = self.external_search.search(
-                    query=name[:200],
-                    fields=S2_FIELDS,
-                    sort="relevance",
-                    limit=2,
-                    year=year,
-                )
-            except SemanticScholarError:
-                continue
-            for item in raw.get("data") or []:
-                if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
-                    continue
-                if not self._title_verified(name, str(item["title"])):
-                    continue
-                lookup_hits.append((str(item["paperId"]), item, f"exact: {name[:120]}"))
-                break  # one verified paper per lookup name
+    def _external_query_signal_texts(self, workspace_id, *, max_methods=24, max_limitations=6, max_claims=6):
+        return self.external._external_query_signal_texts(workspace_id, max_methods=max_methods, max_limitations=max_limitations, max_claims=max_claims)
 
-        # Round-robin interleave across queries so each query's top hits reach
-        # the merged top-K — a primary-first merge would hide extra-query
-        # discoveries below rank 10. Dedupe globally, attributing each paper
-        # to the query that surfaced it earliest. Verified lookup hits are
-        # prepended since they are the most certain matches.
-        merged: list[tuple[str, dict[str, Any], str]] = []
-        seen: set[str] = set()
-        for pid, item, source_query in lookup_hits:
-            if pid not in seen:
-                seen.add(pid)
-                merged.append((pid, item, source_query))
-        round_index = 0
-        while True:
-            added_this_round = False
-            for source_query, q_results in per_query:
-                if round_index < len(q_results):
-                    pid, item = q_results[round_index]
-                    if pid not in seen:
-                        seen.add(pid)
-                        merged.append((pid, item, source_query[:200]))
-                    added_this_round = True
-            if not added_this_round:
-                break
-            round_index += 1
+    def _external_method_full_names(self, workspace_id, *, max_names=40):
+        return self.external._external_method_full_names(workspace_id, max_names=max_names)
 
-        rows: list[DiscoverExternalCandidate] = []
-        for rank, (pid, item, source_query) in enumerate(merged, start=1):
-            authors = [a.get("name", "") for a in item.get("authors") or [] if isinstance(a, dict) and a.get("name")]
-            row = DiscoverExternalCandidate(
-                id=str(uuid4()), discover_run_id=run.id, query=source_query, rank=rank,
-                external_paper_id=pid, title=str(item["title"]), authors=authors,
-                year=item.get("year") if isinstance(item.get("year"), int) else None,
-                abstract=item.get("abstract") if isinstance(item.get("abstract"), str) else None,
-                open_access_pdf=item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else None,
-                role=self._external_role(primary, item), role_confidence=0.35,
-                evidence_level="metadata_only", verification_status="unverified", snapshot_payload=item,
-            )
-            rows.append(row)
-        self.db.add_all(rows)
-        run.verification_status = "in_progress" if rows else "incomplete"
-        search_status = (
-            "succeeded_partial"
-            if query_failures
-            else ("succeeded" if rows else "succeeded_empty")
-        )
-        run.stage_summaries = {
-            **(run.stage_summaries or {}),
-            "external_search": {
-                "status": search_status,
-                "executed": True,
-                "candidate_count": len(rows),
-                "queries": [q[:120] for q in queries],
-                "successful_query_count": len(per_query),
-                "failed_query_count": len(query_failures),
-                "query_failures": query_failures,
-            },
-        }
-        self.db.commit()
-        # Refine candidate roles (similar/overlap/qualify/contradict/unknown)
-        # with the LLM — the heuristic only gives similar/unknown. Failure
-        # keeps the heuristic role; candidates remain auditable. Roles are
-        # judged against the research question (the primary query).
-        if rows:
-            self._judge_external_roles(run, primary, rows)
-        return len(rows)
+    def _external_query_signal_items(self, workspace_id, types=None):
+        return self.external._external_query_signal_items(workspace_id, types)
 
-    def _build_external_queries(self, run: DiscoverRun, primary: str) -> list[str]:
-        """Backward-compatible list wrapper around ``_external_query_plan``."""
-        return self._external_query_plan(run, primary)[0]
+    def _external_query_text(self, item):
+        return self.external._external_query_text(item)
 
-    def _external_query_plan(self, run: DiscoverRun, primary: str) -> tuple[list[str], list[str]]:
-        """Build external-search queries and exact-lookup names.
+    def _import_selected_candidates(self, run):
+        return self.external._import_selected_candidates(run)
 
-        Returns ``(queries, exact_lookups)``. The primary query is the run's
-        claim/topic (the research question itself). The LLM decomposes the
-        research question into concise axis queries (foundational methods,
-        counter-evidence, evaluation/critique, domain axis) and picks up to 4
-        method names to look up by exact title. On LLM failure, or to fill the
-        remaining budget, workspace-derived signals are used: method names,
-        then limitations/claims/tasks, then generic user keywords last.
-        Queries are deduped and capped by ``EXTERNAL_QUERY_MAX_TOTAL``.
-        """
-        queries: list[str] = []
-        seen: set[str] = set()
-
-        def add(text: str) -> bool:
-            text = text.strip()
-            if not text or text.lower() in seen:
-                return False
-            queries.append(text[:200])
-            seen.add(text.lower())
-            return True
-
-        axis, lookups = self._axis_queries_from_llm(run, primary)
-        add(primary)
-        for axis_query in axis:
-            add(axis_query)
-            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
-                return queries, lookups
-        # Ground method names the LLM referenced: an embellished query like
-        # "graph information bottleneck sufficiency necessity" surfaces
-        # rationalization papers but often misses the method's own paper. The
-        # exact method full-name matches S2 relevance far better, so each
-        # method name mentioned in an axis query is also added as a clean
-        # query (deduped).
-        method_names = self._external_method_full_names(run.workspace_id)
-        for axis_query in axis:
-            axis_lower = axis_query.lower()
-            for name in method_names:
-                if len(name) >= 4 and name.lower() in axis_lower:
-                    if add(name) and len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
-                        return queries, lookups
-        for item in self._external_query_signal_items(run.workspace_id, types=("method",)):
-            add(self._external_query_text(item))
-            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
-                return queries, lookups
-        for item in self._external_query_signal_items(run.workspace_id, types=("limitation", "claim", "task")):
-            add(self._external_query_text(item))
-            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
-                return queries, lookups
-        keyword_count = 0
-        for kw in (run.input_payload or {}).get("keywords") or []:
-            if not isinstance(kw, str) or keyword_count >= EXTERNAL_QUERY_MAX_KEYWORDS:
-                continue
-            if add(kw):
-                keyword_count += 1
-            if len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
-                break
-        return queries, lookups
-
-    def _axis_queries_from_llm(self, run: DiscoverRun, primary: str) -> tuple[list[str], list[str]]:
-        """Decompose the research question into external-search queries (LLM).
-
-        Long prose is a poor relevance-search query. The LLM turns the
-        research question into concise keyword-style queries that target the
-        foundational / overlapping / counter / evaluation literature, using
-        the workspace's extracted methods and limitations as context. It also
-        picks up to 4 workspace method names to look up by exact title
-        (``exact_lookups``). On LLM failure or a malformed response it returns
-        ``([], [])`` so the caller falls back to workspace-signal queries.
-        """
-        signals = self._external_query_signal_texts(run.workspace_id)
-        user_prompt = (
-            f"RESEARCH QUESTION: {primary[:300]}\n\n"
-            f"WORKSPACE SIGNALS (methods / limitations / claims to consider):\n"
-            f"{signals if signals else '(none extracted)'}\n\n"
-            f"Generate {EXTERNAL_QUERY_AXIS_COUNT} concise external-search queries "
-            f"(3-8 words each). Include at least 2 queries derived from the "
-            f"workspace method names, expanding abbreviations to their full names."
-        )
-        try:
-            resp = self.llm.chat_completion(
-                [
-                    {"role": "system", "content": EXTERNAL_QUERY_AXIS_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.0,
-                max_tokens=800,
-                disable_thinking=True,
-            )
-            parsed = self._parse_json(resp.content)
-            if not isinstance(parsed, dict):
-                logger.warning("discover.external_axis_query_bad_shape", raw_preview=(resp.content or "")[:200])
-                return [], []
-            queries: list[str] = []
-            for q in parsed.get("queries") or []:
-                if isinstance(q, str) and q.strip():
-                    queries.append(q.strip())
-            lookups: list[str] = []
-            for name in parsed.get("exact_lookups") or []:
-                if isinstance(name, str) and name.strip():
-                    lookups.append(name.strip())
-            return (
-                queries[:EXTERNAL_QUERY_AXIS_COUNT],
-                lookups[:EXTERNAL_QUERY_MAX_EXACT_LOOKUPS],
-            )
-        except Exception as exc:
-            logger.warning("discover.external_axis_query_failed", error=str(exc))
-            return [], []
-
-    def _external_query_signal_texts(self, workspace_id: str, *, max_methods: int = 24, max_limitations: int = 6, max_claims: int = 6) -> str:
-        """Compact workspace signals rendered for the axis-query LLM prompt."""
-        lines: list[str] = []
-        methods = self._external_query_signal_items(workspace_id, types=("method",))[:max_methods]
-        if methods:
-            lines.append("Methods: " + "; ".join(self._external_query_text(m) for m in methods))
-        limitations = self._external_query_signal_items(workspace_id, types=("limitation",))[:max_limitations]
-        if limitations:
-            lines.append("Limitations: " + "; ".join(self._external_query_text(lim) for lim in limitations))
-        claims = self._external_query_signal_items(workspace_id, types=("claim",))[:max_claims]
-        if claims:
-            lines.append("Claims: " + "; ".join(self._external_query_text(cl) for cl in claims))
-        return "\n".join(lines)
-
-    def _external_method_full_names(self, workspace_id: str, *, max_names: int = 40) -> list[str]:
-        """Deduplicated method full-name queries used to ground LLM axis queries."""
-        names: list[str] = []
-        seen: set[str] = set()
-        for item in self._external_query_signal_items(workspace_id, types=("method",)):
-            name = self._external_query_text(item).strip()
-            key = name.lower()
-            if len(name) < 4 or key in seen:
-                continue
-            seen.add(key)
-            names.append(name)
-            if len(names) >= max_names:
-                break
-        return names
-
-    def _external_query_signal_items(self, workspace_id: str, types: tuple[str, ...] | None = None) -> list[KnowledgeItem]:
-        """Workspace items ordered by usefulness for external queries.
-
-        Methods first (named entities → strongest external-search keys),
-        deprioritizing architectural components (Pool/Module/Layer) and
-        parenthesized sub-module aliases ("Self-Denoising (SD)") so real named
-        methods (GIB, IRM, SubgraphX, GSAT…) surface; then limitations (caveats
-        → counter-evidence), claims, tasks. Rejected and low-confidence items
-        are skipped so a noisy extraction cannot pollute the external search.
-        """
-        types = types or EXTERNAL_QUERY_SIGNAL_TYPES
-        items = list(
-            self.db.execute(
-                select(KnowledgeItem).where(
-                    KnowledgeItem.workspace_id == workspace_id,
-                    KnowledgeItem.is_deleted.is_(False),
-                    KnowledgeItem.status != "rejected",
-                    KnowledgeItem.type.in_(types),
-                    KnowledgeItem.confidence >= EXTERNAL_QUERY_MIN_CONFIDENCE,
-                )
-            ).scalars()
-        )
-        type_rank = {"limitation": 0, "claim": 1, "task": 2}
-
-        def is_component(item: KnowledgeItem) -> bool:
-            words = {w.lower() for w in re.findall(r"[A-Za-z]+", item.canonical_name)}
-            return bool(words & EXTERNAL_METHOD_COMPONENT_TOKENS)
-
-        def is_parens_alias(item: KnowledgeItem) -> bool:
-            return "(" in item.canonical_name or ")" in item.canonical_name
-
-        def priority(item: KnowledgeItem) -> tuple[float, float]:
-            if item.type == "method":
-                if is_component(item):
-                    return (3.0, -float(item.confidence or 0.0))
-                if is_parens_alias(item):
-                    return (2.0, -float(item.confidence or 0.0))
-                return (0.0, -float(item.confidence or 0.0))
-            return (type_rank.get(item.type, 9) + 10.0, -float(item.confidence or 0.0))
-
-        items.sort(key=priority)
-        return items
-
-    def _external_query_text(self, item: KnowledgeItem) -> str:
-        """Render a KnowledgeItem as an external-search query string.
-
-        Methods render as their descriptive name: a multi-word canonical name
-        is used as-is; an all-caps abbreviation is expanded from the leading
-        noun phrase of its description (e.g. ``IRM`` → "Invariant Risk
-        Minimization") when available. Limitations render as their short
-        canonical name (caveats → counter-evidence); claims render as their
-        statement.
-        """
-        content = item.content or {}
-        if item.type == "claim":
-            return self._claim_text(item)
-        if item.type == "method":
-            name = item.canonical_name.strip()
-            if len(name.split()) >= 2 or not re.fullmatch(r"[A-Z]{2,5}", name):
-                return name
-            description = content.get("description")
-            if isinstance(description, str) and description.strip():
-                match = re.match(r"[A-Z][a-zA-Z0-9-]*(?:\s+[A-Z][a-zA-Z0-9-]*){1,3}", description.strip())
-                full = match.group(0) if match else ""
-                first = full.split()[0].lower() if full else ""
-                if full and len(full.split()) >= 2 and full.lower() != name.lower() and first not in {"a", "an", "the"}:
-                    return full
-            return name
-        # limitations and tasks: short canonical names carry the most signal;
-        # long descriptions dilute S2 relevance matching.
-        return item.canonical_name.strip()
-
-    def _import_selected_candidates(self, run: DiscoverRun) -> None:
-        """Best-effort import of user-selected OA PDFs.
-
-        Import is deliberately explicit: metadata-only candidates never become
-        full-text evidence. Parsing/indexing remains in the existing worker
-        pipeline and the candidate stays visibly pending until it completes.
-        """
-        client = SemanticScholarClient()
-        rows = list(self.db.execute(select(DiscoverExternalCandidate).where(DiscoverExternalCandidate.discover_run_id == run.id, DiscoverExternalCandidate.verification_status == "selected")).scalars())
-        for row in rows:
-            if row.imported_paper_id:
-                self._ensure_paper_pipeline(run.workspace_id, row.imported_paper_id)
-                continue
-            raw = row.snapshot_payload or {}
-            pdf = row.open_access_pdf or {}
-            pdf_url = pdf.get("url") if isinstance(pdf, dict) else None
-            if not isinstance(pdf_url, str) or not pdf_url.strip():
-                external_ids = raw.get("externalIds") if isinstance(raw.get("externalIds"), dict) else {}
-                arxiv_id = external_ids.get("ArXiv") or external_ids.get("ARXIV")
-                if isinstance(arxiv_id, str) and arxiv_id.strip():
-                    arxiv_id = arxiv_id.removeprefix("arXiv:").removesuffix(".pdf").strip()
-                    pdf_url = f"https://arxiv.org/pdf/{quote(arxiv_id, safe='/')}"
-            if not isinstance(pdf_url, str):
-                row.verification_status = "no_pdf"
-                continue
-            pdf_url = self._normalize_pdf_url(pdf_url)
-            if not pdf_url:
-                row.verification_status = "no_pdf"
-                continue
-            try:
-                content = client.download_pdf(pdf_url)
-                paper_service = PaperService(self.db)
-                paper = paper_service.find_by_external_paper_id(workspace_id=run.workspace_id, external_paper_id=row.external_paper_id)
-                if paper is None:
-                    paper = paper_service.create_from_metadata(workspace_id=run.workspace_id, payload=PaperCreate(title=row.title, authors=row.authors, year=row.year, abstract=row.abstract), source="semantic_scholar", external_paper_id=row.external_paper_id)
-                if paper.primary_artifact_id is None:
-                    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", row.title)[:120] or row.external_paper_id
-                    paper = paper_service.attach_pdf_to_existing(workspace_id=run.workspace_id, paper_id=paper.id, filename=f"{filename}.pdf", content=content, mime_type="application/pdf")
-                row.imported_paper_id = paper.id
-                row.verification_status = "imported_pending_parse"
-                row.evidence_level = "metadata_only"
-            except (SemanticScholarError, ValueError) as exc:
-                row.verification_status = "import_failed"
-                row.snapshot_payload = {**raw, "import_error": str(exc)[:500]}
-        self.db.commit()
+    def _ensure_paper_pipeline(self, workspace_id, paper_id):
+        return self.external._ensure_paper_pipeline(workspace_id, paper_id)
 
     @staticmethod
-    def _normalize_pdf_url(url: str) -> str:
-        """Normalize an open-access PDF URL for download (W1).
-
-        Semantic Scholar occasionally returns `http://` or scheme-relative
-        (`//host/...`) URLs, and arXiv `abs` pages are HTML, not PDFs.
-        ``download_pdf`` requires HTTPS, so normalize to a fetchable absolute
-        ``https://`` URL here; non-fetchable schemes fall through to ``no_pdf``.
-        """
-        url = (url or "").strip()
-        if not url:
-            return ""
-        if url.startswith("//"):
-            url = "https:" + url
-        elif url.lower().startswith("http://"):
-            url = "https://" + url[len("http://"):]
-        if url.startswith("https://arxiv.org/abs/"):
-            url = url.replace("https://arxiv.org/abs/", "https://arxiv.org/pdf/")
-        return url
-
-    def _ensure_paper_pipeline(self, workspace_id: str, paper_id: str) -> None:
-        """Safely restart only the missing/failed existing pipeline stage."""
-        paper = self.db.get(Paper, paper_id)
-        if paper is None or paper.is_deleted:
-            return
-        active = list(
-            self.db.execute(
-                select(Task).where(
-                    Task.workspace_id == workspace_id,
-                    Task.status.in_(PIPELINE_PENDING_STATUSES),
-                    Task.is_deleted.is_(False),
-                )
-            ).scalars()
-        )
-
-        def has_active(task_type: str) -> bool:
-            return any(
-                task.task_type == task_type
-                and (task.payload or {}).get("paper_id") == paper_id
-                for task in active
-            )
-
-        if paper.primary_artifact_id and paper.parse_status in {"pending", "failed", "parsing"} and not has_active("parse_pdf"):
-            from app.workers.tasks.parse_pdf import spawn_parse_pdf_task
-
-            paper.parse_status = "pending"
-            self.db.commit()
-            spawn_parse_pdf_task(self.db, paper_id, workspace_id)
-            return
-        if paper.parsed_markdown_artifact_id and paper.extract_status in {"pending", "failed", "extracting", "not_applicable"} and not has_active("extract_knowledge"):
-            from app.workers.tasks.extract_knowledge import spawn_extract_knowledge
-
-            spawn_extract_knowledge(self.db, paper_id, workspace_id)
-        if paper.parsed_text_artifact_id and not has_active("embed_chunks"):
-            latest = next(
-                (
-                    task
-                    for task in self.db.execute(
-                        select(Task).where(Task.task_type == "embed_chunks").order_by(Task.updated_at.desc())
-                    ).scalars()
-                    if (task.payload or {}).get("paper_id") == paper_id
-                ),
-                None,
-            )
-            if latest is None or latest.status == "failed":
-                from app.workers.tasks.embed_chunks import spawn_embed_chunks
-
-                spawn_embed_chunks(self.db, paper_id, workspace_id)
+    def _normalize_pdf_url(url):
+        return normalize_pdf_url(url)
 
     @staticmethod
-    def _external_role(query: str, item: dict[str, Any]) -> str:
-        haystack = f"{item.get('title', '')} {item.get('abstract', '')}".lower()
-        tokens = [token for token in re.findall(r"[a-z0-9]{4,}", query.lower()) if token not in {"with", "from", "under", "using"}]
-        overlap = sum(token in haystack for token in tokens)
-        return "similar" if overlap >= max(1, len(tokens) // 4) else "unknown"
+    def _external_role(query, item):
+        return external_role(query, item)
 
     @staticmethod
-    def _title_verified(name: str, title: str) -> bool:
-        """Accept an exact-title lookup hit when the query words appear in the title."""
-        query_words = set(re.findall(r"[a-z0-9]+", name.lower()))
-        title_words = set(re.findall(r"[a-z0-9]+", title.lower()))
-        if len(query_words) < 2:
-            return False
-        return query_words.issubset(title_words)
+    def _title_verified(name, title):
+        return title_verified(name, title)
 
-    def _judge_external_roles(
-        self,
-        run: DiscoverRun,
-        query: str,
-        candidates: list[DiscoverExternalCandidate],
-    ) -> None:
-        """LLM-refine external candidate roles.
+    def _judge_external_roles(self, run, query, candidates):
+        return self.external._judge_external_roles(run, query, candidates)
 
-        ``_external_role`` is a cheap word-overlap heuristic that only yields
-        similar/unknown. Stage 3 requires discriminating similar / overlap /
-        qualify / contradict / unknown so Discover can tell which external
-        paper might *challenge* an opportunity, not just resemble it.
+    def _judge_external_fulltext_roles(self, run, query):
+        return self.external._judge_external_fulltext_roles(run, query)
 
-        This batch-judges candidates against the research question using the
-        LLM gateway. On failure it silently keeps the heuristic role (the
-        candidate rows already carry a role from ``_external_role``).
-        """
-        if not candidates:
-            return
-        # Reuse the injected LLM port; fall back to the heuristic result if
-        # the LLM call throws (candidates already have a heuristic role).
-        gateway = self.llm
-        batch_size = 8
-        role_map = {
-            "similar": "similar",
-            "overlaps": "overlap",
-            "overlap": "overlap",
-            "qualifies": "qualifies",
-            "qualify": "qualifies",
-            "contradicts": "contradicts",
-            "contradict": "contradicts",
-            "unknown": "unknown",
-        }
-
-        for start in range(0, len(candidates), batch_size):
-            batch = candidates[start : start + batch_size]
-            lines = [
-                f"[{i}] {c.title or ''} — {(c.abstract or '')[:400]}"
-                for i, c in enumerate(batch)
-            ]
-            user_prompt = (
-                f"RESEARCH QUESTION: {query[:300]}\n\nCANDIDATES:\n" + "\n".join(lines)
-            )
-            try:
-                resp = gateway.chat_completion(
-                    [
-                        {"role": "system", "content": EXTERNAL_ROLE_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.0,
-                    max_tokens=2000,
-                    disable_thinking=True,
-                )
-                parsed = self._parse_json(resp.content)
-                items = parsed.get("roles") if isinstance(parsed, dict) else None
-                if not isinstance(items, list):
-                    logger.warning("discover.external_role_bad_shape", raw_preview=(resp.content or "")[:200])
-                    continue
-                for hit in items:
-                    if not isinstance(hit, dict):
-                        continue
-                    idx = hit.get("index")
-                    if not isinstance(idx, int) or not (0 <= idx < len(batch)):
-                        continue
-                    role = str(hit.get("role", "unknown")).lower()
-                    candidate = batch[idx]
-                    candidate.role = role_map.get(role, "unknown")
-                    try:
-                        candidate.role_confidence = float(hit.get("confidence", 0.3))
-                    except (TypeError, ValueError):
-                        candidate.role_confidence = 0.3
-            except Exception as exc:
-                logger.warning("discover.external_role_judge_failed", error=str(exc))
-                # Keep the heuristic role (already set on the rows) on failure.
-        # Persist refined roles once, after all batches.
-        self.db.commit()
-
-    def _judge_external_fulltext_roles(self, run: DiscoverRun, query: str) -> int:
-        """Best-effort re-judge roles of verified full-text candidates (W1).
-
-        Metadata-level roles (title+abstract) are refined once the imported
-        paper's parsed text is available. Idempotent: rows already marked
-        ``fulltext_role_judged`` are skipped; an LLM failure keeps the
-        metadata role and marks ``fulltext_role_tried`` so a later resume can
-        retry without looping forever.
-        """
-        rows = list(
-            self.db.execute(
-                select(DiscoverExternalCandidate).where(
-                    DiscoverExternalCandidate.discover_run_id == run.id,
-                    DiscoverExternalCandidate.verification_status == "verified",
-                    DiscoverExternalCandidate.imported_paper_id.is_not(None),
-                )
-            ).scalars()
-        )
-        to_judge = [
-            row for row in rows if not (row.snapshot_payload or {}).get("fulltext_role_judged")
-        ]
-        if not to_judge:
-            return 0
-        role_map = {
-            "similar": "similar",
-            "overlap": "overlap",
-            "overlaps": "overlap",
-            "qualifies": "qualifies",
-            "qualify": "qualifies",
-            "contradicts": "contradicts",
-            "contradict": "contradicts",
-            "unknown": "unknown",
-        }
-        judged = 0
-        for row in to_judge:
-            paper = self.db.get(Paper, row.imported_paper_id)
-            if paper is None or not paper.parsed_text_artifact_id:
-                continue
-            text = self._read_paper_text(paper)[:4000]
-            if not text.strip():
-                continue
-            try:
-                resp = self.llm.chat_completion(
-                    [
-                        {"role": "system", "content": EXTERNAL_FULLTEXT_ROLE_SYSTEM_PROMPT},
-                        {
-                            "role": "user",
-                            "content": f"RESEARCH QUESTION: {query[:300]}\n\nFULL TEXT:\n{text}",
-                        },
-                    ],
-                    temperature=0.0,
-                    max_tokens=500,
-                    disable_thinking=True,
-                )
-                parsed = self._parse_json(resp.content)
-                role = str((parsed or {}).get("role", "unknown")).lower()
-                row.role = role_map.get(role, "unknown")
-                try:
-                    row.role_confidence = float((parsed or {}).get("confidence", 0.5))
-                except (TypeError, ValueError):
-                    row.role_confidence = 0.5
-                row.snapshot_payload = {
-                    **(row.snapshot_payload or {}),
-                    "fulltext_role_judged": True,
-                    "fulltext_role": row.role,
-                }
-                judged += 1
-            except Exception as exc:
-                logger.warning("discover.external_fulltext_role_failed", error=str(exc))
-                row.snapshot_payload = {
-                    **(row.snapshot_payload or {}),
-                    "fulltext_role_tried": True,
-                }
-        self.db.commit()
-        return judged
-
-    def _read_paper_text(self, paper: Paper) -> str:
-        """Read the imported paper's parsed plain text (best-effort)."""
-        if not paper.parsed_text_artifact_id:
-            return ""
-        artifact = self.db.get(Artifact, paper.parsed_text_artifact_id)
-        if artifact is None or artifact.is_deleted:
-            return ""
-        try:
-            return ArtifactService(self.db).resolve_abs_path(artifact).read_text(
-                encoding="utf-8", errors="replace"
-            )
-        except OSError:
-            return ""
+    def _read_paper_text(self, paper):
+        return self.external._read_paper_text(paper)
 
     def _workspace_supporting(
         self,
@@ -2155,7 +1102,9 @@ class DiscoverService(OpportunityWorkflow):
         overlap = len(span_tokens & item_tokens)
         return overlap >= 3 and overlap / max(1, len(span_tokens)) >= 0.5
 
-    # ---------------------------------------------------------- synthesis
+    # ---------------------------------------------------------- synthesis (MA-1)
+    # Delegate to SynthesisService (app.domains.discover.synthesis). Kept as
+    # thin wrappers so existing callers (orchestrator + tests) continue to work.
     def _synthesize_candidates(
         self,
         run: DiscoverRun,
@@ -2169,96 +1118,20 @@ class DiscoverService(OpportunityWorkflow):
         *,
         critic_feedback: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        evidence = {
-            "supporting_evidence": [self._retrieval_payload(item) for item in supporting.items[:12]],
-            "external_full_text": [self._retrieval_payload(item) for item in external_fulltext.items[:12]],
-            "similar_work": [self._retrieval_payload(item) for item in similar.items[:12]],
-            "counter_evidence": [self._retrieval_payload(item) for item in counter.items[:12]],
-            "gate": gate,
-            "constraints": (run.input_payload or {}).get("constraints"),
-            "critic_feedback": critic_feedback or [],
-        }
-        prompt = (
-            "You are a conservative research-discovery agent. Return ONLY JSON with an "
-            "opportunities array. Each item must include title, problem_statement, "
-            "research_scope, why_existing_work_is_insufficient, candidate_research_question, "
-            "candidate_hypothesis, candidate_validation_plan, open_risks, novelty_score, "
-            "feasibility_score, significance_score, confidence. Do not invent papers. "
-            "Keep supporting_evidence, similar_work, counter_evidence, and external_full_text "
-            "as separate roles; similar_work is never supporting evidence. "
-            "If evidence is incomplete, explicitly say verification is incomplete and keep "
-            "scores conservative. "
-            "If CRITIC_FEEDBACK is non-empty, address each listed challenge explicitly: "
-            "the proposal must respond to the critic's gaps rather than repeat the same "
-            "weakness. Write every generated proposal field in Simplified Chinese, "
-            "including the title, problem statement, scope, insufficiency analysis, research "
-            "question, hypothesis, validation steps, and risks. Keep paper titles, evidence "
-            "excerpts, citations, identifiers, and JSON keys in their original form; do not "
-            "translate or rewrite quoted evidence.\n\nCLAIM_OR_TOPIC:\n" + claim_text[:3000] +
-            "\n\nEVIDENCE:\n" + json.dumps(evidence, ensure_ascii=False)
+        return self.synthesis.synthesize(
+            run, claim_text, supporting, similar, counter, external_fulltext,
+            gate, maximum, critic_feedback=critic_feedback,
         )
-        try:
-            response = self.llm.chat_completion(
-                [{"role": "system", "content": "你负责生成可审计的中文研究机会方案；证据原文必须保持不变。"}, {"role": "user", "content": prompt}],
-                temperature=0.1, max_tokens=2200,
-                disable_thinking=True,  # structured JSON — avoid CoT burning the budget
-            )
-            parsed = self._parse_json(response.content)
-            raw_items = parsed.get("opportunities") if isinstance(parsed, dict) else None
-            if isinstance(raw_items, dict):
-                raw_items = [raw_items]
-            if isinstance(raw_items, list):
-                normalized = [self._normalize_candidate(item, gate, provider="deepseek") for item in raw_items if isinstance(item, dict)]
-                if normalized:
-                    return normalized[:maximum]
-        except Exception as exc:
-            logger.warning("discover.synthesis_fallback", run_id=run.id, error=str(exc))
-        return [self._fallback_candidate(claim_text, supporting, similar, counter, gate)]
 
     @staticmethod
-    def _retrieval_payload(item: RetrievalResultItem) -> dict[str, Any]:
-        return {"paper_id": item.paper_id, "title": item.paper_title, "text": item.text[:900], "score": item.score, "judgement": item.judgement, "evidence_level": item.evidence_level}
-
+    
     @staticmethod
     def _normalize_candidate(value: dict[str, Any], gate: dict[str, Any], *, provider: str) -> dict[str, Any]:
-        def score(key: str) -> float:
-            try:
-                return max(0.0, min(1.0, float(value.get(key, 0.35 if not gate["verified"] else 0.55))))
-            except (TypeError, ValueError):
-                return 0.35
-        plan = value.get("candidate_validation_plan")
-        if not isinstance(plan, dict):
-            plan = {"steps": ["选择数据集与基线方法", "与最强的相似工作设置进行比较", "针对推测的边界条件开展消融实验"]}
-        risks = value.get("open_risks")
-        if not isinstance(risks, list):
-            risks = ["外部论文全文核验尚未完成。"]
-        confidence = score("confidence")
-        return {
-            "title": str(value.get("title") or "研究该主题成立与失效的边界条件")[:512],
-            "problem_statement": str(value.get("problem_statement") or "现有证据尚不足以确定该现象可推广到哪些条件。"),
-            "research_scope": str(value.get("research_scope") or "研究范围应限定在当前工作区已有的数据集、模型与约束条件内。"),
-            "why_existing_work_is_insufficient": str(value.get("why_existing_work_is_insufficient") or "现有工作尚未在统一条件下进行充分比较。"),
-            "candidate_research_question": str(value.get("candidate_research_question") or "在什么条件下，该现象仍然可靠？"),
-            "candidate_hypothesis": str(value.get("candidate_hypothesis") or "在工作区证据所覆盖的假设条件下，该现象预计最为显著。"),
-            "candidate_validation_plan": plan,
-            "open_risks": [str(item) for item in risks[:8]],
-            "novelty_score": score("novelty_score"), "feasibility_score": score("feasibility_score"), "significance_score": score("significance_score"),
-            "confidence": confidence,
-            "evidence_coverage": float(gate.get("evidence_coverage", 0.0)),
-            "verification_status": "verified" if gate["verified"] else ("verified_with_warnings" if gate.get("confirmable") else "verification_incomplete"),
-            "provider": provider,
-        }
+        return normalize_candidate(value, gate, provider=provider)
 
     @staticmethod
     def _fallback_candidate(claim_text: str, supporting: RetrievalResponse, similar: RetrievalResponse, counter: RetrievalResponse, gate: dict[str, Any]) -> dict[str, Any]:
-        return DiscoverService._normalize_candidate({
-            "title": "研究该论断成立与失效的边界条件",
-            "problem_statement": "该论断具有一定合理性，但其成立的边界条件尚未明确。",
-            "why_existing_work_is_insufficient": f"工作区检索到 {len(supporting.items)} 条支持证据、{len(similar.items)} 条相似工作证据和 {len(counter.items)} 条反证，但最终证据门槛尚未满足。",
-            "candidate_research_question": f"以下论断在什么条件下成立，又会在什么条件下失效？{claim_text[:500]}",
-            "candidate_hypothesis": "该效应取决于某个可测量的数据或模型条件，并可通过消融实验加以分离验证。",
-            "open_risks": ["外部元数据不能替代全文证据。", "当前检索结果可能不完整。"],
-        }, gate, provider="rule_based_fallback")
+        return fallback_candidate(claim_text, supporting, similar, counter, gate)
 
     def _persist_candidates(
         self,
@@ -2317,14 +1190,14 @@ class DiscoverService(OpportunityWorkflow):
     def _persist_evidence(self, version_id: str, supporting: RetrievalResponse, similar: RetrievalResponse, counter: RetrievalResponse, external_rows: list[DiscoverExternalCandidate]) -> None:
         for rank, item in enumerate(supporting.items, start=1):
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="supports", source_scope=item.source_scope, evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement="supports", judgement_confidence=item.judgement_confidence, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="supports", source_scope=item.source_scope, evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement="supports", judgement_confidence=item.judgement_confidence, display_excerpt=(item.text or "").replace("\x00", "")[:2000], snapshot_payload=item.model_dump(mode="json")))
         for rank, item in enumerate(similar.items, start=1):
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="similar", source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation="similar", source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, display_excerpt=(item.text or "").replace("\x00", "")[:2000], snapshot_payload=item.model_dump(mode="json")))
         for rank, item in enumerate(counter.items, start=1):
             relation = item.judgement if item.judgement in {"contradicts", "qualifies", "supports", "overlaps"} else "unknown"
             span = self._find_evidence_span(item)
-            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation=relation, source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement=item.judgement, judgement_confidence=item.judgement_confidence, display_excerpt=item.text[:2000], snapshot_payload=item.model_dump(mode="json")))
+            self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation=relation, source_scope="workspace", evidence_level=item.evidence_level, paper_id=item.paper_id, evidence_span_id=span.id if span else None, artifact_id=span.artifact_id if span else item.artifact_id, chunk_id=item.chunk_id, rank=rank, score=item.score, judgement=item.judgement, judgement_confidence=item.judgement_confidence, display_excerpt=(item.text or "").replace("\x00", "")[:2000], snapshot_payload=item.model_dump(mode="json")))
         for row in external_rows[:12]:
             self.db.add(OpportunityEvidence(id=str(uuid4()), opportunity_version_id=version_id, relation=row.role, source_scope="external", evidence_level=row.evidence_level, external_candidate_id=row.id, paper_id=row.imported_paper_id, rank=row.rank, score=0.0, display_excerpt=(row.abstract or row.title)[:2000], snapshot_payload=row.snapshot_payload))
 
@@ -2389,14 +1262,6 @@ class DiscoverService(OpportunityWorkflow):
     @staticmethod
     def _empty_response(workspace_id: str, query: str, purpose: str) -> RetrievalResponse:
         return RetrievalResponse(request_id=str(uuid4()), workspace_id=workspace_id, query=query, purpose=purpose, status="succeeded", items=[], total=0)
-
-    @staticmethod
-    def _parse_json(content: str) -> dict[str, Any] | None:
-        match = re.search(r"\{[\s\S]*\}", content.strip())
-        if not match: return None
-        try: value = json.loads(match.group(0))
-        except json.JSONDecodeError: return None
-        return value if isinstance(value, dict) else None
 
 
 def resume_discover_runs_for_paper(db: Session, paper_id: str, workspace_id: str) -> None:
@@ -2473,9 +1338,3 @@ def resume_discover_runs_for_paper(db: Session, paper_id: str, workspace_id: str
                     },
                 }
                 db.commit()
-            logger.warning(
-                "discover.resume_failed",
-                run_id=run_id,
-                paper_id=paper_id,
-                error=str(exc),
-            )

@@ -655,7 +655,7 @@ def _hit_to_result_item(
         chunk_id=hit.get("chunk_id"),
         artifact_id=hit.get("source_artifact_id"),
         section=hit.get("section"),
-        text=hit.get("text", ""),
+        text=(hit.get("text") or "").replace("\x00", ""),  # PostgreSQL rejects NUL
         score=hit.get("score", 0.0),
         retrieval_stage=retrieval_stage,
     )

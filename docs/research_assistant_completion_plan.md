@@ -250,7 +250,7 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| MA-1 | 拆分 `DiscoverService`（~1800 行）：运行生命周期 / 外部检索 / 证据装配 / 综合 / Gate / 持久化 | ☐ |
+| MA-1 | 拆分 `DiscoverService`（~1800 行）：运行生命周期 / 外部检索 / 证据装配 / 综合 / Gate / 持久化 | ✅ 2481→1472 行：`critic.py`（CriticAgent + 模块函数）、`synthesis.py`（OpportunityAgent + normalize/fallback）、`external_retrieval.py`（外部检索 + query 构造 + OA 导入 + 全文状态机）；DiscoverService 保留 Orchestrator/Gate/证据装配，`_critic_*`/`_synthesize_candidates`/`_external_*` 变 thin delegate（测试零改动，363 通过）|
 | MA-2 | 复用 `AgentRun/AgentStep` 协议：定义 Discover 编排的 step 序列（planner→evidence→external→opportunity→critic→gate）| ☐ |
 | MA-3 | `execute_run` 重构为 Orchestrator：Planner 分解 → 调度 → 收集 → decide | ☐ |
 | MA-4 | EvidenceAgent：包装 `_workspace_similar/_counter/_supporting` | ☐ |
@@ -339,10 +339,10 @@ W3 → W7 ────────────────┼→ W5 → W6
 
 | # | TODO | 状态 |
 |---|---|---|
-| W6-1 | 冻结版本清单：语料 / 标注 / Prompt / 模型 / 解析器 / Schema | ☐ |
-| W6-2 | 3 次全新数据库端到端演练 | ☐ |
-| W6-3 | 记录解析/抽取/检索/发现的耗时、错误率、token 成本 | ☐ |
-| W6-4 | 演示脚本打磨（agent 交接 + 证据回链 + 可信度卡片）| ☐ |
+| W6-1 | 冻结版本清单：语料 / 标注 / Prompt / 模型 / 解析器 / Schema | ✅ `0809_freeze_version.md`（清单已整理：18 篇语料 / 3 个 Gold Set / discover-v2 Prompt / deepseek-v4-flash + zf Qwen3 + BGE-m3 / PyMuPDF ≥11.5 / alembic 0015）；正式冻结待 W6-2 三次端到端 |
+| W6-2 | 3 次全新数据库端到端演练 | ✅ 3 次全 succeeded（`0811_e2e_results.md`：全新起点 1 次 + 现有语料 2 次，每次 2 个有区分度候选 + 12 AgentStep，0 run 失败）|
+| W6-3 | 记录解析/抽取/检索/发现的耗时、错误率、token 成本 | ✅ 耗时（Discover ~2.5min/次）+ 错误率（0/3）+ token（`utils.accumulate_tokens` 累计到 run.stage_summaries.token_usage，368 测试）|
+| W6-4 | 演示脚本打磨（agent 交接 + 证据回链 + 可信度卡片）| ✅ `0811_demo_script.md`（10 步演示剧本：准备度→检索→Discover 交接流→外部/全文核验→机会+Critic→HITL→计划→代码→W7→封版，含台词与展示点）；实际预演待现场 |
 | W6-5 | 验收：演示可复现 | ☐ |
 
 ---
@@ -358,3 +358,9 @@ W3 → W7 ────────────────┼→ W5 → W6
 | 2026-08-09 | **W2 机会质量代码层完成**：`_critic_challenges` + `_synthesize_candidates` critic_feedback 注入 + execute_run 第二轮综合（Critic 挑战→重新综合）；`DISCOVER_PROMPT_VERSION` + `_corpus_snapshot` 审计字段；349 后端测试。真实跑（W2-1/5）待环境 |
 | 2026-08-09 | **W7 全生命周期 agent 代码层完成**：Analyze/Write/Respond 三 agent（复用 AgentRun/Step/Artifact，`succeeded` 终态 + 证据回链 [En]，零迁移）+ ChatComposer 3 mode + ChatAgentRunCard 多态渲染；354 后端测试 + 5 lifecycle 测试 + 前端 26 测试。真实 LLM 一条链待环境 |
 | 2026-08-09 | **W5 端到端/降级代码层完成**：HITL 4 决策 × API + Timeline/HumanDecision 追溯（修 `HumanDecision.created_at` SQLite 兼容）+ 四类降级验证 + execute_run 幂等 + synthesis fallback；363 后端测试。真实环境端到端待做 |
+| 2026-08-09 | **MA-1 DiscoverService 拆分完成**：`critic.py` / `synthesis.py` / `external_retrieval.py` 三个子模块（各含独立类 + 模块函数 + 常量），service.py 2481→1472 行（Orchestrator/Gate/证据装配保留 + 20 个 thin delegate）；363 后端测试全过 |
+| 2026-08-09 | **MA-1 简化审查清理**：`_parse_json`/`retrieval_payload` 提取到 `utils.py`，删除 service.py 残留死代码（12 常量 + 5 import + 2 方法），service.py 2481→1340 行；363 测试全过 |
+| 2026-08-09 | **W6-1 冻结版本清单完成**：`0809_freeze_version.md`（语料 18 篇 / 3 个 Gold Set / discover-v2 Prompt / 模型 / PyMuPDF ≥11.5 / alembic 0015）；正式冻结待 W6-2 三次端到端 |
+| 2026-08-11 | **W6-2 三次端到端跑通**（`0811_e2e_results.md`：全新起点 1 次 + 现有语料 2 次，0 run 失败）；**真实 bug 修复**：run 详情漏传 agent_steps（`d04ebe2`）；W6-3 部分（耗时/错误率已记，token 未记 ⚠️ AgentStep 缺 usage）|
+| 2026-08-11 | **W6-4 演示剧本完成**：`0811_demo_script.md`（10 步，含多智能体交接流/证据回链/HITL/降级展示点与台词）|
+| 2026-08-11 | **W6-3 token 成本补齐**：`utils.accumulate_tokens` 累计到 `run.stage_summaries["token_usage"]`（synthesis/critic/external 5 处 LLM 调用点，368 后端测试）|
