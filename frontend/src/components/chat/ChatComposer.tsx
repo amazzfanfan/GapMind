@@ -18,13 +18,14 @@ interface Props {
   onResearchPlanChange: (value?: string) => void;
 }
 
-// Agents that must be bound to a research plan (plan Select shows for these).
-const PLAN_BOUND_MODES: ChatMode[] = ["code_generation", "analyze", "write", "respond"];
+// Agents that may bind a research plan (plan Select shows for these). Only
+// code_generation REQUIRES one; analyze/write/respond work standalone (P1.5).
+const PLAN_BIND_MODES: ChatMode[] = ["code_generation", "analyze", "write", "respond"];
 
 export default function ChatComposer({ loading, onSend, value, onChange, workspaceEnabled, mode, onModeChange, planOptions, researchPlanId, onResearchPlanChange }: Props) {
   const [focused, setFocused] = useState(false);
-  const needsPlan = PLAN_BOUND_MODES.includes(mode);
-  const sendDisabled = !value.trim() || loading || (needsPlan && !researchPlanId);
+  const canBindPlan = PLAN_BIND_MODES.includes(mode);
+  const sendDisabled = !value.trim() || loading || (mode === "code_generation" && !researchPlanId);
   const send = () => { const content = value.trim(); if (sendDisabled) return; onSend(content); };
   const placeholder = mode === "research_plan" ? "描述研究目标、资源约束或希望验证的假设…"
     : mode === "code_generation" ? "描述希望生成的实验代码、框架或运行约束…"
@@ -54,7 +55,7 @@ export default function ChatComposer({ loading, onSend, value, onChange, workspa
           ]}
         />
       </Tooltip>
-      {needsPlan && <Select allowClear showSearch value={researchPlanId} onChange={onResearchPlanChange} options={planOptions} placeholder={planOptions.length ? "选择研究计划" : "请先在研究中心确认计划"} style={{ minWidth: 260 }} optionFilterProp="label" />}
+      {canBindPlan && <Select allowClear showSearch value={researchPlanId} onChange={onResearchPlanChange} options={planOptions} placeholder={planOptions.length ? "选择研究计划" : "请先在研究中心确认计划"} style={{ minWidth: 260 }} optionFilterProp="label" />}
     </div>
     {mode !== "chat" && <Typography.Text className="gm-chat-agent-hint" type="secondary">{hint}</Typography.Text>}
     <Input.TextArea value={value} autoSize={{ minRows: 1, maxRows: 7 }} maxLength={12000} placeholder={placeholder} aria-label="输入消息" onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (shouldSendOnEnter(event)) { event.preventDefault(); send(); } }} />

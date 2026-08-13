@@ -105,13 +105,14 @@ export default function ChatPage() {
         targetConversationId = created.id;
         setConversation(created);
       }
+      const planOrNone = researchPlanId || undefined; // P1.5: W7 works standalone without a plan
       const agentInput = mode === "research_plan"
         ? {}
         : mode === "code_generation"
           ? { research_plan_id: researchPlanId, framework: "PyTorch" }
           : mode === "respond"
-            ? { research_plan_id: researchPlanId, reviewer_comments: content }
-            : { research_plan_id: researchPlanId };
+            ? { research_plan_id: planOrNone, reviewer_comments: content }
+            : { research_plan_id: planOrNone };
       const run = await agentApi.start(activeWorkspaceId, {
         agent_type: mode,
         prompt: content,

@@ -1,4 +1,4 @@
-import { Button, Card, Col, Row, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Col, Row, Space, Tag, Typography } from "antd";
 import {
   ArrowRightOutlined,
   BulbOutlined,
@@ -37,9 +37,11 @@ const MODULES: LifecycleModule[] = [
 
 export default function LifecycleModules({ workspaceId }: { workspaceId?: string }) {
   const navigate = useNavigate();
+  const { message } = App.useApp();
 
   const openModule = (module: LifecycleModule) => {
     if (!workspaceId) {
+      message.info("请先选择一个课题空间，再进入对应模块");
       navigate("/workspaces");
       return;
     }
@@ -72,7 +74,7 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
                 </div>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{module.description}</Typography.Text>
                 <Button type="link" size="small" style={{ padding: 0 }} icon={<ArrowRightOutlined />}>
-                  进入
+                  {workspaceId ? "进入" : "选择课题空间"}
                 </Button>
               </Space>
             </Card>
