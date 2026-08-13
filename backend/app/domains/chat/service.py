@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, Generator
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -374,6 +374,118 @@ class ChatService:
         self.db.refresh(conversation)
         self.db.refresh(assistant)
         return conversation, user_message, assistant
+
+
+    # ------------------------------------------------------------ streaming (P0.5-1)
+    def stream_send_new(
+        self,
+        content: str,
+        workspace_id: str | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Stream a new-conversation message. Yields event dicts (see _stream_complete)."""
+        content = self._validate_content(content)
+        if workspace_id:
+            WorkspaceService(self.db).get(workspace_id)
+        conversation = ChatConversation(
+            title=make_conversation_title(content),
+            workspace_id=workspace_id,
+        )
+        self.db.add(conversation)
+        self.db.flush()
+        user_message, assistant_message = self._create_pending_messages(conversation, content)
+        self.db.commit()
+        yield from self._stream_complete(
+            conversation.id, user_message.id, assistant_message.id,
+            [{"role": "user", "content": content}],
+        )
+
+    def stream_send(
+        self,
+        conversation_id: str,
+        content: str,
+        workspace_id: str | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Stream a message into an existing conversation. Yields event dicts."""
+        content = self._validate_content(content)
+        conversation = self.get_conversation(conversation_id)
+        if workspace_id is not None and workspace_id != conversation.workspace_id:
+            raise ChatConflictError("conversation workspace cannot be changed")
+        self._ensure_not_generating(conversation.id)
+        existing = self._completed_messages(conversation.id)
+        user_message, assistant_message = self._create_pending_messages(conversation, content)
+        self.db.commit()
+        context = self._build_context(existing, content)
+        yield from self._stream_complete(conversation.id, user_message.id, assistant_message.id, context)
+
+    def _stream_complete(
+        self,
+        conversation_id: str,
+        user_id: str,
+        assistant_id: str,
+        context: list[dict[str, str]],
+    ) -> Generator[dict[str, Any], None, None]:
+        """Stream LLM tokens for a message, persisting on completion.
+
+        Yields ``{"type": ...}`` events: ``start`` (ids), ``evidence`` (retrieval
+        citations), ``token`` (one delta per event), ``done`` (final content), or
+        ``error``. Structured-format callers keep using ``_complete``.
+        """
+        assistant = self.db.get(ChatMessage, assistant_id)
+        conversation = self.db.get(ChatConversation, conversation_id)
+        user_message = self.db.get(ChatMessage, user_id)
+        evidence: list[ChatMessageEvidence] = []
+        try:
+            if conversation.workspace_id:
+                context, evidence = self._workspace_context(
+                    conversation, user_message.content, context, assistant.id
+                )
+            gateway = self.gateway or get_llm_gateway()
+            if not getattr(gateway, "api_key", None):
+                raise ChatConfigurationError("DeepSeek API key is not configured")
+        except ChatConfigurationError as exc:
+            self._mark_failed(assistant, str(exc))
+            yield {"type": "error", "message": str(exc)}
+            return
+        except ChatRetrievalError:
+            raise
+
+        yield {"type": "start", "conversation_id": conversation_id, "assistant_message_id": assistant_id}
+        if conversation.workspace_id and evidence:
+            yield {
+                "type": "evidence",
+                "citations": [
+                    {
+                        "id": ev.id,
+                        "paper_title": ev.paper_title,
+                        "section": ev.section,
+                        "excerpt": ev.excerpt,
+                        "rank": ev.rank,
+                    }
+                    for ev in evidence
+                ],
+            }
+        chunks: list[str] = []
+        try:
+            for delta in gateway.stream_chat_completion(context, temperature=0.2):
+                chunks.append(delta)
+                yield {"type": "token", "content": delta}
+        except Exception as exc:
+            safe_error = _safe_error_message(exc)
+            self._mark_failed(assistant, safe_error)
+            yield {"type": "error", "message": safe_error}
+            return
+
+        content = "".join(chunks)
+        assistant.status = "completed"
+        assistant.content = content
+        assistant.error_message = None
+        assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
+        if conversation.workspace_id:
+            assistant.citations = evidence
+        conversation.last_message_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(assistant)
+        yield {"type": "done", "content": content}
 
     def _workspace_context(
         self,

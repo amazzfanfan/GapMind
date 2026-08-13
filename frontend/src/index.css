@@ -1,9 +1,18 @@
 :root {
+  --gm-bg: #f5f7fa;
+  --gm-text: #213547;
+  --gm-layout-bg: #f5f7fa;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
   line-height: 1.5;
-  color: #213547;
-  background-color: #f5f7fa;
+  color: var(--gm-text);
+  background-color: var(--gm-bg);
+}
+
+[data-theme="dark"] {
+  --gm-bg: #141414;
+  --gm-text: rgba(255, 255, 255, 0.85);
+  --gm-layout-bg: #141414;
 }
 
 * {
@@ -21,7 +30,7 @@ body,
 
 .gm-app-layout {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--gm-layout-bg);
 }
 
 .gm-sider {

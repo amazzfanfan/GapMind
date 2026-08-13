@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
@@ -133,24 +134,63 @@ export default function ChatPage() {
 
   const send = async (content: string) => {
     if (mode !== "chat") { await startAgent(content); return; }
-    const targetId = conversationId;
-    const optimisticUser = localMessage(targetId ?? "new", "user", content, messages.length + 1);
-    const optimisticAssistant = localMessage(targetId ?? "new", "assistant", "", messages.length + 2);
-    setInput(""); setSending(true); setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
+    let targetId = conversationId;
+    setInput("");
+    if (!targetId) {
+      try {
+        const created = await chatApi.createConversation(content.slice(0, 38), selectedWorkspaceId);
+        targetId = created.id;
+        setConversation(created);
+        navigate(chatConversationPath(created), { replace: true });
+      } catch (error) {
+        message.error(chatErrorMessage(error));
+        return;
+      }
+    }
+    setSending(true);
+    const assistantKey = `local-stream-${Date.now()}`;
+    const optimisticUser = localMessage(targetId, "user", content, messages.length + 1);
+    const optimisticAssistant = { ...localMessage(targetId, "assistant", "", messages.length + 2), id: assistantKey };
+    setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
+    // React 18 auto-batches setState inside async/RAF callbacks, collapsing
+    // streamed tokens into one render. flushSync forces a synchronous paint
+    // per token so the UI updates progressively like a real stream.
+    const appendDelta = (delta: string) => {
+      flushSync(() => {
+        setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, content: m.content + delta } : m));
+      });
+    };
     try {
-      const result = targetId ? await chatApi.sendMessage(targetId, content) : await chatApi.sendNew(content, selectedWorkspaceId);
-      setConversation(result.conversation);
-      setMessages((current) => [...current.filter((item) => !item.id.startsWith("local-")), result.user_message, result.assistant_message]);
-      if (!targetId) navigate(chatConversationPath(result.conversation), { replace: true });
-      void loadHistory();
+      await streamAssistant(targetId, content, appendDelta);
+      await Promise.all([loadConversation(targetId), loadHistory()]);
     } catch (error) {
-      const detail = (error as { response?: { data?: { detail?: { conversation_id?: string } } } }).response?.data?.detail;
-      const failedConversationId = detail?.conversation_id;
-      if (!targetId && failedConversationId) navigate(selectedWorkspaceId ? `/workspaces/${selectedWorkspaceId}/assistant/${failedConversationId}` : `/chat/${failedConversationId}`, { replace: true });
-      if (failedConversationId) void loadConversation(failedConversationId);
-      else setMessages((current) => current.map((item) => item.id === optimisticAssistant.id ? { ...item, status: "failed" as const } : item));
-      message.error(chatErrorMessage(error)); void loadHistory();
+      setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const } : m));
+      message.error(chatErrorMessage(error));
+      void loadHistory();
     } finally { setSending(false); }
+  };
+
+  const streamAssistant = async (conversationId: string, content: string, appendDelta: (d: string) => void) => {
+    const resp = await chatApi.streamSend(conversationId, content);
+    if (!resp.ok || !resp.body) throw new Error("流式响应不可用");
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const event = JSON.parse(line.slice(6)) as { type?: string; content?: string };
+          if (event.type === "token" && typeof event.content === "string") appendDelta(event.content);
+        } catch { /* ignore malformed SSE line */ }
+      }
+    }
   };
 
   const refreshAgent = async (run: AgentRunDetail) => {

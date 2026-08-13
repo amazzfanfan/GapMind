@@ -116,6 +116,15 @@ export const chatApi = {
     const { data } = await apiClient.post<ChatSendResponse>(`/chat/conversations/${id}/messages`, { content });
     return data;
   },
+  async streamSend(conversationId: string, content: string): Promise<Response> {
+    // P0.5-1: SSE streaming via fetch. Use a same-origin relative path so the
+    // dev Vite proxy forwards it (avoids cross-origin buffering of SSE).
+    return fetch(`/api/v1/chat/conversations/${conversationId}/messages/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+  },
   async retryMessage(conversationId: string, assistantMessageId: string) {
     const { data } = await apiClient.post<ChatSendResponse>(
       `/chat/conversations/${conversationId}/messages/${assistantMessageId}/retry`,

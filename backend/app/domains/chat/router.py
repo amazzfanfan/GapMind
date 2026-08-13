@@ -10,7 +10,10 @@ status correctly.
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
@@ -115,6 +118,26 @@ def delete_conversation(conversation_id: str, service: ChatService = Depends(_se
     return ChatDeleteResponse(id=conversation_id, deleted=True)
 
 
+
+
+@router.post("/conversations/{conversation_id}/messages/stream")
+def stream_message(
+    conversation_id: str,
+    payload: ChatMessageCreate,
+    service: ChatService = Depends(_service),
+) -> StreamingResponse:
+    """Stream a chat completion as Server-Sent Events (P0.5-1).
+
+    Events are ``data: {json}`` lines: ``start`` (ids), ``evidence`` (retrieval
+    citations), ``token`` (one delta each), ``done`` (final content), or
+    ``error``. The full persisted message is available via GET afterwards.
+    """
+    def event_stream():
+        for event in service.stream_send(
+            conversation_id, payload.content, workspace_id=payload.workspace_id
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatSendResponse)
 def send_message(conversation_id: str, payload: ChatMessageCreate, service: ChatService = Depends(_service)) -> ChatSendResponse:
     return _send_response(
