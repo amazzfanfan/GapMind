@@ -536,6 +536,7 @@ body,
 .gm-gap-cell--transfer { --cell-accent: #4f6ff5; --cell-accent-rgb: 79, 111, 245; }
 .gm-gap-cell--same-paper { --cell-accent: #c58b19; --cell-accent-rgb: 197, 139, 25; }
 .gm-gap-cell--covered { --cell-accent: #31945d; --cell-accent-rgb: 49, 148, 93; min-height: 136px; justify-content: center; opacity: .82; }
+.gm-gap-cell--hot { --cell-accent: #f5222d; --cell-accent-rgb: 245, 34, 45; box-shadow: 0 0 0 2px rgba(245, 34, 45, .30), 0 10px 22px rgba(245, 34, 45, .16); background: linear-gradient(150deg, rgba(245, 34, 45, .13), rgba(255, 255, 255, .96) 62%); }
 .gm-gap-cell--uncovered { --cell-accent: #98a2af; --cell-accent-rgb: 152, 162, 175; background: #fafbfc; border-style: dashed; }
 .gm-gap-cell--empty { align-items: center; justify-content: center; color: #aab3c0; background: transparent; border-style: dashed; }
 .gm-gap-cell-heading { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--cell-accent); }

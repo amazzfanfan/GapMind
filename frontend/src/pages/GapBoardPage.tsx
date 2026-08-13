@@ -198,12 +198,13 @@ export default function GapBoardPage() {
           const tier = cell.addressed ? "covered" : cell.candidate_tier;
           const presentation = candidatePresentation[tier] || candidatePresentation.corpus_only;
           const score = Math.max(0, Math.min(100, Math.round(cell.candidate_score * 100)));
+          const isHot = !cell.addressed && score >= 70;
           return (
-            <div className={`gm-gap-cell gm-gap-cell--${presentation.tone}`}>
+            <div className={`gm-gap-cell gm-gap-cell--${presentation.tone}${isHot ? " gm-gap-cell--hot" : ""}`}>
               <div className="gm-gap-cell-heading">
                 <span className="gm-gap-cell-icon">{cellIcon(tier)}</span>
                 <span className="gm-gap-cell-label">{presentation.label}</span>
-                {tier === "explicit_limitation" ? <span className="gm-gap-hot-badge">重点</span> : null}
+                {(tier === "explicit_limitation" || isHot) ? <span className="gm-gap-hot-badge">重点</span> : null}
               </div>
               <span className="gm-gap-cell-caption">{presentation.shortDescription}</span>
 
