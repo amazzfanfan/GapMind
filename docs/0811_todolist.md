@@ -40,7 +40,7 @@
 
 | # | 任务 | 描述 | 前置 | 状态 |
 |---|---|---|---|---|
-| P1.5-1 | **研究生命周期模块化展示** | 参考根目录 `index.html`（Discover/Plan/Execute/Analyze/Publish/Respond 生命周期闭环）：GapMind 各功能既能作为整体闭环（围绕 workspace 现有），也**可作为独立模块**使用（用户可能处于科研不同阶段）；需要把主要功能作为独立入口展示。涉及后端路由/入口 + 前端首页改造，复杂度较高，放后面做 | 前端 + 后端 | ☐ |
+| P1.5-1 | **研究生命周期模块化展示** | ✅ 模块化首页（6 卡片，`LifecycleModules`）+ **W7 独立化**（analyze/write/respond 无 plan）+ **系统独立空间**（`GET /workspaces/independent`，无 workspace 用 W7）+ ChatComposer 独立模式；详见 `0814_independent_modules_plan.md` / `0814_changes_summary.md`。边界：Discover/Plan 保留 workspace（需语料）| 前端 + 后端 | ✅ |
 
 ## 五、P2 质量增强（封版后可暂缓）
 

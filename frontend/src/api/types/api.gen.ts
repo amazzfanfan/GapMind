@@ -1089,6 +1089,30 @@ export interface paths {
         patch: operations["rename_conversation_api_v1_chat_conversations__conversation_id__patch"];
         trace?: never;
     };
+    "/api/v1/chat/conversations/{conversation_id}/messages/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stream Message
+         * @description Stream a chat completion as Server-Sent Events (P0.5-1).
+         *
+         *     Events are ``data: {json}`` lines: ``start`` (ids), ``evidence`` (retrieval
+         *     citations), ``token`` (one delta each), ``done`` (final content), or
+         *     ``error``. The full persisted message is available via GET afterwards.
+         */
+        post: operations["stream_message_api_v1_chat_conversations__conversation_id__messages_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chat/conversations/{conversation_id}/messages": {
         parameters: {
             query?: never;
@@ -6367,6 +6391,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatConversationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_message_api_v1_chat_conversations__conversation_id__messages_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

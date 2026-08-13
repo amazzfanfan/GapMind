@@ -24,6 +24,11 @@ export const workspaceApi = {
     const resp = await apiClient.get<Workspace>(`/workspaces/${id}`);
     return resp.data;
   },
+  async independent(): Promise<Workspace> {
+    // P1.5: system workspace for standalone W7 agents when none is selected.
+    const resp = await apiClient.get<Workspace>("/workspaces/independent");
+    return resp.data;
+  },
 
   async readiness(id: string): Promise<WorkspaceReadiness> {
     const resp = await apiClient.get<WorkspaceReadiness>(`/workspaces/${id}/readiness`);

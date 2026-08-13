@@ -9,6 +9,8 @@ import type { Workspace, WorkspaceReadiness } from "../api/types/workspace";
 import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
 import EmptyGuide from "../components/common/EmptyGuide";
+import LifecycleModules from "../components/LifecycleModules";
+import { useAppStore } from "../store/appStore";
 import StatusBadge from "../components/common/StatusBadge";
 
 interface WorkspaceSummary {
@@ -22,6 +24,7 @@ interface WorkspaceSummary {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const [summaries, setSummaries] = useState<WorkspaceSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -73,6 +76,8 @@ export default function DashboardPage() {
         description="从课题、文献和证据出发，把下一步行动变得清晰。"
         extra={<><Link to="/workspaces"><Button type="primary" icon={<PlusOutlined />}>新建课题</Button></Link><Link to="/search"><Button icon={<FileSearchOutlined />}>全局检索</Button></Link></>}
       />
+
+      <LifecycleModules workspaceId={currentWorkspaceId ?? undefined} />
 
       {summaries.length === 0 && !loading ? (
         <Card><EmptyGuide description="还没有建立课题。先创建一个课题，再开始收集文献和证据。" actionText="创建第一个课题" actionIcon={<PlusOutlined />} onAction={() => navigate("/workspaces")} /></Card>

@@ -215,14 +215,15 @@ def test_respond_agent_produces_rebuttal(client, db_session: Session):
     assert "### 意见 1" in artifact["content"]
 
 
-def test_analyze_requires_research_plan(client, db_session: Session):
+def test_analyze_standalone_without_plan(client, db_session: Session):
+    """P1.5: analyze is usable standalone (no plan/workspace needed)."""
     workspace, conversation, _ = _workspace_plan(client, db_session)
     response = _start(
         client, workspace, conversation,
         agent_type="analyze",
-        input_payload={"results": {"x": 1}},
+        input_payload={"results": {"x": 1}, "research_plan_id": ""},
     )
-    assert response.status_code == 422  # plan-bound agent without a plan
+    assert response.status_code == 202  # independent mode: starts without a plan
 
 
 def test_respond_requires_reviewer_comments(client, db_session: Session):
