@@ -30,9 +30,9 @@
 
 | # | 任务 | 描述 | 前置 | 状态 |
 |---|---|---|---|---|
-| P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| 从 `evaluation/external/gold/demo_sig_ood_external_v1.json` 选 OA 候选导入 → ≥2 独立全文 → 机会 gate `confirmable`；验证 URL 规范化（http:// 等）| 环境 + S2 | ☐ |
-| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| 跑 1-3 次人工检查 2-3 个候选区分度；Unsupported 主张检查（目标 ≤20%）| 环境 | ☐ |
-| P1-3 | **W7 完整一条链验收**（W7-5）| 确认计划 → 模拟实验 → 分析 → 论文草稿 → 审稿回复一条链（Write/Respond/Analyze 已单点验证，补串联）| 环境 | ☐ |
+| P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| ✅ 真实跑通（run `70cb958a`）：3 篇 OA 候选导入全文核验（1 篇 verified+full_text，2 篇 import_failed 降级正常）；机会 gate **verified+confirmable，5 篇独立全文，coverage 1.0**；HITL confirm → confirmed | 环境 + S2 | ✅ |
+| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ⏳ 部分：真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）；Unsupported 主张检查（目标 ≤20%）待做 | 环境 | ⏳ |
+| P1-3 | **W7 完整一条链验收**（W7-5）| ✅ 全链路真实跑通（run `cbedd3d5`→计划确认→`71b202f2` 10 文件代码→`93360db9` 分析 verdict=部分支持→`7f4adcfb` 论文草稿→`7706dd46` 3 条审稿回复）| 环境 | ✅ |
 | P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| DiscoverPage 确认/编辑确认/拒绝/延后 modal 实机走查 + Timeline 追溯 | 前端运行 | ☐ |
 | P1-5 | **W5 降级路径真实走查**（W5-7）| S2 429 / LLM 挂 / Milvus 不可用 / PDF 下载失败四类真实演练 | 环境 | ☐ |
 
@@ -70,7 +70,7 @@
 | Workspace readiness：数量一致 + 阻塞可解释 | ✅ |
 | Evidence Passport：可信度卡片 + 一致性检查 | ✅ |
 | HITL 4 决策 × API/UI/测试 + Timeline | ✅ API/测试；UI 走查 P1-4 |
-| 研究计划 → 代码生成 → 结果分析 → 论文草稿 → 审稿回复一条链 | ⏳ 单点已验证，串联 P1-3 |
+| 研究计划 → 代码生成 → 结果分析 → 论文草稿 → 审稿回复一条链 | ✅ 真实一条链跑通（P1-3）|
 | 四类降级演练 | ✅ 单点；真实走查 P1-5 |
 | 3 次全新数据库端到端 | ✅（`0811_e2e_results.md`）|
 | 版本冻结 + 耗时/错误率/token 记录 | ⏳ 冻结 ✅ + 记录 ✅；token 真实验证 P0-3 |
