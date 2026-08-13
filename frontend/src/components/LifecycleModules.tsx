@@ -40,14 +40,18 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
   const { message } = App.useApp();
 
   const openModule = (module: LifecycleModule) => {
-    if (!workspaceId) {
-      message.info("请先选择一个课题空间，再进入对应模块");
-      navigate("/workspaces");
+    if (module.key === "discover" || module.key === "plan") {
+      // Corpus-bound modules need a workspace (paper evidence).
+      if (!workspaceId) {
+        message.info("研究机会发现/研究计划需要课题空间（论文语料）");
+        navigate("/workspaces");
+        return;
+      }
+      navigate(module.key === "discover" ? `/workspaces/${workspaceId}/discover` : `/workspaces/${workspaceId}/plans`);
       return;
     }
-    if (module.key === "discover") navigate(`/workspaces/${workspaceId}/discover`);
-    else if (module.key === "plan") navigate(`/workspaces/${workspaceId}/plans`);
-    else navigate(`/workspaces/${workspaceId}/assistant`);
+    // W7 modules work standalone (independent mode) — no workspace required.
+    navigate(workspaceId ? `/workspaces/${workspaceId}/assistant` : "/chat");
   };
 
   return (
@@ -74,7 +78,7 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
                 </div>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{module.description}</Typography.Text>
                 <Button type="link" size="small" style={{ padding: 0 }} icon={<ArrowRightOutlined />}>
-                  {workspaceId ? "进入" : "选择课题空间"}
+                  {workspaceId ? "进入" : module.key === "discover" || module.key === "plan" ? "选择课题空间" : "独立使用"}
                 </Button>
               </Space>
             </Card>

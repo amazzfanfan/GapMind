@@ -73,6 +73,18 @@ def list_workspaces(
 
 
 @router.get(
+    "/independent",
+    response_model=WorkspaceRead,
+    response_model_exclude_unset=True,
+)
+def get_independent_workspace(
+    service: WorkspaceService = Depends(_get_service),
+) -> WorkspaceRead:
+    """System independent workspace for standalone W7 agents (no workspace selected)."""
+    return WorkspaceRead.model_validate(service.get_or_create_independent())
+
+
+@router.get(
     "/{workspace_id}",
     response_model=WorkspaceRead,
     response_model_exclude_unset=True,

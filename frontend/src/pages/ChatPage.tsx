@@ -74,7 +74,7 @@ export default function ChatPage() {
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
   useEffect(() => {
-    if (!activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); setMode("chat"); return; }
+    if (!activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); return; }
     discoverApi.listPlans(activeWorkspaceId, { limit: 100 }).then((response) => setResearchPlans(response.items)).catch(() => setResearchPlans([]));
   }, [activeWorkspaceId]);
   useEffect(() => {
@@ -95,13 +95,19 @@ export default function ChatPage() {
     else if (routeWorkspaceId) navigate("/chat/new");
   };
   const startAgent = async (content: string) => {
-    if (!activeWorkspaceId || mode === "chat") return;
+    if (mode === "chat") return;
+    let wsId = activeWorkspaceId;
+    if (!wsId) {
+      // P1.5: standalone W7 agents run in the system independent workspace.
+      try { wsId = (await workspaceApi.independent()).id; }
+      catch (error) { message.error(chatErrorMessage(error)); return; }
+    }
     setSending(true);
     setInput("");
     try {
       let targetConversationId = conversationId;
       if (!targetConversationId) {
-        const created = await chatApi.createConversation(content.slice(0, 38), activeWorkspaceId);
+        const created = await chatApi.createConversation(content.slice(0, 38), wsId);
         targetConversationId = created.id;
         setConversation(created);
       }
@@ -113,14 +119,14 @@ export default function ChatPage() {
           : mode === "respond"
             ? { research_plan_id: planOrNone, reviewer_comments: content }
             : { research_plan_id: planOrNone };
-      const run = await agentApi.start(activeWorkspaceId, {
+      const run = await agentApi.start(wsId, {
         agent_type: mode,
         prompt: content,
         conversation_id: targetConversationId,
         input: agentInput,
       });
-      if (!conversationId) navigate(`/workspaces/${activeWorkspaceId}/assistant/${targetConversationId}`, { replace: true });
-      await Promise.all([loadConversation(targetConversationId), loadAgentRuns(activeWorkspaceId, targetConversationId)]);
+      if (!conversationId) navigate(`/workspaces/${wsId}/assistant/${targetConversationId}`, { replace: true });
+      await Promise.all([loadConversation(targetConversationId), loadAgentRuns(wsId, targetConversationId)]);
       const agentLabel = mode === "research_plan" ? "研究计划" : mode === "code_generation" ? "代码生成" : mode === "analyze" ? "结果分析" : mode === "write" ? "论文写作" : mode === "respond" ? "审稿回复" : "Agent";
       message.success(`${agentLabel} Agent 已启动`);
       setAgentActionId(run.id);

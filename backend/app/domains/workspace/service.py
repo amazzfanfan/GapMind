@@ -23,6 +23,9 @@ from app.domains.workspace.schemas import (
 
 logger = get_logger(__name__)
 
+# System workspace used by standalone W7 agents (no user workspace selected).
+INDEPENDENT_WORKSPACE_NAME = "__independent__"
+
 
 class WorkspaceNotFoundError(Exception):
     """Raised when a workspace lookup fails."""
@@ -124,6 +127,33 @@ class WorkspaceService:
         self.db.commit()
         self.db.refresh(ws)
         logger.info("workspace.archived", workspace_id=ws.id)
+        return ws
+
+    def get_or_create_independent(self) -> Workspace:
+        """Return (creating if needed) the system independent workspace.
+
+        Used by standalone W7 agents (analyze/write/respond) when the user has
+        not selected a workspace. The independent space has no corpus, so only
+        user-provided inputs feed the agents (Discover/Plan are unavailable).
+        """
+        existing = self.db.scalar(
+            select(Workspace).where(
+                Workspace.name == INDEPENDENT_WORKSPACE_NAME,
+                Workspace.is_deleted.is_(False),
+            ).limit(1)
+        )
+        if existing:
+            return existing
+        ws = Workspace(
+            id=str(uuid4()),
+            name=INDEPENDENT_WORKSPACE_NAME,
+            description="独立模式空间：供未选择课题空间的 W7 分析/写作/审稿使用",
+            is_archived=False,
+            is_deleted=False,
+        )
+        self.db.add(ws)
+        self.db.commit()
+        self.db.refresh(ws)
         return ws
 
     def unarchive(self, workspace_id: str) -> Workspace:
