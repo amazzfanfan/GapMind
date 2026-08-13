@@ -20,7 +20,7 @@
 
 | # | 任务 | 描述 | 涉及 | 状态 |
 |---|---|---|---|---|
-| P0.5-1 | **对话流式输出（SSE）** | ⚠️ **未解决，先记录**：后端流式端点（`POST /messages/stream` SSE）+ gateway `stream_chat_completion` + 前端 `streamSend`/`streamAssistant` 已实现，**传输层确认流式**（浏览器 EventStream 面板逐条 token 到达，curl/Node 均逐块）。**但 UI 仍一次性输出**：尝试了 RAF 分帧 / 限长 40 字符/帧 / flushSync 每 token 同步渲染，均未生效（React 18 自动批处理疑为根因，但 flushSync 也未触发逐 token 渲染，说明问题可能在 `streamAssistant` 未真正执行或被覆盖）。**待后续**：加浏览器端调试确认 `streamAssistant` 执行 + 每次 `reader.read()` 的 chunk 数 | 后端 + 前端 | ⏳ |
+| P0.5-1 | **对话流式输出（SSE）** | ⚠️ **未解决，先记录**：后端流式端点 + gateway `stream_chat_completion` + 前端 `streamSend`/`streamAssistant` 已实现，**传输层确认流式**（浏览器 EventStream 面板逐条 token，curl/Node 逐块）。**UI 仍一次性**：已尝试 RAF 分帧 / 限长 40 字符/帧 / flushSync 每 token 同步渲染 / setInterval 节流 60ms·20字符 固定节奏，均未生效——固定节奏渲染本应跨帧可见，仍一次性 → **强烈指向 `streamAssistant` 未真正执行或 fetch body 未到达前端**（而非渲染层）。**待续**：浏览器 console 加调试标记（`streamAssistant` 入口 + 每次 `reader.read()` chunk 数）+ Network 确认前端实际请求 /messages/stream | 后端 + 前端 | ⏳ |
 | P0.5-2 | **检索证据折叠/篇幅控制** | 对话下方检索证据点击展开后无法收起；且 AI 回复内容少时证据占大量篇幅——改为默认折叠 + 可收起 + 控制最大高度/展开数 | 纯前端 | ☐ |
 | P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
 | P0.5-4 | **亮/暗主题** | UI 提供白天/黑夜两种模式（antd ConfigProvider 主题切换 + 持久化偏好）| 纯前端 | ☐ |

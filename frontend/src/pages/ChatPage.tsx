@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
@@ -152,16 +151,39 @@ export default function ChatPage() {
     const optimisticUser = localMessage(targetId, "user", content, messages.length + 1);
     const optimisticAssistant = { ...localMessage(targetId, "assistant", "", messages.length + 2), id: assistantKey };
     setMessages((current) => [...current, optimisticUser, optimisticAssistant]);
-    // React 18 auto-batches setState inside async/RAF callbacks, collapsing
-    // streamed tokens into one render. flushSync forces a synchronous paint
-    // per token so the UI updates progressively like a real stream.
+    // Browser paint is frame-driven: even per-token DOM updates collapse to a
+    // single paint if the tokens arrive within one frame. Throttle rendering to
+    // a fixed cadence (~20 chars / 60ms) so the UI visibly streams regardless
+    // of how the browser coalesces SSE chunks.
+    let pendingDelta = "";
+    let streamTimer: number | null = null;
     const appendDelta = (delta: string) => {
-      flushSync(() => {
-        setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, content: m.content + delta } : m));
-      });
+      pendingDelta += delta;
+      if (streamTimer == null) {
+        streamTimer = window.setInterval(() => {
+          if (pendingDelta) {
+            const slice = pendingDelta.slice(0, 20);
+            pendingDelta = pendingDelta.slice(20);
+            setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, content: m.content + slice } : m));
+          }
+          if (!pendingDelta && streamTimer != null) {
+            window.clearInterval(streamTimer);
+            streamTimer = null;
+          }
+        }, 60);
+      }
     };
     try {
       await streamAssistant(targetId, content, appendDelta);
+      // Let the throttled renderer flush any remaining buffered tokens before
+      // loadConversation replaces the optimistic message with the full one.
+      await new Promise<void>((resolve) => {
+        const wait = () => {
+          if (streamTimer != null || pendingDelta) window.setTimeout(wait, 50);
+          else resolve();
+        };
+        wait();
+      });
       await Promise.all([loadConversation(targetId), loadHistory()]);
     } catch (error) {
       setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const } : m));
