@@ -616,3 +616,8 @@ body,
 @media (min-width: 768px) and (max-width: 1100px) {
   .gm-knowledge-card-grid.is-double { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+.gm-lifecycle-module { border-radius: 12px; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.gm-lifecycle-module:hover { border-color: rgba(22, 119, 255, .42); box-shadow: 0 8px 20px rgba(22, 119, 255, .1); transform: translateY(-2px); }
+.gm-lifecycle-module-icon { display: inline-grid; width: 34px; height: 34px; place-items: center; color: #1677ff; background: rgba(22, 119, 255, .11); border-radius: 9px; font-size: 17px; }
