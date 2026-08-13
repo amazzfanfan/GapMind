@@ -34,6 +34,10 @@ class FakeGateway:
             raise RuntimeError("upstream unavailable")
         return FakeResponse(self.content)
 
+    def stream_chat_completion(self, messages, **kwargs):
+        for delta in getattr(self, "stream_deltas", ["流式"]):
+            yield delta
+
 
 @pytest.fixture
 def fake_gateway(monkeypatch):
@@ -308,3 +312,24 @@ def test_conversation_workspace_is_immutable(client):
         json={"workspace_id": str(uuid4())},
     )
     assert missing.status_code == 404
+
+
+def test_stream_message_emits_sse_events(client, fake_gateway):
+    fake_gateway.stream_deltas = ["第一", "段", "内容"]
+    conversation = client.post("/api/v1/chat/conversations", json={"title": "stream"}).json()
+    resp = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages/stream",
+        json={"content": "hi"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.text
+    assert '"type": "start"' in body
+    assert '"type": "token"' in body
+    assert '"content": "第一"' in body
+    assert '"content": "内容"' in body
+    assert '"type": "done"' in body
+    # persisted assistant message is complete
+    detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
+    assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+    assert assistant["content"] == "第一段内容"
+    assert assistant["status"] == "completed"

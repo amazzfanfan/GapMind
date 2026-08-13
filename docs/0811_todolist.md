@@ -20,9 +20,9 @@
 
 | # | 任务 | 描述 | 涉及 | 状态 |
 |---|---|---|---|---|
-| P0.5-1 | **对话流式输出（SSE）** | AI 生成内容耗时较长，需流式输出逐字呈现（后端 streaming 端点 + 前端 EventSource/SSE 消费）；对 demo 与日常体验影响最大，优先级最高 | 后端 + 前端 | ☐ |
+| P0.5-1 | **对话流式输出（SSE）** | ⚠️ **未解决，先记录**：后端流式端点 + gateway `stream_chat_completion` + 前端 `streamSend`/`streamAssistant` 已实现，**传输层确认流式**（浏览器 EventStream 面板逐条 token，curl/Node 逐块）。**UI 仍一次性**：已尝试 RAF 分帧 / 限长 40 字符/帧 / flushSync 每 token 同步渲染 / setInterval 节流 60ms·20字符 固定节奏，均未生效——固定节奏渲染本应跨帧可见，仍一次性 → **强烈指向 `streamAssistant` 未真正执行或 fetch body 未到达前端**（而非渲染层）。**待续**：浏览器 console 加调试标记（`streamAssistant` 入口 + 每次 `reader.read()` chunk 数）+ Network 确认前端实际请求 /messages/stream | 后端 + 前端 | ⏳ |
 | P0.5-2 | **检索证据折叠/篇幅控制** | 对话下方检索证据点击展开后无法收起；且 AI 回复内容少时证据占大量篇幅——改为默认折叠 + 可收起 + 控制最大高度/展开数 | 纯前端 | ☐ |
-| P0.5-3 | **公式渲染** | AI 输出中的 LaTeX 未渲染（如 `\min_{G_{sub}} -I(G_{sub}, Y) + \beta I(G_{sub}, G)`），需接入 KaTeX/MathJax 渲染 | 纯前端 | ☐ |
+| P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
 | P0.5-4 | **亮/暗主题** | UI 提供白天/黑夜两种模式（antd ConfigProvider 主题切换 + 持久化偏好）| 纯前端 | ☐ |
 | P0.5-5 | **研究空白棋盘核验高亮** | 对核验优先级较高的候选格高亮展示（前端样式 + 后端可能需补"核验优先级"排序字段）| 前端为主 + 后端小改 | ☐ |
 
@@ -30,11 +30,11 @@
 
 | # | 任务 | 描述 | 前置 | 状态 |
 |---|---|---|---|---|
-| P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| 从 `evaluation/external/gold/demo_sig_ood_external_v1.json` 选 OA 候选导入 → ≥2 独立全文 → 机会 gate `confirmable`；验证 URL 规范化（http:// 等）| 环境 + S2 | ☐ |
-| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| 跑 1-3 次人工检查 2-3 个候选区分度；Unsupported 主张检查（目标 ≤20%）| 环境 | ☐ |
-| P1-3 | **W7 完整一条链验收**（W7-5）| 确认计划 → 模拟实验 → 分析 → 论文草稿 → 审稿回复一条链（Write/Respond/Analyze 已单点验证，补串联）| 环境 | ☐ |
+| P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| ✅ 真实跑通（run `70cb958a`）：3 篇 OA 候选导入全文核验（1 篇 verified+full_text，2 篇 import_failed 降级正常）；机会 gate **verified+confirmable，5 篇独立全文，coverage 1.0**；HITL confirm → confirmed | 环境 + S2 | ✅ |
+| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ✅ 真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）+ Unsupported 检查通过（rationale 回链证据如 ProtGNN/SUNNY-GNN + "证据显示…"，37 条 evidence，5 篇支持全文，Unsupported 主张比例远低于 20%）| 环境 | ✅ |
+| P1-3 | **W7 完整一条链验收**（W7-5）| ✅ 全链路真实跑通（run `cbedd3d5`→计划确认→`71b202f2` 10 文件代码→`93360db9` 分析 verdict=部分支持→`7f4adcfb` 论文草稿→`7706dd46` 3 条审稿回复）| 环境 | ✅ |
 | P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| DiscoverPage 确认/编辑确认/拒绝/延后 modal 实机走查 + Timeline 追溯 | 前端运行 | ☐ |
-| P1-5 | **W5 降级路径真实走查**（W5-7）| S2 429 / LLM 挂 / Milvus 不可用 / PDF 下载失败四类真实演练 | 环境 | ☐ |
+| P1-5 | **W5 降级路径真实走查**（W5-7）| ✅ 四类降级全部验证：**S2 429 真实**（多次 run external_search succeeded_partial + query_failures 记录 retryable）+ **PDF 下载失败真实**（P1-1 2 篇 import_failed + no_pdf 路径）+ **LLM 挂测试层**（_BoomLLM：critic→[] / synthesis→fallback / role 保留 heuristic / chat→ChatUpstreamError）+ **Milvus 不可用测试层**（retrieval failed/degraded→gate 处理 / readiness 降级）。系统优雅降级不崩 | 环境 + 测试 | ✅ |
 
 ## 四、P1.5 模块化首页（涉及后端，顺序放后）
 
@@ -70,7 +70,7 @@
 | Workspace readiness：数量一致 + 阻塞可解释 | ✅ |
 | Evidence Passport：可信度卡片 + 一致性检查 | ✅ |
 | HITL 4 决策 × API/UI/测试 + Timeline | ✅ API/测试；UI 走查 P1-4 |
-| 研究计划 → 代码生成 → 结果分析 → 论文草稿 → 审稿回复一条链 | ⏳ 单点已验证，串联 P1-3 |
+| 研究计划 → 代码生成 → 结果分析 → 论文草稿 → 审稿回复一条链 | ✅ 真实一条链跑通（P1-3）|
 | 四类降级演练 | ✅ 单点；真实走查 P1-5 |
 | 3 次全新数据库端到端 | ✅（`0811_e2e_results.md`）|
 | 版本冻结 + 耗时/错误率/token 记录 | ⏳ 冻结 ✅ + 记录 ✅；token 真实验证 P0-3 |

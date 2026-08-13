@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Button, Layout, Menu, Space, Tag, Tooltip, theme } from "antd";
 import {
   AppstoreOutlined,
+  BulbOutlined,
   DashboardOutlined,
   MessageOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoonOutlined,
   ProjectOutlined,
   SearchOutlined,
   ThunderboltOutlined,
@@ -13,6 +15,7 @@ import {
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "../store/appStore";
 import { selectedGlobalKey } from "./layout/navigation";
+import { useTheme } from "../state/theme";
 
 const { Header, Sider, Content } = Layout;
 
@@ -27,6 +30,7 @@ export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { token } = theme.useToken();
+  const { isDark, toggleTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const [mobile, setMobile] = useState(false);
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
@@ -100,6 +104,9 @@ export default function AppLayout() {
             <Button type="text" icon={<ProjectOutlined />} onClick={() => navigate("/workspaces")}>
               切换课题
             </Button>
+            <Tooltip title={isDark ? "切换到浅色模式" : "切换到深色模式"}>
+              <Button type="text" aria-label="切换主题" icon={isDark ? <BulbOutlined /> : <MoonOutlined />} onClick={toggleTheme} />
+            </Tooltip>
           </Space>
         </Header>
         <Content className="gm-content">

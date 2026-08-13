@@ -7,7 +7,7 @@ structured-output extraction, retry, and token/cost tracking.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Generator
 
 from openai import OpenAI
 
@@ -103,6 +103,38 @@ class LLMGateway:
             total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
             raw=resp,
         )
+
+
+    def stream_chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+        disable_thinking: bool = False,
+    ) -> Generator[str, None, None]:
+        """Yield text deltas from a streaming chat completion (P0.5-1).
+
+        Mirror of ``chat_completion`` but with ``stream=True``; each yielded
+        string is one content delta. Structured-format callers should keep
+        using the non-streaming version.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        if disable_thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        stream = self.client.chat.completions.create(**kwargs, stream=True)
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
     def ping(self) -> bool:
         """Lightweight connectivity check - returns True if API key is set.
