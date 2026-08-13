@@ -31,7 +31,7 @@
 | # | 任务 | 描述 | 前置 | 状态 |
 |---|---|---|---|---|
 | P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| ✅ 真实跑通（run `70cb958a`）：3 篇 OA 候选导入全文核验（1 篇 verified+full_text，2 篇 import_failed 降级正常）；机会 gate **verified+confirmable，5 篇独立全文，coverage 1.0**；HITL confirm → confirmed | 环境 + S2 | ✅ |
-| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ⏳ 部分：真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）；Unsupported 主张检查（目标 ≤20%）待做 | 环境 | ⏳ |
+| P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ✅ 真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）+ Unsupported 检查通过（rationale 回链证据如 ProtGNN/SUNNY-GNN + "证据显示…"，37 条 evidence，5 篇支持全文，Unsupported 主张比例远低于 20%）| 环境 | ✅ |
 | P1-3 | **W7 完整一条链验收**（W7-5）| ✅ 全链路真实跑通（run `cbedd3d5`→计划确认→`71b202f2` 10 文件代码→`93360db9` 分析 verdict=部分支持→`7f4adcfb` 论文草稿→`7706dd46` 3 条审稿回复）| 环境 | ✅ |
 | P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| DiscoverPage 确认/编辑确认/拒绝/延后 modal 实机走查 + Timeline 追溯 | 前端运行 | ☐ |
 | P1-5 | **W5 降级路径真实走查**（W5-7）| S2 429 / LLM 挂 / Milvus 不可用 / PDF 下载失败四类真实演练 | 环境 | ☐ |
