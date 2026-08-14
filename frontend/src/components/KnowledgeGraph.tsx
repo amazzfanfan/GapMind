@@ -62,6 +62,7 @@ import {
   branchGraph,
   connectedNodeIds,
   contentSummary,
+  hideEntityLayer,
   type GraphData,
   type GraphViewMode,
   mergeGraph,
@@ -370,6 +371,10 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
   const [filtersCollapsed, setFiltersCollapsed] = useState(false);
   const [showRelationLabels, setShowRelationLabels] = useState(false);
   const [showLowConfidence, setShowLowConfidence] = useState(true);
+  // P2: hide the redundant canonical-entity layer in the semantic views by
+  // default (many same-named items pointing at one same-named entity node).
+  // Evidence view always keeps it as part of the provenance chain.
+  const [showEntityLayer, setShowEntityLayer] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [searching, setSearching] = useState(false);
@@ -481,8 +486,11 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
       showRejected: activeFilters.status === "rejected",
       minConfidence: showLowConfidence ? 0 : Math.max(activeFilters.minConfidence ?? 0, 0.6),
     });
-    return branchGraph(projected, branchNodeId);
-  }, [active.graph, activeFilters.minConfidence, activeFilters.status, branchNodeId, mode, showLowConfidence]);
+    const layerFiltered = (mode !== "evidence" && !showEntityLayer && activeFilters.relationType !== "canonicalizes")
+      ? hideEntityLayer(projected)
+      : projected;
+    return branchGraph(layerFiltered, branchNodeId);
+  }, [active.graph, activeFilters.minConfidence, activeFilters.relationType, activeFilters.status, branchNodeId, mode, showEntityLayer, showLowConfidence]);
 
   const selectedNode = displayGraph.nodes.find((node) => node.id === selectedNodeId)
     ?? active.graph.nodes.find((node) => node.id === selectedNodeId)
@@ -902,6 +910,11 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
               <Space wrap>
                 <Checkbox checked={showRelationLabels} onChange={(event) => setShowRelationLabels(event.target.checked)}>显示全部关系标签</Checkbox>
                 <Checkbox checked={showLowConfidence} onChange={(event) => setShowLowConfidence(event.target.checked)}>显示低置信度节点</Checkbox>
+                {mode !== "evidence" && (
+                  <Checkbox checked={showEntityLayer} onChange={(event) => setShowEntityLayer(event.target.checked)}>
+                    显示规范实体层
+                  </Checkbox>
+                )}
               </Space>
               <Text type="secondary">画布显示 {displayGraph.nodes.length} 个节点 · {displayGraph.edges.length} 条关系</Text>
             </Flex>

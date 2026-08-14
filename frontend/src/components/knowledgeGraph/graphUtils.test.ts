@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KnowledgeGraphEdge, KnowledgeGraphNode } from "../../api/types/knowledge";
-import { branchGraph, mergeGraph, projectGraph } from "./graphUtils";
+import { branchGraph, hideEntityLayer, mergeGraph, projectGraph } from "./graphUtils";
 
 function node(id: string, type: string, nodeKind = "knowledge"): KnowledgeGraphNode {
   return {
@@ -51,5 +51,48 @@ describe("knowledge graph utilities", () => {
       "a",
     );
     expect(result.nodes.map((item) => item.id)).toEqual(["a", "b"]);
+  });
+
+  it("hides canonicalizes edges and the entity nodes they leave isolated", () => {
+    const graph = {
+      nodes: [
+        node("gcn-a", "method"),
+        node("gcn-b", "method"),
+        node("entity-gcn", "canonical_entity", "canonical_entity"),
+        node("m1", "method"),
+      ],
+      edges: [
+        { ...edge("ca", "gcn-a", "entity-gcn"), relation_type: "canonicalizes" },
+        { ...edge("cb", "gcn-b", "entity-gcn"), relation_type: "canonicalizes" },
+        edge("mm", "gcn-a", "m1"),
+      ],
+    };
+    const result = hideEntityLayer(graph);
+    expect(result.edges.map((item) => item.id)).toEqual(["mm"]);
+    expect(result.nodes.map((item) => item.id)).toEqual(["gcn-a", "gcn-b", "m1"]);
+  });
+
+  it("keeps a canonical_entity node that still has a non-canonicalizes edge", () => {
+    const graph = {
+      nodes: [
+        node("gcn", "method"),
+        node("entity-gcn", "canonical_entity", "canonical_entity"),
+      ],
+      edges: [
+        { ...edge("ca", "gcn", "entity-gcn"), relation_type: "canonicalizes" },
+        edge("sem", "entity-gcn", "gcn"),
+      ],
+    };
+    const result = hideEntityLayer(graph);
+    expect(result.nodes.map((item) => item.id)).toContain("entity-gcn");
+    expect(result.edges.map((item) => item.id)).toContain("sem");
+  });
+
+  it("leaves graphs without canonical_entity nodes untouched", () => {
+    const graph = {
+      nodes: [node("a", "method"), node("b", "task")],
+      edges: [edge("ab", "a", "b")],
+    };
+    expect(hideEntityLayer(graph)).toEqual(graph);
   });
 });

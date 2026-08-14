@@ -25,6 +25,7 @@
 | P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
 | P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
+| P0.5-6 | **知识图谱规范实体层冗余** | ✅ 已实现：landscape/claims 默认隐藏 `canonicalizes`（对应规范实体）边 + 孤立实体节点（18 个 GNNExplainer 指 1 个 GNNExplainer 的视觉噪音），evidence 视图保留溯源链；加"显示规范实体层"开关，按"canonicalizes"筛选时自动显示；`hideEntityLayer` 纯函数 + 3 单测，38 前端测试过 | 纯前端 | ✅ |
 
 ## 三、P1 真实端到端验收（计划 W1/W2/W5/W7 剩余）
 
