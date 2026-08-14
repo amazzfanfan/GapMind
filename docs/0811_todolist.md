@@ -23,8 +23,8 @@
 | P0.5-1 | **对话流式输出（SSE）** | ✅ **根因找到 + 已修复**：后端逐 token + 前端 SSE 解析 + 节流渲染全链路代码正确；真正 bug 在**新会话场景**——`send` 里 `navigate(新URL)` 触发 `useEffect([conversationId])` 立刻 `loadConversation()`，用 DB pending 消息（真实 id + generating + 空内容）**替换了乐观消息**（`local-stream-*` id），`appendDelta` 按乐观 id 匹配就永远失效 → 流式全程无可见更新，流结束一次性显示全文（即用户看到的"闪一下出全部"）。修复：新增 `streaming` state，流式期间 effect 跳过 reload，结束后 effect 统一加载持久化全文；`streamAssistant` 加 console.debug 标记（enter/done+chunks/tokens）。tsc + 35 测试过。**待浏览器实测确认** | 前端 | ✅ 代码 |
 | P0.5-2 | **检索证据折叠/篇幅控制** | ✅ 已实现：antd Collapse 默认折叠 + 每引文 Paragraph 展开/收起可切换 + `MAX_VISIBLE=3`"查看全部"（`ChatCitations.tsx`，`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
-| P0.5-4 | **亮/暗主题** | UI 提供白天/黑夜两种模式（antd ConfigProvider 主题切换 + 持久化偏好）| 纯前端 | ☐ |
-| P0.5-5 | **研究空白棋盘核验高亮** | 对核验优先级较高的候选格高亮展示（前端样式 + 后端可能需补"核验优先级"排序字段）| 前端为主 + 后端小改 | ☐ |
+| P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
+| P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
 
 ## 三、P1 真实端到端验收（计划 W1/W2/W5/W7 剩余）
 
@@ -47,7 +47,7 @@
 | # | 任务 | 描述 | 状态 |
 |---|---|---|---|
 | P2-1 | **检索质量 Gate** | similar 0.778 / counter 0.667 未达标（demo 作 baseline）；封版后优化召回（over-fetch/reranker）| ☐ |
-| P2-2 | **P1 语义去重** | `retrieval_dedup_semantic` feature flag（阈值 0.9 + 跨 paper 护栏）| ☐ |
+| P2-2 | **P1 语义去重** | ✅ `dedup_semantic`（feature flag `retrieval_dedup_semantic`，阈值 0.9，同 paper+同 type 护栏）+ `_run_extract` 接线（rejected 记 ExtractionRejection stage=`dedup_semantic`）+ `_validate_and_rebase_evidence` 补 paper_id + 9 单测 + 真实数据静态验证（99→88 全同论文合并，0 跨论文）| ✅ |
 | P2-3 | **知识确认** | readiness 显示 808 条知识待审（confirmed=0）；demo 前可选确认关键知识提升可信度 | ☐ |
 | P2-4 | **外部自动生成 recall** | 0.286（管线已验证，demo 作辅助线索）；可选校准 gold set 或轴 query 精确查找 | ☐ |
 

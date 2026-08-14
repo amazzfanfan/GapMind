@@ -53,7 +53,7 @@ from app.gateway.prompts.extract_v1 import (
 )
 from app.workers.celery_app import celery_app
 from app.workers.tasks.extraction.batching import split_extraction_batches
-from app.workers.tasks.extraction.dedup import dedup_exact
+from app.workers.tasks.extraction.dedup import dedup_exact, dedup_semantic
 from app.workers.tasks.extraction.evidence_rebaser import resolve_evidence_span
 from app.workers.tasks.extraction.llm_caller import call_llm_with_retry
 
@@ -210,6 +210,59 @@ def _run_extract(db: Session, task_id: str) -> dict:
             raise RuntimeError(
                 "all extracted items were rejected by evidence validation"
             )
+
+        # P1 (feature-flagged): collapse semantic near-duplicates (same fact at
+        # different spans) BEFORE writing. Rejections are auditable ExtractionRejection
+        # rows; if embedding is unavailable we degrade gracefully to no semantic dedup.
+        if settings.retrieval_dedup_semantic:
+            try:
+                from app.gateway.embedding import get_embedding_gateway
+
+                gw = get_embedding_gateway()
+                validated_items, sem_rejected = dedup_semantic(
+                    validated_items,
+                    embed_texts=lambda texts: gw.embed_texts(texts).embeddings,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "extract_knowledge.dedup_semantic_failed",
+                    paper_id=paper.id,
+                    run_id=run.id,
+                    error=str(exc),
+                )
+                sem_rejected = []
+            if sem_rejected:
+                for rejected in sem_rejected:
+                    sp = rejected.get("source_provenance") or {}
+                    _persist_rejections(
+                        db,
+                        [
+                            _make_rejection(
+                                run=run,
+                                paper=paper,
+                                batch_index=sp.get("batch_index"),
+                                rejection_kind="item",
+                                stage="dedup_semantic",
+                                reason_code="near_duplicate_item",
+                                reason_detail=(
+                                    "Semantic near-duplicate of another same-paper"
+                                    f" {rejected.get('type')} item (cosine >= 0.90)"
+                                ),
+                                raw_payload=rejected,
+                                item_type=rejected.get("type"),
+                                canonical_name=rejected.get("canonical_name"),
+                                evidence_preview=(
+                                    str(rejected.get("evidence_text") or "")[:200]
+                                ),
+                            )
+                        ],
+                    )
+                logger.info(
+                    "extract_knowledge.dedup_semantic",
+                    paper_id=paper.id,
+                    run_id=run.id,
+                    dropped=len(sem_rejected),
+                )
 
         (
             items_count,
@@ -556,11 +609,16 @@ def _validate_and_rebase_evidence(
         seen.add(dedupe_key)
 
         data = item.model_dump(mode="json")
-        data["source_provenance"] = {
+        provenance: dict = {
             "start_char": start,
             "end_char": end,
             "batch_index": batch_index,
         }
+        if paper is not None:
+            # Paper identity makes the dedup span/similarity keys paper-aware so
+            # cross-paper items are never merged (even if numeric spans collide).
+            provenance["paper_id"] = paper.id
+        data["source_provenance"] = provenance
         # Persist the exact artifact slice, not the LLM's whitespace-normalized
         # rendering of it.
         data["evidence_text"] = resolved_text

@@ -1,4 +1,4 @@
-"""Claim/limitation exact deduplication for knowledge extraction (P0).
+"""Claim/limitation deduplication for knowledge extraction (P0 exact + P1 semantic).
 
 During LLM extraction, the same evidence span can surface more than once:
 
@@ -11,6 +11,18 @@ During LLM extraction, the same evidence span can surface more than once:
 ``dedup_exact`` collapses both cases before anything is written, and
 returns the rejected items so the caller can record them as
 ``ExtractionRejection`` rows (auditable, never hard-deleted).
+
+RG-1 also surfaced *near*-duplicates: the same fact extracted at two
+*different* spans (e.g. "KG coverage 65.8%" twice as limitations). Those
+need embedding similarity, which is ``dedup_semantic`` (P1, feature-flagged
+behind ``retrieval_dedup_semantic``). It is deliberately conservative:
+
+  * only items from the SAME paper (``source_provenance.paper_id``) are
+    compared — across-paper items are never merged, even at high similarity;
+  * only same-``type`` items are merged (a claim is never folded into a
+    limitation);
+  * similarity must reach ``SEMANTIC_DUP_THRESHOLD`` (0.90) — we'd rather
+    keep two near-duplicates than silently merge two distinct facts.
 
 Method/task/dataset items already carry a shared ``canonical_entity_id``
 (see ``KnowledgeService.get_or_create_canonical_entity``); exact-span
@@ -25,12 +37,17 @@ pattern as ``extraction/batching.py`` / ``llm_caller.py``.
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+import math
+from typing import Any, Callable
 
 # Types that participate in cross-type same-span collision resolution.
 # A method and a claim sharing a span are distinct facts; only claim vs
 # limitation are treated as alternative classifications of one fact.
 _DEDUP_CROSS_TYPES = frozenset({"claim", "limitation"})
+
+# P1 semantic threshold. 0.9 is deliberately conservative: we'd rather keep
+# two near-duplicates than silently merge two distinct facts.
+SEMANTIC_DUP_THRESHOLD = 0.90
 
 
 def content_signature(content: dict[str, Any] | None) -> str:
@@ -121,4 +138,111 @@ def dedup_exact(
     return survivors, rejected
 
 
-__all__ = ["content_signature", "dedup_exact"]
+# ------------------------------------------------------------- P1: semantic near-dup
+
+def semantic_text(content: dict[str, Any] | None) -> str:
+    """The substantive text used for semantic comparison.
+
+    Mirrors ``content_signature``: the claim statement / limitation
+    description carries the meaning; scope/conditions/severity extras are
+    ignored for similarity purposes.
+    """
+    content = content or {}
+    return str(content.get("statement") or content.get("description") or "").strip()
+
+
+def _paper_key(item: dict[str, Any]) -> str:
+    """Paper identity for the same-paper guard (mirrors ``_span``)."""
+    sp = item.get("source_provenance") or {}
+    return str(sp.get("paper_id") or sp.get("artifact_id") or "")
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def dedup_semantic(
+    items: list[dict[str, Any]],
+    *,
+    embed_texts: Callable[[list[str]], list[list[float]]],
+    threshold: float = SEMANTIC_DUP_THRESHOLD,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """P1: collapse near-duplicate claims/limitations via embedding cosine.
+
+    ``embed_texts(list[str]) -> list[vector]`` is injected so tests can stub
+    it (the real caller batches via ``EmbeddingGateway.embed_texts``). Returns
+    ``(survivors, rejected)``.
+
+    Hard guards:
+      * only same-``type`` items within the SAME paper are compared — a
+        limitation is never folded into a claim, and two papers that merely
+        sound alike are never merged;
+      * similarity must be ``>= threshold`` (0.90 default).
+
+    On a match the higher-confidence item survives; the other is returned as
+    rejected so the caller can record an ``ExtractionRejection`` (nothing is
+    hard-deleted). Items with no substantive text (or no type) are never
+    deduped and are always kept.
+    """
+    if not items:
+        return [], []
+
+    texts = [semantic_text(item.get("content")) for item in items]
+    indexable = [i for i, text in enumerate(texts) if text]
+
+    vectors: list[list[float] | None] = [None] * len(items)
+    if indexable:
+        embedded = embed_texts([texts[i] for i in indexable])
+        for j, idx in enumerate(indexable):
+            vectors[idx] = embedded[j]
+
+    # Group comparable items by (paper, type).
+    groups: dict[tuple[str, str], list[tuple[int, list[float], dict[str, Any]]]] = {}
+    for i, item in enumerate(items):
+        item_type = item.get("type")
+        if not item_type or not texts[i]:
+            continue
+        groups.setdefault(
+            (_paper_key(item), str(item_type)), []
+        ).append((i, vectors[i] or [], item))
+
+    survivors: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    deduped_indices: set[int] = set()
+
+    for (_paper, item_type), entries in groups.items():
+        kept: list[tuple[int, list[float], dict[str, Any]]] = []
+        for idx, emb, item in entries:
+            deduped_indices.add(idx)
+            dup = False
+            for prev_idx, prev_emb, prev in kept:
+                if _cosine(emb, prev_emb) >= threshold:
+                    # Same-paper, same-type near-dup → keep higher confidence.
+                    if item.get("confidence", 0.0) > prev.get("confidence", 0.0):
+                        kept.remove((prev_idx, prev_emb, prev))
+                        kept.append((idx, emb, item))
+                        rejected.append(prev)
+                    else:
+                        rejected.append(item)
+                    dup = True
+                    break
+            if not dup:
+                kept.append((idx, emb, item))
+        survivors.extend(item for _, _, item in kept)
+
+    # Items outside any (paper, type) group are never deduped.
+    survivors.extend(
+        item for i, item in enumerate(items) if i not in deduped_indices
+    )
+
+    return survivors, rejected
+
+
+__all__ = ["content_signature", "dedup_exact", "dedup_semantic", "semantic_text"]
