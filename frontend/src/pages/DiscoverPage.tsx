@@ -515,6 +515,9 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
   const supporting = detail.evidence.filter((item) => item.relation === "supports");
   const similar = detail.evidence.filter((item) => item.relation === "similar");
   const counter = detail.evidence.filter((item) => ["contradicts", "qualifies", "overlaps", "unknown"].includes(item.relation));
+  const versionById = new Map(detail.versions.map((item) => [item.id, item.version_number]));
+  const decisionLabel = (action: string) => ({ confirm: "确认", edit_confirm: "编辑确认", reject: "驳回", defer: "暂缓" }[action] ?? action);
+  const decisionColor = (action: string) => ({ confirm: "green", edit_confirm: "blue", reject: "red", defer: "orange" }[action] ?? "default");
   return <Space direction="vertical" style={{ width: "100%" }}>
     <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatusLabel(opportunityStatus(detail.opportunity))}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{verificationDisplayLabel(version?.verification_status)}</Tag><Tag>证据覆盖率 {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>智能体置信度 {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
     {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } action={supporting.length ? <Button size="small" onClick={onReassess} loading={loading}>重新评估证据</Button> : undefined} />}
@@ -528,6 +531,35 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
     <EvidenceGroup workspaceId={workspaceId} title={`反证／限定性证据（${counter.length}）`} items={counter} empty="暂无已保存的反证或限定性证据" />
     <Divider orientation="left">验证方案</Divider><List size="small" dataSource={(version?.candidate_validation_plan?.steps as string[]) || []} renderItem={(step) => <List.Item>{localizedGeneratedText(step)}</List.Item>} locale={{ emptyText: "暂无结构化验证步骤" }} />
     <Divider orientation="left">人工决策</Divider><Space wrap><Button danger onClick={() => onAction("reject")} loading={loading}>驳回</Button><Button onClick={() => onAction("defer")} loading={loading}>暂缓</Button><Button onClick={onEdit} loading={loading} disabled={!confirmable}>编辑并确认</Button><Button type="primary" onClick={() => onAction("confirm")} loading={loading} disabled={!confirmable}>确认</Button>{["confirmed", "edited_confirmed"].includes(detail.opportunity.status) && <Button onClick={onConvert} loading={loading}>生成研究计划</Button>}</Space>
+    <Divider orientation="left">决策历史（HITL 追溯）</Divider>
+    {detail.decisions.length === 0
+      ? <Text type="secondary">暂无人工决策记录；每次确认 / 编辑确认 / 驳回 / 暂缓都会在此留痕，并同步写入工作区时间线。</Text>
+      : <List size="small" dataSource={detail.decisions} renderItem={(decision) => (
+        <List.Item>
+          <Space direction="vertical" size={2} style={{ width: "100%" }}>
+            <Space wrap>
+              <Tag color={decisionColor(decision.action)}>{decisionLabel(decision.action)}</Tag>
+              <Text type="secondary">{new Date(decision.created_at).toLocaleString()}</Text>
+              <Text type="secondary">执行人 {decision.actor}</Text>
+              <Text type="secondary">版本 v{versionById.get(decision.to_version_id) ?? "—"}</Text>
+            </Space>
+            {decision.reason && <Text type="secondary">备注：{decision.reason}</Text>}
+            {decision.defer_condition && <Text type="secondary">重新审阅条件：{decision.defer_condition}</Text>}
+          </Space>
+        </List.Item>
+      )} />}
+    {detail.versions.length > 1 && (
+      <Card size="small" title="版本历史（不可变）">
+        <List size="small" dataSource={[...detail.versions].sort((a, b) => b.version_number - a.version_number)} renderItem={(item) => (
+          <List.Item><Space wrap>
+            <Tag>v{item.version_number}</Tag>
+            <Text>{item.created_by === "user" ? "人工编辑确认" : "AI 生成"}</Text>
+            <Text type="secondary">{new Date(item.created_at).toLocaleString()}</Text>
+            {item.id === detail.current_version?.id && <Tag color="blue">当前</Tag>}
+          </Space></List.Item>
+        )} />
+      </Card>
+    )}
     {detail.plan && <Card size="small" title="已生成研究计划"><Paragraph>{detail.plan.research_question}</Paragraph></Card>}
   </Space>;
 }

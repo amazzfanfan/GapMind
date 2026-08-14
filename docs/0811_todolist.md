@@ -34,7 +34,7 @@
 | P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| ✅ 真实跑通（run `70cb958a`）：3 篇 OA 候选导入全文核验（1 篇 verified+full_text，2 篇 import_failed 降级正常）；机会 gate **verified+confirmable，5 篇独立全文，coverage 1.0**；HITL confirm → confirmed | 环境 + S2 | ✅ |
 | P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ✅ 真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）+ Unsupported 检查通过（rationale 回链证据如 ProtGNN/SUNNY-GNN + "证据显示…"，37 条 evidence，5 篇支持全文，Unsupported 主张比例远低于 20%）| 环境 | ✅ |
 | P1-3 | **W7 完整一条链验收**（W7-5）| ✅ 全链路真实跑通（run `cbedd3d5`→计划确认→`71b202f2` 10 文件代码→`93360db9` 分析 verdict=部分支持→`7f4adcfb` 论文草稿→`7706dd46` 3 条审稿回复）| 环境 | ✅ |
-| P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| DiscoverPage 确认/编辑确认/拒绝/延后 modal 实机走查 + Timeline 追溯 | 前端运行 | ☐ |
+| P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| ✅ 代码级走查完成 + 修复：4 决策 modal（确认/编辑确认/驳回/暂缓）前后端端点已对齐、后端写 human_decisions + Timeline 事件、confirm/edit 受 confirmable gate、defer 必填条件。**修复缺口**：OpportunityPanel 原不渲染 `detail.decisions`/`detail.versions` → 新增"决策历史（HITL 追溯）"（动作/时间/执行人/备注/重审条件/版本号）+ "版本历史（不可变）"；TimelineSection 补齐 `opportunity.*`/`discover.*`/`knowledge.*`/`plan.*` 事件中文标签。tsc + 38 前端测试过。**浏览器实机走查待用户** | 前端 | ✅ 代码 |
 | P1-5 | **W5 降级路径真实走查**（W5-7）| ✅ 四类降级全部验证：**S2 429 真实**（多次 run external_search succeeded_partial + query_failures 记录 retryable）+ **PDF 下载失败真实**（P1-1 2 篇 import_failed + no_pdf 路径）+ **LLM 挂测试层**（_BoomLLM：critic→[] / synthesis→fallback / role 保留 heuristic / chat→ChatUpstreamError）+ **Milvus 不可用测试层**（retrieval failed/degraded→gate 处理 / readiness 降级）。系统优雅降级不崩 | 环境 + 测试 | ✅ |
 
 ## 四、P1.5 模块化首页（涉及后端，顺序放后）
