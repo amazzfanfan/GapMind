@@ -20,8 +20,8 @@
 
 | # | 任务 | 描述 | 涉及 | 状态 |
 |---|---|---|---|---|
-| P0.5-1 | **对话流式输出（SSE）** | ⚠️ **未解决，先记录**：后端流式端点 + gateway `stream_chat_completion` + 前端 `streamSend`/`streamAssistant` 已实现，**传输层确认流式**（浏览器 EventStream 面板逐条 token，curl/Node 逐块）。**UI 仍一次性**：已尝试 RAF 分帧 / 限长 40 字符/帧 / flushSync 每 token 同步渲染 / setInterval 节流 60ms·20字符 固定节奏，均未生效——固定节奏渲染本应跨帧可见，仍一次性 → **强烈指向 `streamAssistant` 未真正执行或 fetch body 未到达前端**（而非渲染层）。**待续**：浏览器 console 加调试标记（`streamAssistant` 入口 + 每次 `reader.read()` chunk 数）+ Network 确认前端实际请求 /messages/stream | 后端 + 前端 | ⏳ |
-| P0.5-2 | **检索证据折叠/篇幅控制** | 对话下方检索证据点击展开后无法收起；且 AI 回复内容少时证据占大量篇幅——改为默认折叠 + 可收起 + 控制最大高度/展开数 | 纯前端 | ☐ |
+| P0.5-1 | **对话流式输出（SSE）** | ✅ **根因找到 + 已修复**：后端逐 token + 前端 SSE 解析 + 节流渲染全链路代码正确；真正 bug 在**新会话场景**——`send` 里 `navigate(新URL)` 触发 `useEffect([conversationId])` 立刻 `loadConversation()`，用 DB pending 消息（真实 id + generating + 空内容）**替换了乐观消息**（`local-stream-*` id），`appendDelta` 按乐观 id 匹配就永远失效 → 流式全程无可见更新，流结束一次性显示全文（即用户看到的"闪一下出全部"）。修复：新增 `streaming` state，流式期间 effect 跳过 reload，结束后 effect 统一加载持久化全文；`streamAssistant` 加 console.debug 标记（enter/done+chunks/tokens）。tsc + 35 测试过。**待浏览器实测确认** | 前端 | ✅ 代码 |
+| P0.5-2 | **检索证据折叠/篇幅控制** | ✅ 已实现：antd Collapse 默认折叠 + 每引文 Paragraph 展开/收起可切换 + `MAX_VISIBLE=3`"查看全部"（`ChatCitations.tsx`，`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
 | P0.5-4 | **亮/暗主题** | UI 提供白天/黑夜两种模式（antd ConfigProvider 主题切换 + 持久化偏好）| 纯前端 | ☐ |
 | P0.5-5 | **研究空白棋盘核验高亮** | 对核验优先级较高的候选格高亮展示（前端样式 + 后端可能需补"核验优先级"排序字段）| 前端为主 + 后端小改 | ☐ |
