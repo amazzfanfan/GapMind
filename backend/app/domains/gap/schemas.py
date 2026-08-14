@@ -107,6 +107,7 @@ class GapExtractionTask(BaseModel):
     paper_id: str
     task_id: str
     status: str
+    skipped: bool = False
 
 
 class GapExtractionResponse(BaseModel):

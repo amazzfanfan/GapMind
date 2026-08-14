@@ -128,6 +128,29 @@ export function branchGraph(graph: GraphData, nodeId: string | null): GraphData 
   };
 }
 
+/**
+ * Hides the canonical-entity layer for the semantic views.
+ *
+ * Knowledge items already carry their canonical name as the node label, so the
+ * "对应规范实体" (canonicalizes) edges + entity nodes are pure visual noise when
+ * many same-named items all point at one same-named entity node (e.g. 18
+ * "GNNExplainer" items → one "GNNExplainer" entity). Removes canonicalizes
+ * edges, then drops canonical_entity nodes left with no other connection (an
+ * entity that happens to have a real semantic edge is preserved).
+ */
+export function hideEntityLayer(graph: GraphData): GraphData {
+  const edges = graph.edges.filter((edge) => edge.relation_type !== "canonicalizes");
+  const degree = new Map<string, number>();
+  edges.forEach((edge) => {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+  });
+  const nodes = graph.nodes.filter(
+    (node) => node.node_kind !== "canonical_entity" || (degree.get(node.id) ?? 0) > 0,
+  );
+  return { nodes, edges };
+}
+
 export function contentSummary(node: KnowledgeGraphNode): string {
   const preferred = ["statement", "description", "key_idea", "problem_addressed", "limitation_type"];
   for (const key of preferred) {

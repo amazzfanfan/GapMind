@@ -19,8 +19,98 @@ from app.domains.retrieval import service
 from app.domains.retrieval.service import (
     LOW_VALUE_SECTIONS,
     SIMILAR_WORK_MAX_CHUNKS_PER_PAPER,
+    _hit_to_result_item,
+    _hybrid_rerank_top_k,
     _is_low_value_section,
+    _paper_max_top_k,
 )
+
+
+# ==================================================================
+# _paper_max_top_k (paper-level dedup for the final top-k)
+# ==================================================================
+
+
+def _rit(hit_id: str, paper_id: str | None, score: float):
+    return _hit_to_result_item({
+        "chunk_id": hit_id,
+        "paper_id": paper_id,
+        "score": score,
+        "text": f"text-{hit_id}",
+        "section": "Method",
+    })
+
+
+def test_paper_max_keeps_top_chunk_per_paper() -> None:
+    items = [
+        _rit("a1", "p-a", 0.9),
+        _rit("a2", "p-a", 0.8),
+        _rit("b1", "p-b", 0.7),
+        _rit("c1", "p-c", 0.6),
+    ]
+    out = _paper_max_top_k(items, 10)
+    assert [item.paper_id for item in out] == ["p-a", "p-b", "p-c"]
+    assert out[0].score == 0.9  # kept the higher-scoring chunk of p-a
+
+
+def test_paper_max_limits_to_top_k_distinct_papers() -> None:
+    items = [_rit(f"c{i}", f"p-{i}", 1.0 - i * 0.01) for i in range(15)]
+    out = _paper_max_top_k(items, 10)
+    assert len(out) == 10
+    assert len({item.paper_id for item in out}) == 10
+
+
+def test_paper_max_orders_by_best_score_desc() -> None:
+    items = [
+        _rit("a1", "p-a", 0.5),
+        _rit("b1", "p-b", 0.9),
+        _rit("c1", "p-c", 0.7),
+    ]
+    out = _paper_max_top_k(items, 10)
+    assert [item.paper_id for item in out] == ["p-b", "p-c", "p-a"]
+
+
+def test_paper_max_keeps_paperless_to_fill_remaining_slots() -> None:
+    items = [_rit("a1", "p-a", 0.9), _rit("n1", None, 0.5)]
+    out = _paper_max_top_k(items, 3)
+    assert len(out) == 2
+    assert out[-1].paper_id is None
+
+
+def test_paper_max_empty_input() -> None:
+    assert _paper_max_top_k([], 10) == []
+
+
+# ==================================================================
+# _hybrid_rerank_top_k (raw + rerank blend for similar work)
+# ==================================================================
+
+
+def test_hybrid_keeps_high_raw_low_rerank_paper_in_contention() -> None:
+    # p-a: high raw (0.9) but demoted by the cross-encoder; p-b the reverse.
+    candidates = [
+        {"chunk_id": "a1", "paper_id": "p-a", "score": 0.9, "text": "t", "section": "Method"},
+        {"chunk_id": "b1", "paper_id": "p-b", "score": 0.6, "text": "t", "section": "Method"},
+    ]
+    reranked = [_rit("b1", "p-b", 0.99), _rit("a1", "p-a", 0.30)]
+    out = _hybrid_rerank_top_k(candidates, reranked, 2)
+    assert {item.paper_id for item in out} == {"p-a", "p-b"}
+
+
+def test_hybrid_dedupes_paper_chunks() -> None:
+    candidates = [
+        {"chunk_id": "a1", "paper_id": "p-a", "score": 0.9, "text": "t", "section": "Method"},
+        {"chunk_id": "a2", "paper_id": "p-a", "score": 0.8, "text": "t", "section": "Method"},
+        {"chunk_id": "c1", "paper_id": "p-c", "score": 0.7, "text": "t", "section": "Method"},
+    ]
+    reranked = [_rit("a2", "p-a", 0.9), _rit("a1", "p-a", 0.85), _rit("c1", "p-c", 0.7)]
+    out = _hybrid_rerank_top_k(candidates, reranked, 2)
+    assert len(out) == 2
+    assert {item.paper_id for item in out} == {"p-a", "p-c"}
+
+
+def test_hybrid_empty_input() -> None:
+    assert _hybrid_rerank_top_k([], [], 10) == []
 
 
 # ==================================================================
@@ -189,7 +279,10 @@ def test_similar_work_falls_back_when_all_low_value(monkeypatch, tmp_path) -> No
     _patch(monkeypatch, hits)
 
     resp = service.find_similar_work("ws-1", "p-src", top_k=10, use_reranker=True)
-    assert len(resp.items) == 2
+    # Both chunks come from the same paper → paper-level dedup keeps one result
+    # (the fallback guarantees a NON-empty Top-K, not per-chunk results).
+    assert len(resp.items) == 1
+    assert resp.items[0].paper_id == "p-A"
 
 
 def test_similar_work_paper_diversity(monkeypatch, tmp_path) -> None:

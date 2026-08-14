@@ -32,6 +32,7 @@ export default function ChatPage() {
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
   const [mode, setMode] = useState<ChatMode>("chat");
   const [researchPlans, setResearchPlans] = useState<ResearchPlan[]>([]);
@@ -70,7 +71,13 @@ export default function ChatPage() {
   useEffect(() => { const timer = window.setTimeout(() => void loadHistory(), 180); return () => window.clearTimeout(timer); }, [loadHistory]);
   useEffect(() => { workspaceApi.list({ limit: 200 }).then((result) => setWorkspaces(result.items)).catch(() => setWorkspaces([])); }, []);
   useEffect(() => { if (!conversationId) setSelectedWorkspaceId(routeWorkspaceId); }, [conversationId, routeWorkspaceId]);
-  useEffect(() => { if (conversationId) void loadConversation(conversationId); else { setConversation(null); setMessages([]); setConversationError(null); } }, [conversationId, loadConversation]);
+  // P0.5-1: while an SSE stream is in flight we must NOT reload the conversation
+  // here — the backend only has the empty "generating" assistant at that point,
+  // and replacing the optimistic (local-stream-*) message with the DB row (real
+  // id) makes appendDelta unable to find it, so the UI appears one-shot. The
+  // send() flow flips streaming off when the stream ends; this effect then
+  // reloads the persisted full message.
+  useEffect(() => { if (streaming) return; if (conversationId) void loadConversation(conversationId); else { setConversation(null); setMessages([]); setConversationError(null); } }, [conversationId, loadConversation, streaming]);
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
   useEffect(() => {
@@ -142,6 +149,11 @@ export default function ChatPage() {
     if (mode !== "chat") { await startAgent(content); return; }
     let targetId = conversationId;
     setInput("");
+    setSending(true);
+    // P0.5-1: mark streaming BEFORE navigating so the [conversationId, streaming]
+    // effect sees streaming=true on the new route and won't clobber the optimistic
+    // message with the backend's empty "generating" row.
+    setStreaming(true);
     if (!targetId) {
       try {
         const created = await chatApi.createConversation(content.slice(0, 38), selectedWorkspaceId);
@@ -149,11 +161,12 @@ export default function ChatPage() {
         setConversation(created);
         navigate(chatConversationPath(created), { replace: true });
       } catch (error) {
+        setStreaming(false);
+        setSending(false);
         message.error(chatErrorMessage(error));
         return;
       }
     }
-    setSending(true);
     const assistantKey = `local-stream-${Date.now()}`;
     const optimisticUser = localMessage(targetId, "user", content, messages.length + 1);
     const optimisticAssistant = { ...localMessage(targetId, "assistant", "", messages.length + 2), id: assistantKey };
@@ -183,7 +196,7 @@ export default function ChatPage() {
     try {
       await streamAssistant(targetId, content, appendDelta);
       // Let the throttled renderer flush any remaining buffered tokens before
-      // loadConversation replaces the optimistic message with the full one.
+      // the effect reload replaces the optimistic message with the full one.
       await new Promise<void>((resolve) => {
         const wait = () => {
           if (streamTimer != null || pendingDelta) window.setTimeout(wait, 50);
@@ -191,8 +204,13 @@ export default function ChatPage() {
         };
         wait();
       });
-      await Promise.all([loadConversation(targetId), loadHistory()]);
+      // P0.5-1: streaming is over — flip the flag so the [conversationId,
+      // streaming] effect reloads the persisted full message (the DB row now has
+      // the complete content), then refresh the sidebar history.
+      setStreaming(false);
+      void loadHistory();
     } catch (error) {
+      setStreaming(false);
       setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const } : m));
       message.error(chatErrorMessage(error));
       void loadHistory();
@@ -200,14 +218,19 @@ export default function ChatPage() {
   };
 
   const streamAssistant = async (conversationId: string, content: string, appendDelta: (d: string) => void) => {
+    console.debug("[chat-stream] enter", { conversationId, at: new Date().toISOString() });
     const resp = await chatApi.streamSend(conversationId, content);
     if (!resp.ok || !resp.body) throw new Error("流式响应不可用");
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let chunks = 0;
+    let tokens = 0;
+    let firstTokenAt: string | null = null;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      chunks += 1;
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split("\n\n");
       buffer = parts.pop() ?? "";
@@ -216,10 +239,15 @@ export default function ChatPage() {
         if (!line.startsWith("data: ")) continue;
         try {
           const event = JSON.parse(line.slice(6)) as { type?: string; content?: string };
-          if (event.type === "token" && typeof event.content === "string") appendDelta(event.content);
+          if (event.type === "token" && typeof event.content === "string") {
+            if (firstTokenAt === null) firstTokenAt = new Date().toISOString();
+            tokens += 1;
+            appendDelta(event.content);
+          }
         } catch { /* ignore malformed SSE line */ }
       }
     }
+    console.debug("[chat-stream] done", { chunks, tokens, firstTokenAt, at: new Date().toISOString() });
   };
 
   const refreshAgent = async (run: AgentRunDetail) => {

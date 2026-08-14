@@ -351,3 +351,27 @@ reasoning_content: 65431 字符
 | 日期 | 内容 |
 |---|---|
 | 2026-08-05 | P0 实现完成 + 静态验证通过；发现 LLM 空输出生产 bug，记录 thinking mode 修复方向 |
+| 2026-08-14 | **P1 语义去重实现 + 真实数据静态验证通过**（见 §九） |
+
+## 九、P1 实施状态（2026-08-14 已完成）
+
+### 实现
+
+| 项 | 说明 |
+|---|---|
+| `extraction/dedup.py` `dedup_semantic` | 纯函数；`embed_texts(list[str])->list[vector]` 注入（真实接线用 `EmbeddingGateway.embed_texts` 批量）；**同 paper + 同 type 才比**（跨论文/跨类型绝不合并），余弦 `>=0.90` 才合并，保留高置信度、低者 rejected |
+| `dedup_semantic` 硬护栏 | paper 键从 `source_provenance.paper_id`（回退 artifact_id）；同 paper 组内 `(paper, type)` 分组比较 |
+| feature flag | `settings.retrieval_dedup_semantic`（默认 False）；embedding 失败时降级为不语义去重（log warning，不打断抽取）|
+| 接线 | `_run_extract` 在 `_write_extraction` 前调用；rejected 记 `ExtractionRejection`（stage=`dedup_semantic`，reason=`near_duplicate_item`）|
+| `_validate_and_rebase_evidence` | `source_provenance` 补 `paper_id`（使 dedup span/similarity 键真正 paper-aware，补上 P0 写入路径跨论文护栏的空缺）|
+| 测试 | 9 个单测（同 paper 高置信度胜出 / 低于阈值双留 / 跨论文不合并 / 跨类型不合并 / 空输入 / 空文本保留 / 批量一次嵌入 / 数量守恒）|
+| 验证脚本 | `scripts/verify_dedup_semantic.py --workspace-id <wid>`（只读）|
+
+### 真实数据静态验证（workspace `533c89cd`，2 篇论文，99 条 claim/limitation）
+
+- **99 → 88（11 项合并），全部在 paper `8eb9634d` 内，0 项跨论文合并**（paper `103738e1` 未触碰）→ 跨 paper 护栏生效
+- 合并命中 RG-1 已知近重复：`complementary strengths` ×2 / `complementary behaviors` / `GraphRAG achieves higher accuracy…` 近义表述 / LLM-as-a-Judge limitation / GraphRAG 额外开销 limitation
+- 阈值 0.9 恰当：0.80-0.86 的"相似但不同"对（如 multi-hop 能力 vs RAG 单跳优势）全部保留，符合"宁可漏不可误"
+
+**回滚**：`retrieval_dedup_semantic=False` 即关。
+| 2026-08-14 | **P1 语义去重实现 + 真实数据静态验证通过**（见 §九） |

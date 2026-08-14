@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_dimension: int = 1024
 
+    # ---- Knowledge extraction dedup ----
+    # P1 semantic near-dup collapse (embedding cosine ≥ 0.9, same-paper + same-type
+    # guard). Off by default; enabling it costs one embedding batch per paper.
+    retrieval_dedup_semantic: bool = False
+
     # ---- Reranker (SiliconFlow, BGE-reranker-v2-m3) ----
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
 

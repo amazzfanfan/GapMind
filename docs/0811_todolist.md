@@ -14,17 +14,20 @@
 | P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ☐ |
 | P0-3 | **真实验证 token_usage** | 重启后跑一次 Discover，确认 `run.stage_summaries["token_usage"]` 正确累计 | P0-2 | ☐ |
 | P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ☐ |
-| P0-5 | **W6-5 现场演示预演** | 走 `0811_demo_script.md` 10 步，确认展示点 + 降级路径 | P0-2 | ☐ |
+| P0-5 | **W6-5 现场演示预演** | ✅ 环境/数据预检完成（服务全绿：后端/前端/Redis/PG/Milvus/zf隧道/三 key；demo workspace `123100ea`：21 篇解析、881 知识/21 确认、14 机会/3 确认、5 计划、32 agent runs）+ **清理 4 个 zombie Discover run**（waiting_for_user 但 0 steps 从未启动，cancel→软删，readiness pending_runs 4→0）。**剩余**：按 `0811_demo_script.md` 10 步实机走查（用户主导）| 环境 | ⏳ 预检 ✅，10 步走查待做 |
 
 ## 二、P0.5 前端体验改进（demo 关键，按影响/成本排序）
 
 | # | 任务 | 描述 | 涉及 | 状态 |
 |---|---|---|---|---|
-| P0.5-1 | **对话流式输出（SSE）** | ⚠️ **未解决，先记录**：后端流式端点 + gateway `stream_chat_completion` + 前端 `streamSend`/`streamAssistant` 已实现，**传输层确认流式**（浏览器 EventStream 面板逐条 token，curl/Node 逐块）。**UI 仍一次性**：已尝试 RAF 分帧 / 限长 40 字符/帧 / flushSync 每 token 同步渲染 / setInterval 节流 60ms·20字符 固定节奏，均未生效——固定节奏渲染本应跨帧可见，仍一次性 → **强烈指向 `streamAssistant` 未真正执行或 fetch body 未到达前端**（而非渲染层）。**待续**：浏览器 console 加调试标记（`streamAssistant` 入口 + 每次 `reader.read()` chunk 数）+ Network 确认前端实际请求 /messages/stream | 后端 + 前端 | ⏳ |
-| P0.5-2 | **检索证据折叠/篇幅控制** | 对话下方检索证据点击展开后无法收起；且 AI 回复内容少时证据占大量篇幅——改为默认折叠 + 可收起 + 控制最大高度/展开数 | 纯前端 | ☐ |
+| P0.5-1 | **对话流式输出（SSE）** | ✅ **根因找到 + 已修复**：后端逐 token + 前端 SSE 解析 + 节流渲染全链路代码正确；真正 bug 在**新会话场景**——`send` 里 `navigate(新URL)` 触发 `useEffect([conversationId])` 立刻 `loadConversation()`，用 DB pending 消息（真实 id + generating + 空内容）**替换了乐观消息**（`local-stream-*` id），`appendDelta` 按乐观 id 匹配就永远失效 → 流式全程无可见更新，流结束一次性显示全文（即用户看到的"闪一下出全部"）。修复：新增 `streaming` state，流式期间 effect 跳过 reload，结束后 effect 统一加载持久化全文；`streamAssistant` 加 console.debug 标记（enter/done+chunks/tokens）。tsc + 35 测试过。**待浏览器实测确认** | 前端 | ✅ 代码 |
+| P0.5-2 | **检索证据折叠/篇幅控制** | ✅ 已实现：antd Collapse 默认折叠 + 每引文 Paragraph 展开/收起可切换 + `MAX_VISIBLE=3`"查看全部"（`ChatCitations.tsx`，`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
-| P0.5-4 | **亮/暗主题** | UI 提供白天/黑夜两种模式（antd ConfigProvider 主题切换 + 持久化偏好）| 纯前端 | ☐ |
-| P0.5-5 | **研究空白棋盘核验高亮** | 对核验优先级较高的候选格高亮展示（前端样式 + 后端可能需补"核验优先级"排序字段）| 前端为主 + 后端小改 | ☐ |
+| P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
+| P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
+| P0.5-6 | **知识图谱规范实体层冗余** | ✅ 已实现：landscape/claims 默认隐藏 `canonicalizes`（对应规范实体）边 + 孤立实体节点（18 个 GNNExplainer 指 1 个 GNNExplainer 的视觉噪音），evidence 视图保留溯源链；加"显示规范实体层"开关，按"canonicalizes"筛选时自动显示；`hideEntityLayer` 纯函数 + 3 单测，38 前端测试过 | 纯前端 | ✅ |
+| P0.5-7 | **Gap board 走查反馈**（W6-5）| ✅ ① 抽取幂等：`spawn_gap_extraction` 对已有有效标注（当前模型+prompt）的论文跳过建任务（返回 skipped），前端显示"已提交 X 篇，跳过 Y 篇已完成"——不再对全部已解析论文建任务；② 矩阵类型筛选：`GapBoardPage` 加"按机会类型筛选"Select（明确剩余局限/同篇共现/跨论文迁移/已有覆盖/低证据），筛选后矩阵收缩到只含匹配机会的行列。+2 后端单测，391 后端 + 38 前端测试过 | 前后端 | ✅ |
+| P0.5-8 | **Task 重试/取消 bug**（走查发现）| ✅ ① retry 只改 DB 为 queued 但**不重派发 celery 任务**（任务卡 queued 无人处理）→ 加 `workers/tasks/dispatch.py` `redispatch_task`（task_type→celery 任务映射，含 discover run_id），retry 先转 queued 再重派发；② cancel 停在 `cancel_requested` 无人推进（前端永久"正在取消"）→ `request_cancel` 直接转 `cancelled` + 尽力 revoke celery。task 测试更新，391 后端过 | 后端 | ✅ |
 
 ## 三、P1 真实端到端验收（计划 W1/W2/W5/W7 剩余）
 
@@ -33,7 +36,7 @@
 | P1-1 | **W1 外部全文硬门槛真实通过**（W1-1/7）| ✅ 真实跑通（run `70cb958a`）：3 篇 OA 候选导入全文核验（1 篇 verified+full_text，2 篇 import_failed 降级正常）；机会 gate **verified+confirmable，5 篇独立全文，coverage 1.0**；HITL confirm → confirmed | 环境 + S2 | ✅ |
 | P1-2 | **W2 多候选真实质量**（W2-1/4/5）| ✅ 真实 run 已验证 2 个有区分度候选（conf 0.3/0.5，不同方向）+ Unsupported 检查通过（rationale 回链证据如 ProtGNN/SUNNY-GNN + "证据显示…"，37 条 evidence，5 篇支持全文，Unsupported 主张比例远低于 20%）| 环境 | ✅ |
 | P1-3 | **W7 完整一条链验收**（W7-5）| ✅ 全链路真实跑通（run `cbedd3d5`→计划确认→`71b202f2` 10 文件代码→`93360db9` 分析 verdict=部分支持→`7f4adcfb` 论文草稿→`7706dd46` 3 条审稿回复）| 环境 | ✅ |
-| P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| DiscoverPage 确认/编辑确认/拒绝/延后 modal 实机走查 + Timeline 追溯 | 前端运行 | ☐ |
+| P1-4 | **W5 前端 4 决策 UI 走查**（W5-2）| ✅ 代码级走查完成 + 修复：4 决策 modal（确认/编辑确认/驳回/暂缓）前后端端点已对齐、后端写 human_decisions + Timeline 事件、confirm/edit 受 confirmable gate、defer 必填条件。**修复缺口**：OpportunityPanel 原不渲染 `detail.decisions`/`detail.versions` → 新增"决策历史（HITL 追溯）"（动作/时间/执行人/备注/重审条件/版本号）+ "版本历史（不可变）"；TimelineSection 补齐 `opportunity.*`/`discover.*`/`knowledge.*`/`plan.*` 事件中文标签。tsc + 38 前端测试过。**浏览器实机走查待用户** | 前端 | ✅ 代码 |
 | P1-5 | **W5 降级路径真实走查**（W5-7）| ✅ 四类降级全部验证：**S2 429 真实**（多次 run external_search succeeded_partial + query_failures 记录 retryable）+ **PDF 下载失败真实**（P1-1 2 篇 import_failed + no_pdf 路径）+ **LLM 挂测试层**（_BoomLLM：critic→[] / synthesis→fallback / role 保留 heuristic / chat→ChatUpstreamError）+ **Milvus 不可用测试层**（retrieval failed/degraded→gate 处理 / readiness 降级）。系统优雅降级不崩 | 环境 + 测试 | ✅ |
 
 ## 四、P1.5 模块化首页（涉及后端，顺序放后）
@@ -46,9 +49,9 @@
 
 | # | 任务 | 描述 | 状态 |
 |---|---|---|---|
-| P2-1 | **检索质量 Gate** | similar 0.778 / counter 0.667 未达标（demo 作 baseline）；封版后优化召回（over-fetch/reranker）| ☐ |
-| P2-2 | **P1 语义去重** | `retrieval_dedup_semantic` feature flag（阈值 0.9 + 跨 paper 护栏）| ☐ |
-| P2-3 | **知识确认** | readiness 显示 808 条知识待审（confirmed=0）；demo 前可选确认关键知识提升可信度 | ☐ |
+| P2-1 | **检索质量 Gate** | ✅ **三项全达标**：similar **0.667→0.889**、counter **0.667→0.833**、semantic 1.0、leakage 0（两轮稳定）。修复：`_paper_max_top_k`（rerank 全部候选→每篇取最高→top-k 篇，解决重复论文占槽位）+ `_hybrid_rerank_top_k`（raw+rerank 0.5 融合，救回被 reranker 排低的 GSAT）。救回 PGM-Explainer/Zorro/GSAT；仍漏 DIR（语义远）/GOOD（recall 层不可救）。+8 单测，389 后端测试过。详见 `retrieval_gate_report.md` §6 | ✅ |
+| P2-2 | **P1 语义去重** | ✅ `dedup_semantic`（feature flag `retrieval_dedup_semantic`，阈值 0.9，同 paper+同 type 护栏）+ `_run_extract` 接线（rejected 记 ExtractionRejection stage=`dedup_semantic`）+ `_validate_and_rebase_evidence` 补 paper_id + 9 单测 + 真实数据静态验证（99→88 全同论文合并，0 跨论文）| ✅ |
+| P2-3 | **知识确认** | ✅ 确认 21 条机会证据引用的关键知识（9 method / 4 claim / 4 limitation / 2 task / 2 dataset，全置信 0.95-1.0）；readiness **confirmed 0→21**（"881 条知识 · 21 条已确认"），推荐下一步从"审核确认知识"→"处理待确认机会"。确认带可追溯 note（reviewed_by=user + reviewed_at）。工具：`scripts/confirm_key_knowledge.py --workspace-id <wid> [--apply]`（默认 dry-run）。其余 860 条保持待审，HITL 诚实 | ✅ |
 | P2-4 | **外部自动生成 recall** | 0.286（管线已验证，demo 作辅助线索）；可选校准 gold set 或轴 query 精确查找 | ☐ |
 
 ## 六、P3 环境 / 运维

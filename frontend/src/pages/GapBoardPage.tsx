@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Alert, Button, Card, Empty, Popconfirm, Space, Statistic, Table, Typography } from "antd";
+import { App, Alert, Button, Card, Empty, Popconfirm, Select, Space, Statistic, Table, Typography } from "antd";
 import {
   ArrowRightOutlined,
   CheckCircleFilled,
@@ -38,6 +38,15 @@ const candidatePresentation: Record<
   corpus_only: { label: "语料库未覆盖", tone: "uncovered", shortDescription: "仅由方法与问题轴组合产生" },
 };
 
+const TIER_FILTER_OPTIONS: Array<{ value: GapBoardCell["candidate_tier"] | "all"; label: string }> = [
+  { value: "all", label: "全部机会" },
+  { value: "explicit_limitation", label: "明确剩余局限" },
+  { value: "same_paper_unlinked", label: "同篇共现待核验" },
+  { value: "cross_paper_transfer", label: "跨论文迁移候选" },
+  { value: "covered", label: "已有研究覆盖" },
+  { value: "corpus_only", label: "低证据组合" },
+];
+
 function cellIcon(tier: GapBoardCell["candidate_tier"]) {
   if (tier === "covered") return <CheckCircleFilled />;
   if (tier === "explicit_limitation") return <FireFilled />;
@@ -56,6 +65,8 @@ export default function GapBoardPage() {
   const [extracting, setExtracting] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [discovering, setDiscovering] = useState<string | null>(null);
+  // P0-5: 矩阵可按机会类型筛选（只看某一类，如"明确剩余局限"），矩阵变大后不至于难读。
+  const [tierFilter, setTierFilter] = useState<GapBoardCell["candidate_tier"] | "all">("all");
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
@@ -103,11 +114,21 @@ export default function GapBoardPage() {
         return;
       }
       let submitted = 0;
+      let skipped = 0;
       for (let index = 0; index < eligible.length; index += 200) {
         const response = await gapApi.extract(workspaceId, eligible.slice(index, index + 200));
-        submitted += response.tasks.length;
+        for (const task of response.tasks) {
+          if (task.skipped) skipped += 1;
+          else submitted += 1;
+        }
       }
-      message.success(`已提交 ${submitted} 篇论文。完成后请刷新并重建棋盘。`);
+      if (submitted === 0) {
+        message.info(`全部 ${skipped} 篇论文已完成专项标注，无需重复抽取。`);
+      } else if (skipped > 0) {
+        message.success(`已提交 ${submitted} 篇论文抽取，跳过 ${skipped} 篇已完成标注的论文。`);
+      } else {
+        message.success(`已提交 ${submitted} 篇论文。完成后请刷新并重建棋盘。`);
+      }
     } catch (error) {
       message.error(`提交专项抽取失败：${errorMessage(error)}`);
     } finally {
@@ -153,16 +174,32 @@ export default function GapBoardPage() {
     }
   };
 
+  const filteredCells = useMemo(() => {
+    const all = board?.cells ?? [];
+    if (tierFilter === "all") return all;
+    return all.filter((cell) => (cell.addressed ? "covered" : cell.candidate_tier) === tierFilter);
+  }, [board, tierFilter]);
+
   const cellIndex = useMemo(
     () =>
       new Map(
-        (board?.cells || []).map((cell) => [
+        filteredCells.map((cell) => [
           `${cell.method_concept_id}:${cell.problem_concept_id}`,
           cell,
         ]),
       ),
-    [board],
+    [filteredCells],
   );
+
+  // 筛选后只保留包含匹配机会的行/列，让矩阵收缩到可读大小。
+  const visibleMethods = useMemo(() => {
+    const ids = new Set(filteredCells.map((cell) => cell.method_concept_id));
+    return (board?.method_axes ?? []).filter((method) => ids.has(method.concept_id));
+  }, [board, filteredCells]);
+  const visibleProblems = useMemo(() => {
+    const ids = new Set(filteredCells.map((cell) => cell.problem_concept_id));
+    return (board?.problem_axes ?? []).filter((problem) => ids.has(problem.concept_id));
+  }, [board, filteredCells]);
 
   const columns = useMemo(() => {
     if (!board) return [];
@@ -181,7 +218,7 @@ export default function GapBoardPage() {
           </div>
         ),
       },
-      ...board.problem_axes.map((problem) => ({
+      ...visibleProblems.map((problem) => ({
         title: (
           <div className="gm-gap-axis gm-gap-axis--problem">
             <span className="gm-gap-axis-kicker">核心问题</span>
@@ -261,7 +298,7 @@ export default function GapBoardPage() {
         },
       })),
     ];
-  }, [board, cellIndex, discovering]);
+  }, [visibleProblems, cellIndex, discovering]);
 
   if (!workspaceId) return <Empty description="工作区不存在" />;
   const validCount = annotations.filter((item) => item.status === "valid").length;
@@ -333,25 +370,36 @@ export default function GapBoardPage() {
             <Title level={4}>方法 × 问题机会矩阵</Title>
             <Text type="secondary">共 {uncoveredCount} 个未覆盖组合，颜色越醒目代表越值得优先核验。</Text>
           </div>
-          <div className="gm-gap-legend" aria-label="棋盘图例">
-            <span className="gm-gap-legend-item gm-gap-legend-item--limitation"><i />明确局限</span>
-            <span className="gm-gap-legend-item gm-gap-legend-item--transfer"><i />跨论文候选</span>
-            <span className="gm-gap-legend-item gm-gap-legend-item--same-paper"><i />同篇待核验</span>
-            <span className="gm-gap-legend-item gm-gap-legend-item--covered"><i />已有覆盖</span>
-            <span className="gm-gap-legend-item gm-gap-legend-item--uncovered"><i />低证据组合</span>
-          </div>
+          <Space wrap align="center">
+            <Select
+              aria-label="按机会类型筛选矩阵"
+              value={tierFilter}
+              onChange={(value) => setTierFilter(value)}
+              options={TIER_FILTER_OPTIONS}
+              style={{ minWidth: 160 }}
+            />
+            <div className="gm-gap-legend" aria-label="棋盘图例">
+              <span className="gm-gap-legend-item gm-gap-legend-item--limitation"><i />明确局限</span>
+              <span className="gm-gap-legend-item gm-gap-legend-item--transfer"><i />跨论文候选</span>
+              <span className="gm-gap-legend-item gm-gap-legend-item--same-paper"><i />同篇待核验</span>
+              <span className="gm-gap-legend-item gm-gap-legend-item--covered"><i />已有覆盖</span>
+              <span className="gm-gap-legend-item gm-gap-legend-item--uncovered"><i />低证据组合</span>
+            </div>
+          </Space>
         </div>
         {!board || !board.method_axes.length || !board.problem_axes.length ? (
           <Empty description="先完成专项抽取，再重建棋盘。" />
+        ) : visibleMethods.length === 0 || visibleProblems.length === 0 ? (
+          <Empty description="当前筛选条件下没有此类机会。" />
         ) : (
           <div className="gm-gap-table-shell">
             <Table
               className="gm-gap-board-table"
               rowKey="concept_id"
-              dataSource={board.method_axes}
+              dataSource={visibleMethods}
               columns={columns}
               pagination={false}
-              scroll={{ x: Math.max(920, 230 + board.problem_axes.length * 228) }}
+              scroll={{ x: Math.max(920, 230 + visibleProblems.length * 228) }}
               sticky
             />
           </div>

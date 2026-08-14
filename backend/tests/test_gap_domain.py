@@ -366,3 +366,101 @@ def test_board_collapses_taxonomy_and_suppresses_cartesian_only_cells(
         exploratory=True,
     )
     assert exploratory.exploratory is True
+
+
+def test_spawn_gap_extraction_skips_already_annotated_paper(db_session: Session) -> None:
+    """spawn_gap_extraction must NOT enqueue a task for a paper that already has
+    a valid annotation for the current model+prompt (so "抽取已解析论文" on a
+    large corpus only processes genuinely new papers)."""
+    from app.core.config import settings
+    from app.workers.tasks.extract_gap_annotation import (
+        PROMPT_VERSION,
+        spawn_gap_extraction,
+    )
+
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Gap Skip",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    db_session.add(workspace)
+    db_session.flush()
+    artifact = Artifact(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        kind="parsed_markdown",
+        file_path="p.md",
+        size_bytes=10,
+        is_deleted=False,
+    )
+    paper = Paper(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        title="P",
+        authors=[],
+        source="manual",
+        parse_status="parsed",
+        parsed_markdown_artifact_id=artifact.id,
+        chunk_count=0,
+        extract_status="not_applicable",
+        is_deleted=False,
+    )
+    db_session.add_all([artifact, paper])
+    db_session.flush()
+
+    row = _annotation(db_session, workspace, artifact, paper, _output())
+    row.model_name = settings.gap_extractor_model
+    row.prompt_version = PROMPT_VERSION
+    db_session.commit()
+
+    task_id, skipped = spawn_gap_extraction(db_session, paper.id, workspace.id)
+    assert skipped is True
+    assert task_id is None
+
+
+def test_spawn_gap_extraction_does_not_skip_without_annotation(db_session: Session, monkeypatch) -> None:
+    """Without a valid annotation, spawn_gap_extraction enqueues a task."""
+    from app.workers.tasks.extract_gap_annotation import spawn_gap_extraction
+
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Gap NoSkip",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    db_session.add(workspace)
+    db_session.flush()
+    artifact = Artifact(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        kind="parsed_markdown",
+        file_path="p.md",
+        size_bytes=10,
+        is_deleted=False,
+    )
+    paper = Paper(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        title="P",
+        authors=[],
+        source="manual",
+        parse_status="parsed",
+        parsed_markdown_artifact_id=artifact.id,
+        chunk_count=0,
+        extract_status="not_applicable",
+        is_deleted=False,
+    )
+    db_session.add_all([artifact, paper])
+    db_session.flush()
+
+    import app.workers.tasks.extract_gap_annotation as gap_task_mod
+
+    monkeypatch.setattr(gap_task_mod.extract_gap_annotation_task, "delay", lambda tid: type("R", (), {"id": "x"})())
+    task_id, skipped = spawn_gap_extraction(db_session, paper.id, workspace.id)
+    assert skipped is False
+    assert task_id

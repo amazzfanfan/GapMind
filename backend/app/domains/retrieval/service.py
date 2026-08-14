@@ -406,10 +406,17 @@ def find_similar_work(
         # Step 3: rerank the diversified candidate pool (or sort by score if reranker disabled).
         if use_reranker and len(candidates) > 1:
             rerank_query = query_texts[0][:500]
-            items = _rerank_hits(rerank_query, candidates, top_k)
+            # Rerank the whole pool, then blend with the raw vector score and
+            # keep the top chunk per paper: the top-k slots then surface k
+            # DISTINCT papers, and papers the reranker alone would demote (same
+            # topic, different phrasing) stay in contention.
+            reranked_all = _rerank_hits(rerank_query, candidates, len(candidates))
+            items = _hybrid_rerank_top_k(candidates, reranked_all, top_k)
         else:
             candidates.sort(key=lambda h: h.get("score", 0.0), reverse=True)
-            items = [_hit_to_result_item(hit) for hit in candidates[:top_k]]
+            items = _paper_max_top_k(
+                [_hit_to_result_item(hit) for hit in candidates], top_k
+            )
 
         latency = (time.perf_counter() - start_time) * 1000
         return RetrievalResponse(
@@ -496,11 +503,18 @@ def find_counter_evidence(
                 empty_reason="retrieval_empty",
             )
 
-        # Stage 2: Rerank
+        # Stage 2: Rerank the whole recall pool, then keep the top chunk per
+        # paper so the top-k slots surface k DISTINCT papers. A single paper's
+        # many chunks would otherwise crowd out counter evidence from other
+        # papers — and the Gate measures recall at the paper level.
         if use_reranker and len(hits) > 1:
-            reranked_items = _rerank_hits(claim_text, hits, top_k)
+            reranked_items = _paper_max_top_k(
+                _rerank_hits(claim_text, hits, len(hits)), top_k
+            )
         else:
-            reranked_items = [_hit_to_result_item(hit) for hit in hits[:top_k]]
+            reranked_items = _paper_max_top_k(
+                [_hit_to_result_item(hit) for hit in hits], top_k
+            )
 
         # Stage 3: LLM Judgement (NLI classification)
         if use_judge and reranked_items:
@@ -672,6 +686,80 @@ def _is_low_value_section(section: str | None) -> bool:
     if not section:
         return False
     return section.strip().lower() in LOW_VALUE_SECTIONS
+
+
+def _paper_max_top_k(
+    items: list[RetrievalResultItem],
+    top_k: int,
+) -> list[RetrievalResultItem]:
+    """Keep the highest-scoring item per paper, then the top ``top_k`` papers.
+
+    The retrieval stages over-fetch at the *chunk* level, so without this a
+    single paper's many chunks can occupy several of the top-k slots and crowd
+    out other papers. The Gate (and the UI) measures similarity / counter
+    evidence at the *paper* level — unique papers in the top-k — so keeping
+    one chunk per paper makes every slot surface a distinct paper.
+
+    Items without a ``paper_id`` cannot be paper-deduplicated; they are kept
+    to fill any remaining slots.
+    """
+    if not items:
+        return []
+    best: dict[str, RetrievalResultItem] = {}
+    paperless: list[RetrievalResultItem] = []
+    for item in items:
+        pid = item.paper_id
+        if pid is None:
+            paperless.append(item)
+            continue
+        if pid not in best or (item.score or 0) > (best[pid].score or 0):
+            best[pid] = item
+    ranked = sorted(best.values(), key=lambda i: i.score or 0, reverse=True)[:top_k]
+    remaining = top_k - len(ranked)
+    if remaining > 0 and paperless:
+        ranked.extend(paperless[:remaining])
+    return ranked
+
+
+def _hybrid_rerank_top_k(
+    candidates: list[dict[str, Any]],
+    reranked: list[RetrievalResultItem],
+    top_k: int,
+    alpha: float = 0.5,
+) -> list[RetrievalResultItem]:
+    """Rank candidate chunks by a blend of raw vector score and rerank score.
+
+    The cross-encoder is a strong relevance signal, but for paper-level
+    *similar work* it can be too narrow — it demotes papers that share the
+    topic yet phrase it differently (the demo Gate missed GSAT / DIR this
+    way). Blending the raw Milvus score back in keeps those works in
+    contention. Scores are min-max normalized per source, then combined as
+    ``alpha * raw + (1 - alpha) * rerank``; the top chunk per paper is kept so
+    the top-k slots surface distinct papers.
+    """
+    if not reranked:
+        return []
+    raw_by_chunk = {h.get("chunk_id"): h.get("score", 0.0) for h in candidates}
+    raw_vals = [v for v in raw_by_chunk.values() if v]
+    rerank_vals = [i.score or 0.0 for i in reranked if i.score is not None]
+
+    def norm(vals: list[float], value: float) -> float:
+        lo, hi = min(vals), max(vals)
+        return (value - lo) / (hi - lo) if hi > lo else 0.5
+
+    best: dict[str, tuple[float, RetrievalResultItem]] = {}
+    for item in reranked:
+        pid = item.paper_id
+        if pid is None:
+            continue
+        raw = raw_by_chunk.get(item.chunk_id)
+        raw_norm = norm(raw_vals, raw) if raw is not None and raw_vals else 0.0
+        rerank_norm = norm(rerank_vals, item.score or 0.0) if rerank_vals else 0.0
+        hybrid = alpha * raw_norm + (1 - alpha) * rerank_norm
+        if pid not in best or hybrid > best[pid][0]:
+            best[pid] = (hybrid, item)
+    ranked = sorted(best.values(), key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in ranked[:top_k]]
 
 
 def _diversify_and_sort_counter_items(
