@@ -53,10 +53,9 @@ def test_task_cancel_from_queued(
 
     resp = client.post(f"/api/v1/tasks/{tid}/cancel")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "cancel_requested"
-
-    # Worker honors cancel -> cancelled.
-    task_transitioner(tid, "cancelled")
+    # Cancel is finalized immediately (previously it stopped at the never-advanced
+    # "cancel_requested" state, leaving the UI stuck on "正在取消").
+    assert resp.json()["status"] == "cancelled"
     assert client.get(f"/api/v1/tasks/{tid}").json()["status"] == "cancelled"
 
 
@@ -75,7 +74,7 @@ def test_task_cancel_from_terminal_returns_409(
 
 
 def test_task_retry_from_failed(
-    client: TestClient, task_factory, task_transitioner
+    client: TestClient, task_factory, task_transitioner, monkeypatch
 ) -> None:
     ws = _create_workspace(client)
     tid = task_factory(ws["id"])
@@ -83,11 +82,19 @@ def test_task_retry_from_failed(
     task_transitioner(tid, "running")
     task_transitioner(tid, "failed", error="boom")
 
+    # Hermetic: stub the celery re-dispatch (the retry endpoint now re-enqueues
+    # the celery task so the queued row is actually processed).
+    import app.workers.tasks.dispatch as dispatch_mod
+
+    monkeypatch.setattr(dispatch_mod, "redispatch_task", lambda task: "fake-celery-id")
+
     resp = client.post(f"/api/v1/tasks/{tid}/retry")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "queued"
     assert body["error"] is None
+    # The re-dispatched celery id is recorded on the row.
+    assert client.get(f"/api/v1/tasks/{tid}").json()["celery_task_id"] == "fake-celery-id"
 
 
 def test_task_retry_from_non_failed_returns_409(

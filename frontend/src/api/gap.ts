@@ -4,6 +4,7 @@ export interface GapExtractionTask {
   paper_id: string;
   task_id: string;
   status: string;
+  skipped?: boolean;
 }
 
 export interface GapAnnotation {

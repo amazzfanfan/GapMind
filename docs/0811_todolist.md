@@ -14,7 +14,7 @@
 | P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ☐ |
 | P0-3 | **真实验证 token_usage** | 重启后跑一次 Discover，确认 `run.stage_summaries["token_usage"]` 正确累计 | P0-2 | ☐ |
 | P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ☐ |
-| P0-5 | **W6-5 现场演示预演** | 走 `0811_demo_script.md` 10 步，确认展示点 + 降级路径 | P0-2 | ☐ |
+| P0-5 | **W6-5 现场演示预演** | ✅ 环境/数据预检完成（服务全绿：后端/前端/Redis/PG/Milvus/zf隧道/三 key；demo workspace `123100ea`：21 篇解析、881 知识/21 确认、14 机会/3 确认、5 计划、32 agent runs）+ **清理 4 个 zombie Discover run**（waiting_for_user 但 0 steps 从未启动，cancel→软删，readiness pending_runs 4→0）。**剩余**：按 `0811_demo_script.md` 10 步实机走查（用户主导）| 环境 | ⏳ 预检 ✅，10 步走查待做 |
 
 ## 二、P0.5 前端体验改进（demo 关键，按影响/成本排序）
 
@@ -26,6 +26,8 @@
 | P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
 | P0.5-6 | **知识图谱规范实体层冗余** | ✅ 已实现：landscape/claims 默认隐藏 `canonicalizes`（对应规范实体）边 + 孤立实体节点（18 个 GNNExplainer 指 1 个 GNNExplainer 的视觉噪音），evidence 视图保留溯源链；加"显示规范实体层"开关，按"canonicalizes"筛选时自动显示；`hideEntityLayer` 纯函数 + 3 单测，38 前端测试过 | 纯前端 | ✅ |
+| P0.5-7 | **Gap board 走查反馈**（W6-5）| ✅ ① 抽取幂等：`spawn_gap_extraction` 对已有有效标注（当前模型+prompt）的论文跳过建任务（返回 skipped），前端显示"已提交 X 篇，跳过 Y 篇已完成"——不再对全部已解析论文建任务；② 矩阵类型筛选：`GapBoardPage` 加"按机会类型筛选"Select（明确剩余局限/同篇共现/跨论文迁移/已有覆盖/低证据），筛选后矩阵收缩到只含匹配机会的行列。+2 后端单测，391 后端 + 38 前端测试过 | 前后端 | ✅ |
+| P0.5-8 | **Task 重试/取消 bug**（走查发现）| ✅ ① retry 只改 DB 为 queued 但**不重派发 celery 任务**（任务卡 queued 无人处理）→ 加 `workers/tasks/dispatch.py` `redispatch_task`（task_type→celery 任务映射，含 discover run_id），retry 先转 queued 再重派发；② cancel 停在 `cancel_requested` 无人推进（前端永久"正在取消"）→ `request_cancel` 直接转 `cancelled` + 尽力 revoke celery。task 测试更新，391 后端过 | 后端 | ✅ |
 
 ## 三、P1 真实端到端验收（计划 W1/W2/W5/W7 剩余）
 

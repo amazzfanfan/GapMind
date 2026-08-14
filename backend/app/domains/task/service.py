@@ -163,11 +163,25 @@ class TaskService:
 
     # --------------------------------------------------------- user actions
     def request_cancel(self, task_id: str) -> Task:
-        """User-facing cancel request. Only valid from non-terminal states."""
+        """User-facing cancel. Revokes the running celery task and finalizes the
+        cancellation immediately.
+
+        The previous behaviour stopped at ``cancel_requested``, but no poller /
+        worker ever advanced that state — a cancel left the UI stuck on
+        "正在取消" forever. Finalizing to ``cancelled`` here (plus a best-effort
+        celery revoke) makes cancel deterministic.
+        """
         task = self.get(task_id)
         if task.status in TERMINAL_STATUSES:
-            raise InvalidTaskTransition(task.status, "cancel_requested")
-        return self.transition(task_id, "cancel_requested")
+            raise InvalidTaskTransition(task.status, "cancelled")
+        if task.celery_task_id:
+            try:
+                from app.workers.celery_app import celery_app
+
+                celery_app.control.revoke(task.celery_task_id)
+            except Exception:
+                pass  # best effort — the DB state below is authoritative
+        return self.transition(task_id, "cancelled")
 
     def resume_from_user(self, task_id: str, *, decision: dict | None = None) -> Task:
         """User resumes a task waiting for their input."""
@@ -181,7 +195,12 @@ class TaskService:
         )
 
     def retry(self, task_id: str) -> Task:
-        """Re-queue a failed task. Clears any prior error and progress."""
+        """Re-queue a failed task.
+
+        Clears any prior error/progress, transitions to ``queued``, then
+        re-dispatches the underlying celery task so the queued row is actually
+        processed (previously it just sat in ``queued`` — nothing re-enqueued it).
+        """
         task = self.get(task_id)
         if task.status != "failed":
             raise InvalidTaskTransition(task.status, "queued")
@@ -190,7 +209,14 @@ class TaskService:
         task.progress = 0.0
         self.db.commit()
         self.db.refresh(task)
-        return self.transition(task_id, "queued")
+        transited = self.transition(task_id, "queued")
+        from app.workers.tasks.dispatch import redispatch_task
+
+        celery_task_id = redispatch_task(task)
+        if celery_task_id:
+            task.celery_task_id = celery_task_id
+            self.db.commit()
+        return transited
 
     # ----------------------------------------------------------------- update
     def update_progress(self, task_id: str, progress: float) -> Task:

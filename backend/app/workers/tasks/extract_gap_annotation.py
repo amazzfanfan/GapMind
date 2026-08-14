@@ -155,18 +155,43 @@ def _fail(
     return {"status": "failed", "error": error, **(result or {})}
 
 
+def _has_valid_annotation(db: Session, paper_id: str) -> bool:
+    """True if the paper already has a valid annotation for the CURRENT model
+    + prompt version (the demo corpus: papers are parsed once, so a valid
+    annotation means re-extraction would just short-circuit idempotently)."""
+    row = db.execute(
+        select(PaperGapAnnotation.id).where(
+            PaperGapAnnotation.paper_id == paper_id,
+            PaperGapAnnotation.model_name == settings.gap_extractor_model,
+            PaperGapAnnotation.prompt_version == PROMPT_VERSION,
+            PaperGapAnnotation.status == "valid",
+            PaperGapAnnotation.is_deleted.is_(False),
+        ).limit(1)
+    ).scalars().first()
+    return row is not None
+
+
 def spawn_gap_extraction(
     db: Session,
     paper_id: str,
     workspace_id: str,
     *,
     force: bool = False,
-) -> str:
+) -> tuple[str | None, bool]:
+    """Create (or reuse) a gap-extraction task for a paper.
+
+    Returns ``(task_id, skipped)``. ``skipped=True`` means the paper already has
+    a valid annotation for the current model + prompt and no task was created
+    (so "抽取已解析论文" on a large corpus only actually enqueues new papers).
+    """
     paper = db.get(Paper, paper_id)
     if paper is None or paper.is_deleted or paper.workspace_id != workspace_id:
         raise ValueError(f"paper not found in workspace: {paper_id}")
     if not paper.parsed_markdown_artifact_id:
         raise ValueError(f"paper has no parsed markdown: {paper_id}")
+
+    if not force and _has_valid_annotation(db, paper_id):
+        return None, True
 
     active = db.execute(
         select(Task).where(
@@ -178,7 +203,7 @@ def spawn_gap_extraction(
     ).scalars()
     for item in active:
         if (item.payload or {}).get("paper_id") == paper_id:
-            return item.id
+            return item.id, False
 
     task = TaskService(db).create(
         TaskCreate(
@@ -190,5 +215,5 @@ def spawn_gap_extraction(
     async_result = extract_gap_annotation_task.delay(task.id)
     task.celery_task_id = async_result.id
     db.commit()
-    return task.id
+    return task.id, False
 
