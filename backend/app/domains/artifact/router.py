@@ -108,3 +108,32 @@ def download_artifact(
         media_type=artifact.mime_type or "application/octet-stream",
         filename=artifact.original_filename or path.name,
     )
+
+
+@router.get("/workspaces/{workspace_id}/artifacts/{artifact_id}/view")
+def view_artifact(
+    workspace_id: str,
+    artifact_id: str,
+    artifact_service: ArtifactService = Depends(_get_artifact_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+) -> FileResponse:
+    """Serve an artifact inline for the in-app PDF reader."""
+    try:
+        workspace_service.get(workspace_id)
+        artifact = artifact_service.get(artifact_id)
+    except (WorkspaceNotFoundError, ArtifactNotFoundError) as exc:
+        raise _not_found(exc) from exc
+    if artifact.workspace_id != workspace_id:
+        raise _not_found(ArtifactNotFoundError(artifact_id))
+    path = artifact_service.resolve_abs_path(artifact)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "artifact_file_missing", "message": "Artifact file is missing on disk"},
+        )
+    return FileResponse(
+        path,
+        media_type=artifact.mime_type or "application/octet-stream",
+        filename=artifact.original_filename or path.name,
+        content_disposition_type="inline",
+    )

@@ -31,6 +31,7 @@ import semanticScholarApi, {
 } from "../api/semanticScholar";
 import workspaceApi from "../api/workspace";
 import type { Workspace } from "../api/types/workspace";
+import type { Paper } from "../api/types/domain";
 
 const { Paragraph, Text } = Typography;
 
@@ -162,7 +163,13 @@ function paperYear(paper: SemanticScholarPaper): string {
   return paper.publicationDate?.slice(0, 4) || String(paper.year ?? "—");
 }
 
-export default function SemanticPaperSearch({ workspaceId }: { workspaceId?: string } = {}) {
+export default function SemanticPaperSearch({
+  workspaceId,
+  onImported,
+}: {
+  workspaceId?: string;
+  onImported?: (paper: Paper) => void | Promise<void>;
+} = {}) {
   const { message } = App.useApp();
   const [hydrated, setHydrated] = useState(false);
   const [query, setQuery] = useState("");
@@ -381,6 +388,7 @@ export default function SemanticPaperSearch({ workspaceId }: { workspaceId?: str
           : "Paper metadata imported into the workspace.",
       );
       setImportPaper(null);
+      await onImported?.(imported);
     } catch (err) {
       message.error(`Import failed: ${errorMessage(err)}`);
     } finally {
