@@ -25,24 +25,80 @@ export function normalizeConversationMath(content: string): string {
     protectedBlocks.push([key, m]);
     return key;
   });
+  const isMathLike = (formula: string, allowSingleIdentifier = true) => {
+    const trimmed = formula.trim();
+    return /(?:\\[A-Za-z]+|[=^_{}]|\b(?:in|notin|times|mid|sum|prod|mathbb|mathcal)\b)/.test(trimmed)
+      || (allowSingleIdentifier && /^[A-Za-z](?:['′]?\d*)?$/.test(trimmed));
+  };
 
-  // 1. Protect already-valid math blocks and \left[...\right] spans.
-  let text = protect(content, /\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g);
+  const normalizeDelimitedMath = (value: string, open: string, close: string): string => {
+    let normalized = "";
+    let index = 0;
+    while (index < value.length) {
+      if (value[index] !== open) {
+        normalized += value[index];
+        index += 1;
+        continue;
+      }
+
+      let depth = 0;
+      let closingIndex = -1;
+      for (let cursor = index; cursor < value.length; cursor += 1) {
+        if (value[cursor] === open) depth += 1;
+        if (value[cursor] === close) {
+          depth -= 1;
+          if (depth === 0) {
+            closingIndex = cursor;
+            break;
+          }
+        }
+      }
+
+      if (closingIndex > index) {
+        const rawFormula = value.slice(index + 1, closingIndex);
+        const formula = rawFormula.trim();
+        const isMarkdownLink = close === "]" && value[closingIndex + 1] === "(";
+        if (!isMarkdownLink && isMathLike(formula, close === ")")) {
+          normalized += rawFormula.includes("\n") ? `\n$$\n${formula}\n$$\n` : `$${formula}$`;
+          index = closingIndex + 1;
+          continue;
+        }
+      }
+
+      normalized += value[index];
+      index += 1;
+    }
+    return normalized;
+  };
+
+  // 1. Protect code and already-valid dollar-delimited math. Convert the
+  //    LaTeX delimiters \\[...\\] and \\(...\\) because remark-math does not
+  //    parse those delimiters consistently in this rendering pipeline.
+  let text = protect(content, /```[\s\S]*?```|\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g);
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_match, formula: string) => `\n$$\n${formula.trim()}\n$$\n`);
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_match, formula: string) => `$${formula.trim()}$`);
   text = protect(text, /\\left\[[^\[\]]*\\right\]/g);
-
-  // 2. `[ \min ... ]` and `( \beta ... )` with a math-ish body -> inline `$...$`.
-  text = text.replace(/\[([^\]\n]*[\\^_{][^\]\n]*)\]/g, (_match, formula: string) => `$${formula.trim()}$`);
-  text = text.replace(/\(([^)\n]*[\\^_{][^)\n]*)\)/g, (_match, formula: string) => `$${formula.trim()}$`);
-
-  // 3. Protect the bracket-generated math, then convert bare subscripts on
-  //    the remaining plain text only.
   text = protect(text, /\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g);
+
+  // 2. `[ X \\in ... ]` and other bracket-wrapped formulas are not standard
+  // Markdown math. The scanner supports formulas split across multiple lines
+  // and does not touch ordinary citations or Markdown links.
+  text = normalizeDelimitedMath(text, "[", "]");
+  text = protect(text, /\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g);
+
+  // 3. Handle nested parenthesized equations such as `(G=(V,E))`. A simple
+  // regular expression stops at `(V,E)` and produces invalid LaTeX.
+  text = normalizeDelimitedMath(text, "(", ")");
+
+  // 4. Protect generated math, then convert bare subscripts on the remaining
+  // plain text only.
+  text = protect(text, /```[\s\S]*?```|\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g);
   text = text.replace(/(^|[^$`\\])\b([A-Za-z])_(\{[^{}]*\}|[A-Za-z0-9]+)(?=\s|[^A-Za-z0-9_]|$)/g, (_match, prefix: string, base: string, sub: string) => {
     const clean = sub.startsWith("{") ? sub.slice(1, -1) : sub;
     return `${prefix}$${base}_{${clean.length === 1 ? clean : `\\mathrm{${clean}}`}}$`;
   });
 
-  // 4. Restore all protected spans.
+  // 5. Restore all protected spans.
   for (const [key, val] of [...protectedBlocks].reverse()) text = text.split(key).join(val);
   return text;
 }
@@ -66,9 +122,10 @@ function ChatMessageItem({ conversationId, message, onRetry, retrying }: { conve
     window.setTimeout(() => setCopied(false), 1200);
   };
   const isUser = message.role === "user";
+  const normalizedContent = isUser ? message.content : normalizeConversationMath(message.content);
   return <article className={`gm-chat-message ${isUser ? "is-user" : "is-assistant"}`}>
     <div className="gm-chat-message-body">
-      {message.status === "generating" ? <Space><Spin size="small" /><Typography.Text type="secondary">正在思考…</Typography.Text></Space> : message.status === "failed" ? <div><Typography.Text type="danger">回答失败，请重试。</Typography.Text><div><Button type="link" size="small" icon={<ReloadOutlined />} loading={retrying} onClick={() => onRetry(message)}>重新尝试</Button></div></div> : isUser ? <Typography.Paragraph className="gm-chat-plain-text">{message.content}</Typography.Paragraph> : <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeConversationMath(message.content)}</ReactMarkdown></div>}
+      {message.status === "generating" ? <Space><Spin size="small" /><Typography.Text type="secondary">正在思考…</Typography.Text></Space> : message.status === "failed" ? <div><Typography.Text type="danger">回答失败，请重试。</Typography.Text><div><Button type="link" size="small" icon={<ReloadOutlined />} loading={retrying} onClick={() => onRetry(message)}>重新尝试</Button></div></div> : isUser ? <Typography.Paragraph className="gm-chat-plain-text">{message.content}</Typography.Paragraph> : <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizedContent}</ReactMarkdown></div>}
       {!isUser && message.status === "completed" && message.grounding_status === "no_evidence" && <Typography.Text type="warning">本次没有使用工作区证据。</Typography.Text>}
       {!isUser && message.status === "completed" && message.citation_check && !message.citation_check.ok && <Typography.Text type="danger">检测到失效引用：[E{message.citation_check.broken.join("]、[E")}] 未找到对应证据，请核对来源。</Typography.Text>}
       {!isUser && message.status === "completed" && message.citation_check?.grounded_without_citations && <Typography.Text type="warning">已使用工作区证据，但回答未标注 [E] 引用，关键结论可能缺少直接支撑。</Typography.Text>}

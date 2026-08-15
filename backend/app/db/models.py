@@ -45,6 +45,8 @@ from app.domains.paper.search_models import (  # noqa: F401
     PaperSearchFavorite,
     PaperSearchHistory,
 )
+from app.domains.reading.models import PaperAnnotation, ReadingItem  # noqa: F401
+from app.domains.recommendation.models import PaperRecommendation  # noqa: F401
 from app.domains.task.models import Task  # noqa: F401
 from app.domains.timeline.models import TimelineEvent  # noqa: F401
 

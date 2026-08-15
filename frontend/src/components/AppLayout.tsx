@@ -9,6 +9,7 @@ import {
   MenuUnfoldOutlined,
   MoonOutlined,
   ProjectOutlined,
+  ReadOutlined,
   SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
@@ -24,6 +25,7 @@ const globalNavigation = [
   { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
   { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
   { key: "/chat", icon: <MessageOutlined />, label: "AI 助手" },
+  { key: "/reading", icon: <ReadOutlined />, label: "论文阅读" },
 ];
 
 export default function AppLayout() {

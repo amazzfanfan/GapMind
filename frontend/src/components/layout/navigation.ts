@@ -14,6 +14,7 @@ export function selectedGlobalKey(pathname: string): string {
   if (pathname === "/") return "/";
   if (pathname.startsWith("/search")) return "/search";
   if (pathname.startsWith("/chat")) return "/chat";
+  if (pathname.startsWith("/reading")) return "/reading";
   if (pathname.startsWith("/workspaces")) return "/workspaces";
   return "/";
 }

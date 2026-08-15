@@ -16,6 +16,7 @@ import WorkspaceReadinessCard from "../components/WorkspaceReadinessCard";
 import { useWorkspaceLayout } from "../components/layout/WorkspaceLayout";
 import PageHeader from "../components/common/PageHeader";
 import StatusBadge from "../components/common/StatusBadge";
+import ResearchRecommendations from "../components/ResearchRecommendations";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -104,6 +105,8 @@ export default function WorkspaceOverviewPage() {
           </div>
         </Space>
       </Card>
+
+      <ResearchRecommendations workspaceId={workspace.id} onImported={() => void load()} />
 
       {failedTasks.length > 0 && <Alert type="error" showIcon message={`${failedTasks.length} 个后台任务处理失败`} description={<Link to={`/workspaces/${workspace.id}/activity`}>打开处理中心查看原因并重试</Link>} style={{ marginBottom: 20 }} />}
 

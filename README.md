@@ -83,7 +83,8 @@ switch to `--pool=gevent` (after `pip install gevent`).
 
 ```bash
 cd frontend
-npm install
+# npm install
+npm install --allow-remote=all
 npm run gen:api
 npm run dev
 ```

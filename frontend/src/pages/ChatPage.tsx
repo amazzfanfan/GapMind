@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
 import workspaceApi from "../api/workspace";
 import agentApi, { type AgentRunDetail } from "../api/agent";
@@ -18,6 +18,8 @@ const localMessage = (conversationId: string, role: "user" | "assistant", conten
 export default function ChatPage() {
   const { conversationId, id: routeWorkspaceId } = useParams<{ conversationId: string; id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const promptFromReader = searchParams.get("prompt");
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -43,6 +45,10 @@ export default function ChatPage() {
   const workspaceNames = Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.name]));
   const activeWorkspaceId = conversation?.workspace_id ?? selectedWorkspaceId;
   const activeWorkspaceName = activeWorkspaceId ? workspaceNames[activeWorkspaceId] : undefined;
+
+  useEffect(() => {
+    if (!conversationId && promptFromReader) setInput(promptFromReader);
+  }, [conversationId, promptFromReader]);
 
   const loadAgentRuns = useCallback(async (workspaceId: string, targetConversationId: string) => {
     try {

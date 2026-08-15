@@ -11,6 +11,8 @@ import WorkspaceActivityPage from "./pages/WorkspaceActivityPage";
 import WorkspaceSettingsPage from "./pages/WorkspaceSettingsPage";
 import ResearchPlansPage from "./pages/ResearchPlansPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import ReadingPage from "./pages/ReadingPage";
+import ReadingPaperPage from "./pages/ReadingPaperPage";
 
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const DiscoverPage = lazy(() => import("./pages/DiscoverPage"));
@@ -31,6 +33,8 @@ export default function App() {
         <Route path="/chat" element={<LazyPage label="AI 助手"><ChatHubPage /></LazyPage>} />
         <Route path="/chat/new" element={<LazyPage label="通用对话"><ChatPage /></LazyPage>} />
         <Route path="/chat/:conversationId" element={<LazyPage label="AI 对话"><ChatPage /></LazyPage>} />
+        <Route path="/reading" element={<ReadingPage />} />
+        <Route path="/reading/:paperId" element={<ReadingPaperPage />} />
         <Route path="/workspaces" element={<WorkspacesPage />} />
         <Route path="/workspaces/:id" element={<WorkspaceLayout />}>
           <Route index element={<Navigate to="overview" replace />} />
