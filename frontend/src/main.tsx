@@ -6,6 +6,7 @@ import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider, useTheme } from "./state/theme";
 import "./index.css";
+import "katex/dist/katex.min.css";
 
 function Root() {
   const { isDark } = useTheme();
