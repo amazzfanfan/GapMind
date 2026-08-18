@@ -52,7 +52,7 @@
 | P2-1 | **检索质量 Gate** | ✅ **三项全达标**：similar **0.667→0.889**、counter **0.667→0.833**、semantic 1.0、leakage 0（两轮稳定）。修复：`_paper_max_top_k`（rerank 全部候选→每篇取最高→top-k 篇，解决重复论文占槽位）+ `_hybrid_rerank_top_k`（raw+rerank 0.5 融合，救回被 reranker 排低的 GSAT）。救回 PGM-Explainer/Zorro/GSAT；仍漏 DIR（语义远）/GOOD（recall 层不可救）。+8 单测，389 后端测试过。详见 `retrieval_gate_report.md` §6 | ✅ |
 | P2-2 | **P1 语义去重** | ✅ `dedup_semantic`（feature flag `retrieval_dedup_semantic`，阈值 0.9，同 paper+同 type 护栏）+ `_run_extract` 接线（rejected 记 ExtractionRejection stage=`dedup_semantic`）+ `_validate_and_rebase_evidence` 补 paper_id + 9 单测 + 真实数据静态验证（99→88 全同论文合并，0 跨论文）| ✅ |
 | P2-3 | **知识确认** | ✅ 确认 21 条机会证据引用的关键知识（9 method / 4 claim / 4 limitation / 2 task / 2 dataset，全置信 0.95-1.0）；readiness **confirmed 0→21**（"881 条知识 · 21 条已确认"），推荐下一步从"审核确认知识"→"处理待确认机会"。确认带可追溯 note（reviewed_by=user + reviewed_at）。工具：`scripts/confirm_key_knowledge.py --workspace-id <wid> [--apply]`（默认 dry-run）。其余 860 条保持待审，HITL 诚实 | ✅ |
-| P2-4 | **外部自动生成 recall** | 0.286（管线已验证，demo 作辅助线索）；可选校准 gold set 或轴 query 精确查找 | ☐ |
+| P2-4 | **外部自动生成 recall** | ⏳ 已校准一轮（2026-08-18，见下），recall@10 仍 0.286：① 轴 prompt 硬性要求反证/评估轴 + 跳出题目领域搜批评文献（LLM 输出已稳定）；② 每查询取满 top_k（候选池 56→110，S2 调用数不变）；③ 方法全名查询与 exact lookup 去重（省出预算，轴查询 6→8）；④ 合并改 RRF + 引用数并列断路（跨查询一致者优先，替代轮转追加）。剩余 gap 由 S2 对短批评查询的 relevance 行为主导（经典批评论文是否进 top-10 取决于措辞），继续提升需按 gold paper 定制查询模式，属过拟合固定基准，明确不做。gold set 见 `evaluation/external/`，注意 S2 限流 | ⏳ 校准完成，不再推进 |
 
 ## 六、P3 环境 / 运维
 

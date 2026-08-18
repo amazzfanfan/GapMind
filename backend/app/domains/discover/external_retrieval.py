@@ -40,7 +40,7 @@ from app.gateway.semantic_scholar import SemanticScholarClient, SemanticScholarE
 
 logger = get_logger(__name__)
 
-S2_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf,url,publicationDate"
+S2_FIELDS = "paperId,externalIds,title,abstract,year,authors,openAccessPdf,url,publicationDate,citationCount"
 PIPELINE_PENDING_STATUSES = {"queued", "running", "waiting_for_user"}
 
 # LLM prompt for external candidate role judgement (Stage 3).
@@ -103,11 +103,13 @@ Output a JSON object, nothing else:
 # queries are the highest-value external-search keys, so they are prioritized
 # over raw workspace signals and generic keywords.
 EXTERNAL_QUERY_MAX_TOTAL = 12  # max external search queries per run
-EXTERNAL_QUERY_AXIS_COUNT = 6  # LLM-generated axis queries to request
+EXTERNAL_QUERY_AXIS_COUNT = 8  # LLM-generated axis queries to request
 EXTERNAL_QUERY_MAX_EXACT_LOOKUPS = 4  # LLM-selected method names to look up by exact title
 EXTERNAL_QUERY_SIGNAL_TYPES = ("method", "claim", "task", "limitation")
 EXTERNAL_QUERY_MIN_CONFIDENCE = 0.3  # skip low-confidence extracted signals
 EXTERNAL_QUERY_MAX_KEYWORDS = 2  # generic user keywords are lowest priority
+# Reciprocal-rank-fusion constant for merging per-query result lists (P2-4).
+RRF_K = 60  # standard RRF smoothing: dampens per-query position differences
 # Architectural components are not named research contributions, so they are
 # poor external-search keys; deprioritize them so real method names win.
 EXTERNAL_METHOD_COMPONENT_TOKENS = {
@@ -415,7 +417,17 @@ class ExternalRetrievalService:
             f"{signals if signals else '(none extracted)'}\n\n"
             f"Generate {EXTERNAL_QUERY_AXIS_COUNT} concise external-search queries "
             f"(3-8 words each). Include at least 2 queries derived from the "
-            f"workspace method names, expanding abbreviations to their full names."
+            f"workspace method names, expanding abbreviations to their full names.\n"
+            f"MUST include: at least 1 query targeting COUNTER-EVIDENCE / critique "
+            f"literature for the question's core claims (e.g. fragility, sanity "
+            f"checks, reliability or uncertainty of the claimed properties), and "
+            f"at least 1 query targeting EVALUATION / benchmark literature for "
+            f"those claims. These two angles are mandatory even when the workspace "
+            f"signals suggest other axes.\n"
+            f"IMPORTANT: critique and evaluation literature usually lives OUTSIDE "
+            f"the question's narrow domain — search the broader field (e.g. for a "
+            f"graph question, also query general explainability / XAI critique "
+            f"papers), not only domain-specific variants."
         )
         try:
             resp = self.llm.chat_completion(
@@ -484,10 +496,15 @@ class ExternalRetrievalService:
         # method name mentioned in an axis query is also added as a clean
         # query (deduped).
         method_names = self._external_method_full_names(run.workspace_id)
+        lookup_set = {name.strip().lower() for name in lookups if name.strip()}
         for axis_query in axis:
             axis_lower = axis_query.lower()
             for name in method_names:
                 if len(name) >= 4 and name.lower() in axis_lower:
+                    # Exact lookups already fetch these method papers precisely;
+                    # a relevance-query duplicate would only burn query budget.
+                    if name.strip().lower() in lookup_set:
+                        continue
                     if add(name) and len(queries) >= EXTERNAL_QUERY_MAX_TOTAL:
                         return queries, lookups
         for item in self._external_query_signal_items(run.workspace_id, types=("method",)):
@@ -562,9 +579,12 @@ class ExternalRetrievalService:
             year = f"{scope.year_from or ''}-{scope.year_to or ''}"
         per_query: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = []
         query_failures: list[dict[str, Any]] = []
-        for position, query in enumerate(queries):
+        for query in queries:
             try:
-                limit = top_k if position == 0 else max(3, top_k // 2)
+                # Every query fetches the full top_k: recall of the gate is
+                # capped by per-query truncation, and merging dedupes anyway.
+                # (Same S2 API call count regardless of the limit parameter.)
+                limit = top_k
                 raw = self.external_search.search(
                     query=query[:200],
                     fields=S2_FIELDS,
@@ -647,30 +667,44 @@ class ExternalRetrievalService:
                 lookup_hits.append((str(item["paperId"]), item, f"exact: {name[:120]}"))
                 break  # one verified paper per lookup name
 
-        # Round-robin interleave across queries so each query's top hits reach
-        # the merged top-K — a primary-first merge would hide extra-query
-        # discoveries below rank 10. Dedupe globally, attributing each paper
-        # to the query that surfaced it earliest. Verified lookup hits are
-        # prepended since they are the most certain matches.
+        # Reciprocal-rank fusion across queries, so the merged top-K reflects
+        # cross-query agreement instead of query order (P2-4: a critique-axis
+        # query's own top hit ranked ~31 under the old round-robin append even
+        # though the query was nearly the paper's title). A paper surfaced by
+        # several queries outranks a single-query hit at the same position;
+        # citation count breaks ties so foundational classics surface over
+        # incidental matches. Verified lookup hits stay prepended — they are
+        # the most certain matches.
         merged: list[tuple[str, dict[str, Any], str]] = []
         seen: set[str] = set()
         for pid, item, source_query in lookup_hits:
             if pid not in seen:
                 seen.add(pid)
                 merged.append((pid, item, source_query))
-        round_index = 0
-        while True:
-            added_this_round = False
-            for source_query, q_results in per_query:
-                if round_index < len(q_results):
-                    pid, item = q_results[round_index]
-                    if pid not in seen:
-                        seen.add(pid)
-                        merged.append((pid, item, source_query[:200]))
-                    added_this_round = True
-            if not added_this_round:
-                break
-            round_index += 1
+        rrf_scores: dict[str, float] = {}
+        rrf_citations: dict[str, int] = {}
+        rrf_first: dict[str, tuple[int, str, dict[str, Any]]] = {}
+        rrf_best_pos: dict[str, int] = {}
+        rrf_best_source: dict[str, str] = {}
+        rrf_item: dict[str, dict[str, Any]] = {}
+        for order, (source_query, q_results) in enumerate(per_query):
+            for position, (pid, item) in enumerate(q_results, start=1):
+                rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1.0 / (RRF_K + position)
+                citations = item.get("citationCount")
+                rrf_citations[pid] = max(
+                    rrf_citations.get(pid, 0), citations if isinstance(citations, int) else 0
+                )
+                rrf_first.setdefault(pid, (order, source_query[:200], item))
+                rrf_item.setdefault(pid, item)
+                if position < rrf_best_pos.get(pid, position + 1):
+                    rrf_best_pos[pid] = position
+                    rrf_best_source[pid] = source_query[:200]
+        fused = sorted(
+            (pid for pid in rrf_scores if pid not in seen),
+            key=lambda pid: (-rrf_scores[pid], -rrf_citations.get(pid, 0), rrf_first[pid][0]),
+        )
+        for pid in fused:
+            merged.append((pid, rrf_item[pid], rrf_best_source.get(pid) or rrf_first[pid][1]))
 
         rows: list[DiscoverExternalCandidate] = []
         for rank, (pid, item, source_query) in enumerate(merged, start=1):
