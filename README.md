@@ -2,10 +2,6 @@
 
 Evidence-grounded, Human-in-the-Loop AI Research Workspace.
 
-## Current Status
-
-**Phase 0: Infrastructure Setup** - in progress.
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -100,19 +96,6 @@ Generated code is previewed and downloaded by default; it is never executed auto
 ### Fine-tuned Research Gap Board
 
 GapMind can call the fine-tuned Qwen3 Schema 3.0 extractor through Ollama, build a deterministic method-by-problem board, and hand unverified cells to Discover for external novelty and counter-evidence checks. See [`docs/fine_tuned_gap_board_integration.md`](docs/fine_tuned_gap_board_integration.md) for configuration, migration, workflow, and safety boundaries.
-
-## Development Phases
-
-- **Phase 0** - Infrastructure + project skeleton (current)
-- **Phase 1** - Core Domain models (Workspace, Artifact, Paper, Knowledge, Task, Timeline)
-- **Phase 2** - Task Runtime + PDF parsing pipeline
-- **Phase 3** - Knowledge extraction + Milvus retrieval
-- **Phase 4** - Timeline + Human-in-the-Loop
-- **Phase 5** - Discover Agent (Opportunity discovery)
-- **Phase 6** - Frontend core pages
-- **Phase 7** - Knowledge graph visualization
-
-See `docs/plans.md` for full architecture and MVP scope.
 
 ## Environment Variables
 
