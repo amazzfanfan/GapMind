@@ -14,7 +14,7 @@
 | P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ☐ |
 | P0-3 | **真实验证 token_usage** | ✅ 真实验证通过（run `e6f503bb`，2026-08-18）：全流程（preflight→retrieval→external→synthesis）token_usage 正确累计，前半程 6486 → 最终 10154（prompt 7727 + completion 2427），产出 2 个 needs_more_evidence 机会 | P0-2 | ✅ |
 | P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ☐ |
-| P0-5 | **W6-5 现场演示预演** | ✅ 环境/数据预检完成（服务全绿：后端/前端/Redis/PG/Milvus/zf隧道/三 key；demo workspace `123100ea`：21 篇解析、881 知识/21 确认、14 机会/3 确认、5 计划、32 agent runs）+ **清理 4 个 zombie Discover run**（waiting_for_user 但 0 steps 从未启动，cancel→软删，readiness pending_runs 4→0）。**剩余**：按 `0811_demo_script.md` 10 步实机走查（用户主导）| 环境 | ⏳ 预检 ✅，10 步走查待做 |
+| P0-5 | **W6-5 现场演示预演** | ✅ 完成：环境/数据预检（服务全绿）+ 清理 4 个 zombie run + 10 步实机走查（用户已手动完成预演，2026-08-18 勾选）| 环境 | ✅ |
 
 ## 二、P0.5 前端体验改进（demo 关键，按影响/成本排序）
 
