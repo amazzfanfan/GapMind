@@ -10,11 +10,11 @@
 ## 一、P0 封版前必做
 
 | # | 任务 | 描述 | 前置 | 状态 |
-|---|---|---|---|---|
-| P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ☐ |
-| P0-3 | **真实验证 token_usage** | ✅ 真实验证通过（run `e6f503bb`，2026-08-18）：全流程（preflight→retrieval→external→synthesis）token_usage 正确累计，前半程 6486 → 最终 10154（prompt 7727 + completion 2427），产出 2 个 needs_more_evidence 机会 | P0-2 | ✅ |
-| P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ☐ |
-| P0-5 | **W6-5 现场演示预演** | ✅ 完成：环境/数据预检（服务全绿）+ 清理 4 个 zombie run + 10 步实机走查（用户已手动完成预演，2026-08-18 勾选）| 环境 | ✅ |
+|---|---|---|---|----|
+| P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ✅  |
+| P0-3 | **真实验证 token_usage** | ✅ 真实验证通过（run `e6f503bb`，2026-08-18）：全流程（preflight→retrieval→external→synthesis）token_usage 正确累计，前半程 6486 → 最终 10154（prompt 7727 + completion 2427），产出 2 个 needs_more_evidence 机会 | P0-2 | ✅  |
+| P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ✅  |
+| P0-5 | **W6-5 现场演示预演** | ✅ 完成：环境/数据预检（服务全绿）+ 清理 4 个 zombie run + 10 步实机走查（用户已手动完成预演，2026-08-18 勾选）| 环境 | ✅  |
 
 ## 二、P0.5 前端体验改进（demo 关键，按影响/成本排序）
 
@@ -22,7 +22,7 @@
 |---|---|---|---|---|
 | P0.5-1 | **对话流式输出（SSE）** | ✅ **根因找到 + 已修复**：后端逐 token + 前端 SSE 解析 + 节流渲染全链路代码正确；真正 bug 在**新会话场景**——`send` 里 `navigate(新URL)` 触发 `useEffect([conversationId])` 立刻 `loadConversation()`，用 DB pending 消息（真实 id + generating + 空内容）**替换了乐观消息**（`local-stream-*` id），`appendDelta` 按乐观 id 匹配就永远失效 → 流式全程无可见更新，流结束一次性显示全文（即用户看到的"闪一下出全部"）。修复：新增 `streaming` state，流式期间 effect 跳过 reload，结束后 effect 统一加载持久化全文；`streamAssistant` 加 console.debug 标记（enter/done+chunks/tokens）。tsc + 35 测试过。**待浏览器实测确认** | 前端 | ✅ 代码 |
 | P0.5-2 | **检索证据折叠/篇幅控制** | ✅ 已实现：antd Collapse 默认折叠 + 每引文 Paragraph 展开/收起可切换 + `MAX_VISIBLE=3`"查看全部"（`ChatCitations.tsx`，`944979f` 已提交）| 纯前端 | ✅ |
-| P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
+| P0.5-3 | **公式渲染** | ✅ 已修复（用户确认，2026-08-18）：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）+ 真实 AI 输出公式渲染正常 | 纯前端 | ✅ |
 | P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
 | P0.5-6 | **知识图谱规范实体层冗余** | ✅ 已实现：landscape/claims 默认隐藏 `canonicalizes`（对应规范实体）边 + 孤立实体节点（18 个 GNNExplainer 指 1 个 GNNExplainer 的视觉噪音），evidence 视图保留溯源链；加"显示规范实体层"开关，按"canonicalizes"筛选时自动显示；`hideEntityLayer` 纯函数 + 3 单测，38 前端测试过 | 纯前端 | ✅ |
