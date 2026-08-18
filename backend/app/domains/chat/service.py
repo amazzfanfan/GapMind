@@ -20,6 +20,11 @@ from app.domains.workspace.models import Workspace
 from app.domains.workspace.service import WorkspaceService
 from app.gateway.llm import LLMGateway, get_llm_gateway
 
+# A chat stream whose client disconnected mid-flight is marked failed by the
+# finally-guard in _stream_complete; rows older than this threshold that are
+# still "generating" are treated as dead leftovers (pre-guard rows).
+STALE_GENERATING_SECONDS = 15 * 60
+
 
 class ChatNotFoundError(LookupError):
     pass
@@ -280,7 +285,7 @@ class ChatService:
 
     def _ensure_not_generating(self, conversation_id: str) -> None:
         active = self.db.scalar(
-            select(ChatMessage.id)
+            select(ChatMessage)
             .where(
                 ChatMessage.conversation_id == conversation_id,
                 ChatMessage.role == "assistant",
@@ -288,8 +293,22 @@ class ChatService:
             )
             .limit(1)
         )
-        if active:
-            raise ChatConflictError("a response is already being generated")
+        if active is None:
+            return
+        # P0.5-1 hardening: a stream whose client vanished mid-flight can leave
+        # a row stuck in "generating" (rows created before the finally-guard
+        # existed stay stuck forever). Treat rows untouched for longer than
+        # STALE_GENERATING_SECONDS as dead so the conversation is not bricked.
+        stale_for = None
+        if active.updated_at is not None:
+            updated_at = active.updated_at
+            if updated_at.tzinfo is None:  # SQLite tests return naive datetimes
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            stale_for = datetime.now(timezone.utc) - updated_at
+        if stale_for is not None and stale_for.total_seconds() > STALE_GENERATING_SECONDS:
+            self._mark_failed(active, "流式响应中断（超时自动恢复）")
+            return
+        raise ChatConflictError("a response is already being generated")
 
     def _completed_messages(self, conversation_id: str) -> list[ChatMessage]:
         return list(
@@ -450,42 +469,54 @@ class ChatService:
             raise
 
         yield {"type": "start", "conversation_id": conversation_id, "assistant_message_id": assistant_id}
-        if conversation.workspace_id and evidence:
-            yield {
-                "type": "evidence",
-                "citations": [
-                    {
-                        "id": ev.id,
-                        "paper_title": ev.paper_title,
-                        "section": ev.section,
-                        "excerpt": ev.excerpt,
-                        "rank": ev.rank,
-                    }
-                    for ev in evidence
-                ],
-            }
-        chunks: list[str] = []
+        interrupted = True
         try:
-            for delta in gateway.stream_chat_completion(context, temperature=0.2):
-                chunks.append(delta)
-                yield {"type": "token", "content": delta}
-        except Exception as exc:
-            safe_error = _safe_error_message(exc)
-            self._mark_failed(assistant, safe_error)
-            yield {"type": "error", "message": safe_error}
-            return
+            if conversation.workspace_id and evidence:
+                yield {
+                    "type": "evidence",
+                    "citations": [
+                        {
+                            "id": ev.id,
+                            "paper_title": ev.paper_title,
+                            "section": ev.section,
+                            "excerpt": ev.excerpt,
+                            "rank": ev.rank,
+                        }
+                        for ev in evidence
+                    ],
+                }
+            chunks: list[str] = []
+            try:
+                for delta in gateway.stream_chat_completion(context, temperature=0.2):
+                    chunks.append(delta)
+                    yield {"type": "token", "content": delta}
+            except Exception as exc:
+                safe_error = _safe_error_message(exc)
+                self._mark_failed(assistant, safe_error)
+                yield {"type": "error", "message": safe_error}
+                return
 
-        content = "".join(chunks)
-        assistant.status = "completed"
-        assistant.content = content
-        assistant.error_message = None
-        assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
-        if conversation.workspace_id:
-            assistant.citations = evidence
-        conversation.last_message_at = datetime.now(timezone.utc)
-        self.db.commit()
-        self.db.refresh(assistant)
-        yield {"type": "done", "content": content}
+            content = "".join(chunks)
+            assistant.status = "completed"
+            assistant.content = content
+            assistant.error_message = None
+            assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
+            if conversation.workspace_id:
+                assistant.citations = evidence
+            conversation.last_message_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(assistant)
+            interrupted = False
+            yield {"type": "done", "content": content}
+        finally:
+            # P0.5-1 hardening: a client disconnect mid-stream raises
+            # GeneratorExit at a yield point; without this guard the row stays
+            # "generating" forever and blocks the whole conversation.
+            if interrupted and assistant.status == "generating":
+                try:
+                    self._mark_failed(assistant, "流式响应中断：客户端提前断开")
+                except Exception:
+                    self.db.rollback()
 
     def _workspace_context(
         self,

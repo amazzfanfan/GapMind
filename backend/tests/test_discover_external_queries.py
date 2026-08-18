@@ -305,16 +305,18 @@ def test_external_verify_merges_and_dedupes_candidates(db_session) -> None:
         .order_by(DiscoverExternalCandidate.rank)
         .all()
     )
-    # Round-robin interleave: p1(primary), p2(extra), p4(extra), p3(primary).
-    assert [c.external_paper_id for c in cands] == ["p1", "p2", "p4", "p3"]
+    # RRF fusion (P2-4): p2 is surfaced by BOTH queries, so it outranks every
+    # single-query hit regardless of position; single-query hits then order by
+    # their in-query position (p1 pos1 < p4 pos2 < p3 pos3).
+    assert [c.external_paper_id for c in cands] == ["p2", "p1", "p4", "p3"]
     assert [c.rank for c in cands] == [1, 2, 3, 4]
     # each candidate records the query that surfaced it
-    assert cands[0].query == primary  # p1 only in the primary query
-    assert cands[1].query == "PGIB: invariant rationale"  # p2 first seen under the extra query
+    assert cands[1].query == primary  # p1 only in the primary query
+    assert cands[0].query == "PGIB: invariant rationale"  # p2 first seen under the extra query
     assert cands[3].query == primary  # p3 only in the primary query
     assert fake.calls[0]["query"] == primary
-    assert fake.calls[0]["limit"] == 10  # primary uses full top_k
-    assert fake.calls[1]["limit"] == 5  # extra query uses top_k // 2
+    assert fake.calls[0]["limit"] == 10  # every query fetches full top_k (P2-4)
+    assert fake.calls[1]["limit"] == 10  # extra queries too: recall is capped by truncation
     assert run.stage_summaries["external_search"]["candidate_count"] == 4
     summary = dict(run.stage_summaries["external_search"])
     service._stage(run, "external_search", 0.58, {**summary, "external_candidates": count})
@@ -426,3 +428,18 @@ def test_external_verify_precise_lookup_prepends_verified(db_session) -> None:
     assert count == 3
     # Lookup made an extra S2 call with the exact name.
     assert any(call["query"] == "Graph Information Bottleneck" for call in fake.calls)
+
+
+def test_axis_query_prompt_requires_counter_evidence_and_evaluation_axes(db_session) -> None:
+    """P2-4: the axis-decomposition prompt must hard-require the counter-evidence
+    and evaluation angles — without the mandate the LLM skips them and the
+    external gate misses critique literature entirely (recall 0.286 case)."""
+    workspace_id = str(uuid4())
+    llm = _AxisLLM(["graph information bottleneck", "explanation stability"])
+    service = _service(db_session, _S2Fake({}), llm)
+    run = _run(workspace_id)
+    service._axis_queries_from_llm(run, "Are explanations faithful and stable?")
+    user_prompt = llm.messages[0][-1]["content"]
+    assert "COUNTER-EVIDENCE" in user_prompt
+    assert "EVALUATION" in user_prompt
+    assert "mandatory" in user_prompt

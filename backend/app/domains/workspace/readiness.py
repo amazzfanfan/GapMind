@@ -75,6 +75,21 @@ class WorkspaceReadinessService:
             return int(self.db.execute(q).scalar() or 0)
 
         papers_q = Paper.workspace_id == workspace_id
+        # Opportunity counts must match list_opportunities: an opportunity
+        # whose Discover run was soft-deleted is hidden from the UI.
+        visible_opportunities = (
+            select(ResearchOpportunity.id, ResearchOpportunity.status)
+            .outerjoin(DiscoverRun, ResearchOpportunity.discover_run_id == DiscoverRun.id)
+            .where(
+                ResearchOpportunity.workspace_id == workspace_id,
+                ResearchOpportunity.is_deleted.is_(False),
+                or_(
+                    ResearchOpportunity.discover_run_id.is_(None),
+                    DiscoverRun.deleted_at.is_(None),
+                ),
+            )
+            .subquery()
+        )
         return {
             "papers": count(
                 select(func.count()).select_from(Paper).where(papers_q, Paper.is_deleted.is_(False))
@@ -134,31 +149,20 @@ class WorkspaceReadinessService:
                     ),
                 )
             ),
+            # Opportunity counts must match list_opportunities: an opportunity
+            # whose Discover run was soft-deleted is hidden from the UI.
             "opportunities": count(
-                select(func.count())
-                .select_from(ResearchOpportunity)
-                .where(
-                    ResearchOpportunity.workspace_id == workspace_id,
-                    ResearchOpportunity.is_deleted.is_(False),
-                )
+                select(func.count()).select_from(visible_opportunities)
             ),
             "pending_opportunities": count(
                 select(func.count())
-                .select_from(ResearchOpportunity)
-                .where(
-                    ResearchOpportunity.workspace_id == workspace_id,
-                    ResearchOpportunity.is_deleted.is_(False),
-                    ResearchOpportunity.status.not_in(CLOSED_OPPORTUNITY_STATUSES),
-                )
+                .select_from(visible_opportunities)
+                .where(visible_opportunities.c.status.not_in(CLOSED_OPPORTUNITY_STATUSES))
             ),
             "confirmed_opportunities": count(
                 select(func.count())
-                .select_from(ResearchOpportunity)
-                .where(
-                    ResearchOpportunity.workspace_id == workspace_id,
-                    ResearchOpportunity.is_deleted.is_(False),
-                    ResearchOpportunity.status.in_(CONFIRMED_OPPORTUNITY_STATUSES),
-                )
+                .select_from(visible_opportunities)
+                .where(visible_opportunities.c.status.in_(CONFIRMED_OPPORTUNITY_STATUSES))
             ),
             "research_plans": count(
                 select(func.count()).select_from(ResearchPlan).where(ResearchPlan.workspace_id == workspace_id)

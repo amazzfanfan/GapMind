@@ -333,3 +333,75 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["content"] == "第一段内容"
     assert assistant["status"] == "completed"
+
+
+def test_stream_client_disconnect_marks_failed_not_generating(db_session, fake_gateway):
+    """P0.5-1: closing the SSE generator mid-stream (client disconnect) must not
+    leave the assistant row stuck in "generating" forever."""
+    from app.domains.chat.models import ChatMessage
+    from app.domains.chat.service import ChatService
+
+    service = ChatService(db_session, gateway=fake_gateway)
+    events = service.stream_send_new("解释 GNN")
+    for event in events:
+        if event.get("type") == "token":
+            break
+    events.close()  # simulate the browser dropping the connection
+
+    stuck = db_session.query(ChatMessage).filter_by(role="assistant", status="generating").all()
+    assert stuck == []
+    failed = db_session.query(ChatMessage).filter_by(role="assistant", status="failed").all()
+    assert len(failed) == 1
+    assert "中断" in failed[0].error_message
+
+
+def test_stale_generating_row_is_healed_instead_of_bricking(db_session, fake_gateway):
+    """P0.5-1: a "generating" row untouched for > STALE_GENERATING_SECONDS is
+    marked failed on the next send instead of raising a permanent conflict."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.domains.chat.models import ChatMessage
+    from app.domains.chat.service import STALE_GENERATING_SECONDS, ChatService
+
+    service = ChatService(db_session, gateway=fake_gateway)
+    conversation = service.create_conversation("stale", None)
+
+    def insert_generating(updated_at):
+        message = ChatMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="",
+            status="generating",
+            sequence=2,
+        )
+        db_session.add(message)
+        db_session.commit()
+        # updated_at is set by onupdate; force the stale timestamp explicitly.
+        db_session.query(ChatMessage).filter(ChatMessage.id == message.id).update(
+            {"updated_at": updated_at}
+        )
+        db_session.commit()
+        return message
+
+    fresh = insert_generating(datetime.now(timezone.utc))
+    with pytest.raises(Exception) as conflict:
+        list(service.stream_send(conversation.id, "再问一次"))  # generators run on iteration
+    assert "already being generated" in str(conflict.value)
+    db_session.delete(fresh)
+    db_session.commit()
+
+    insert_generating(
+        datetime.now(timezone.utc) - timedelta(seconds=STALE_GENERATING_SECONDS + 60)
+    )
+    events = list(service.stream_send(conversation.id, "再问一次"))
+    assert events[-1]["type"] == "done"
+    statuses = [
+        m.status
+        for m in db_session.query(ChatMessage)
+        .filter_by(conversation_id=conversation.id, role="assistant")
+        .order_by(ChatMessage.sequence)
+        .all()
+    ]
+    assert "generating" not in statuses
+    assert statuses.count("failed") == 1  # the healed stale row
+    assert statuses.count("completed") == 1  # the new answer

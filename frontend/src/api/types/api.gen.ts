@@ -889,6 +889,60 @@ export interface paths {
         patch: operations["update_annotation_api_v1_reading_annotations__annotation_id__patch"];
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/recommendations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Recommendations
+         * @description Return cached recommendations, generating the first batch on demand.
+         */
+        get: operations["list_recommendations_api_v1_workspaces__workspace_id__recommendations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/recommendations/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Recommendations */
+        post: operations["refresh_recommendations_api_v1_workspaces__workspace_id__recommendations_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/recommendations/{external_paper_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recommendation Feedback */
+        post: operations["recommendation_feedback_api_v1_workspaces__workspace_id__recommendations__external_paper_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/discover/runs": {
         parameters: {
             query?: never;
@@ -3393,6 +3447,61 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** PaperRecommendationFeedback */
+        PaperRecommendationFeedback: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "favorite" | "imported" | "reading" | "dismiss" | "restore";
+        };
+        /** PaperRecommendationListRead */
+        PaperRecommendationListRead: {
+            /** Workspace Id */
+            workspace_id: string;
+            /** Profile Topics */
+            profile_topics?: string[];
+            /**
+             * Has Profile
+             * @default false
+             */
+            has_profile: boolean;
+            /** Generated At */
+            generated_at?: string | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Items */
+            items?: components["schemas"]["PaperRecommendationRead"][];
+        };
+        /** PaperRecommendationRead */
+        PaperRecommendationRead: {
+            /** Id */
+            id: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** External Paper Id */
+            external_paper_id: string;
+            paper: components["schemas"]["SemanticScholarPaper"];
+            /** Score */
+            score: number;
+            /** Reasons */
+            reasons?: string[];
+            /** Topics */
+            topics?: string[];
+            /**
+             * Status
+             * @default suggested
+             */
+            status: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
         };
         /**
          * PaperUpdate
@@ -6183,6 +6292,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaperAnnotationRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recommendations_api_v1_workspaces__workspace_id__recommendations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperRecommendationListRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_recommendations_api_v1_workspaces__workspace_id__recommendations_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperRecommendationListRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recommendation_feedback_api_v1_workspaces__workspace_id__recommendations__external_paper_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                external_paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperRecommendationFeedback"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperRecommendationRead"];
                 };
             };
             /** @description Validation Error */

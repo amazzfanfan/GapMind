@@ -10,11 +10,11 @@
 ## 一、P0 封版前必做
 
 | # | 任务 | 描述 | 前置 | 状态 |
-|---|---|---|---|---|
-| P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ☐ |
-| P0-3 | **真实验证 token_usage** | 重启后跑一次 Discover，确认 `run.stage_summaries["token_usage"]` 正确累计 | P0-2 | ☐ |
-| P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ☐ |
-| P0-5 | **W6-5 现场演示预演** | ✅ 环境/数据预检完成（服务全绿：后端/前端/Redis/PG/Milvus/zf隧道/三 key；demo workspace `123100ea`：21 篇解析、881 知识/21 确认、14 机会/3 确认、5 计划、32 agent runs）+ **清理 4 个 zombie Discover run**（waiting_for_user 但 0 steps 从未启动，cancel→软删，readiness pending_runs 4→0）。**剩余**：按 `0811_demo_script.md` 10 步实机走查（用户主导）| 环境 | ⏳ 预检 ✅，10 步走查待做 |
+|---|---|---|---|----|
+| P0-2 | **重启后端 + Celery worker** | token usage / NUL 改动后 worker 需重启加载新代码（约定 13）| 无 | ✅  |
+| P0-3 | **真实验证 token_usage** | ✅ 真实验证通过（run `e6f503bb`，2026-08-18）：全流程（preflight→retrieval→external→synthesis）token_usage 正确累计，前半程 6486 → 最终 10154（prompt 7727 + completion 2427），产出 2 个 needs_more_evidence 机会 | P0-2 | ✅  |
+| P0-4 | **gen:api 确认** | `npm run gen:api` 确认 `api.gen.ts` 最新 + 前端 tsc | 无 | ✅  |
+| P0-5 | **W6-5 现场演示预演** | ✅ 完成：环境/数据预检（服务全绿）+ 清理 4 个 zombie run + 10 步实机走查（用户已手动完成预演，2026-08-18 勾选）| 环境 | ✅  |
 
 ## 二、P0.5 前端体验改进（demo 关键，按影响/成本排序）
 
@@ -22,7 +22,7 @@
 |---|---|---|---|---|
 | P0.5-1 | **对话流式输出（SSE）** | ✅ **根因找到 + 已修复**：后端逐 token + 前端 SSE 解析 + 节流渲染全链路代码正确；真正 bug 在**新会话场景**——`send` 里 `navigate(新URL)` 触发 `useEffect([conversationId])` 立刻 `loadConversation()`，用 DB pending 消息（真实 id + generating + 空内容）**替换了乐观消息**（`local-stream-*` id），`appendDelta` 按乐观 id 匹配就永远失效 → 流式全程无可见更新，流结束一次性显示全文（即用户看到的"闪一下出全部"）。修复：新增 `streaming` state，流式期间 effect 跳过 reload，结束后 effect 统一加载持久化全文；`streamAssistant` 加 console.debug 标记（enter/done+chunks/tokens）。tsc + 35 测试过。**待浏览器实测确认** | 前端 | ✅ 代码 |
 | P0.5-2 | **检索证据折叠/篇幅控制** | ✅ 已实现：antd Collapse 默认折叠 + 每引文 Paragraph 展开/收起可切换 + `MAX_VISIBLE=3`"查看全部"（`ChatCitations.tsx`，`944979f` 已提交）| 纯前端 | ✅ |
-| P0.5-3 | **公式渲染** | ⚠️ 未完全修复：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）已实现 + 5 单测过，但真实 AI 输出**仅部分渲染、大部分未生效**。疑因：AI 公式格式多样（`\\(...\)`、`$$...$$`、混合括号、`\text` 等未全覆盖）。**先记录，暂缓修复** | 纯前端 | ⏳ |
+| P0.5-3 | **公式渲染** | ✅ 已修复（用户确认，2026-08-18）：`normalizeConversationMath`（`[...]`/`(...)`→`$...$`、裸下标）+ 真实 AI 输出公式渲染正常 | 纯前端 | ✅ |
 | P0.5-4 | **亮/暗主题** | ✅ 已实现：`state/theme.tsx`（localStorage 持久化 + `data-theme`）+ ConfigProvider darkAlgorithm（`main.tsx`）+ AppLayout 切换按钮（`944979f` 已提交）| 纯前端 | ✅ |
 | P0.5-5 | **研究空白棋盘核验高亮** | ✅ 已实现：棋盘格"核验优先级"score track + 四色图例高亮（limitation/transfer/same-paper/covered/uncovered）+ 推荐核验候选统计（`GapBoardPage.tsx` + `index.css` + 后端 `candidate_scoring_version`）| 前端为主 + 后端小改 | ✅ |
 | P0.5-6 | **知识图谱规范实体层冗余** | ✅ 已实现：landscape/claims 默认隐藏 `canonicalizes`（对应规范实体）边 + 孤立实体节点（18 个 GNNExplainer 指 1 个 GNNExplainer 的视觉噪音），evidence 视图保留溯源链；加"显示规范实体层"开关，按"canonicalizes"筛选时自动显示；`hideEntityLayer` 纯函数 + 3 单测，38 前端测试过 | 纯前端 | ✅ |
@@ -52,7 +52,7 @@
 | P2-1 | **检索质量 Gate** | ✅ **三项全达标**：similar **0.667→0.889**、counter **0.667→0.833**、semantic 1.0、leakage 0（两轮稳定）。修复：`_paper_max_top_k`（rerank 全部候选→每篇取最高→top-k 篇，解决重复论文占槽位）+ `_hybrid_rerank_top_k`（raw+rerank 0.5 融合，救回被 reranker 排低的 GSAT）。救回 PGM-Explainer/Zorro/GSAT；仍漏 DIR（语义远）/GOOD（recall 层不可救）。+8 单测，389 后端测试过。详见 `retrieval_gate_report.md` §6 | ✅ |
 | P2-2 | **P1 语义去重** | ✅ `dedup_semantic`（feature flag `retrieval_dedup_semantic`，阈值 0.9，同 paper+同 type 护栏）+ `_run_extract` 接线（rejected 记 ExtractionRejection stage=`dedup_semantic`）+ `_validate_and_rebase_evidence` 补 paper_id + 9 单测 + 真实数据静态验证（99→88 全同论文合并，0 跨论文）| ✅ |
 | P2-3 | **知识确认** | ✅ 确认 21 条机会证据引用的关键知识（9 method / 4 claim / 4 limitation / 2 task / 2 dataset，全置信 0.95-1.0）；readiness **confirmed 0→21**（"881 条知识 · 21 条已确认"），推荐下一步从"审核确认知识"→"处理待确认机会"。确认带可追溯 note（reviewed_by=user + reviewed_at）。工具：`scripts/confirm_key_knowledge.py --workspace-id <wid> [--apply]`（默认 dry-run）。其余 860 条保持待审，HITL 诚实 | ✅ |
-| P2-4 | **外部自动生成 recall** | 0.286（管线已验证，demo 作辅助线索）；可选校准 gold set 或轴 query 精确查找 | ☐ |
+| P2-4 | **外部自动生成 recall** | ⏳ 已校准一轮（2026-08-18，见下），recall@10 仍 0.286：① 轴 prompt 硬性要求反证/评估轴 + 跳出题目领域搜批评文献（LLM 输出已稳定）；② 每查询取满 top_k（候选池 56→110，S2 调用数不变）；③ 方法全名查询与 exact lookup 去重（省出预算，轴查询 6→8）；④ 合并改 RRF + 引用数并列断路（跨查询一致者优先，替代轮转追加）。剩余 gap 由 S2 对短批评查询的 relevance 行为主导（经典批评论文是否进 top-10 取决于措辞），继续提升需按 gold paper 定制查询模式，属过拟合固定基准，明确不做。gold set 见 `evaluation/external/`，注意 S2 限流 | ⏳ 校准完成，不再推进 |
 
 ## 六、P3 环境 / 运维
 
