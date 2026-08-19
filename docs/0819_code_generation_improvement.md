@@ -206,7 +206,8 @@ workspace_retrieval → module_design（蓝图 JSON，1800 token）
 - A1 蓝图：`_code_blueprint_prompt` + `_normalize_blueprint`（路径安全/去重/上限/evidence_refs 防幻觉/README+requirements 兜底）
 - A2 逐文件：`_generate_file`（一次重试）+ `_file_prompt`（蓝图+计划+该文件证据+AST 接口摘要）+ `_interface_summary`；蓝图即契约，文件路径强制归位
 - A3 静态检查：`_static_review`（蓝图文件齐全/入口/测试/脚手架/imports↔requirements，stdlib 白名单 + sklearn→scikit-learn 等别名）
-- A4 rubric：`_code_rubric_prompt` + `_normalize_rubric`（以计划条目为准防漏报）；产物 `artifact_type="code_review"` 的 `code_rubric.md`（markdown 表格）；计数进 `run.result.rubric`
+- A4 rubric：`_code_rubric_prompt` + `_normalize_rubric`（以计划条目为准防漏报）；产物 `artifact_type="code_review"` 的 `code_rubric.md`（markdown 表格）；计数进 `run.result.rubric`；**后续补充**：`run.result.known_gaps` 结构化暴露 partial/missing 具体项，前端卡片以警告 Alert 醒目列出（缺口不再埋在报告里）
+- 产物下载：`download_artifact` 端点支持任意 artifact（含 code_rubric.md）；前端 rubric 折叠区与预览弹窗提供下载；`Content-Disposition` 按 RFC 5987 用 `filename*=UTF-8''` URL 编码中文文件名，前端 anchor `download` 设解析后的文件名并 `rel=noopener`，避免 blob 跳转/乱码
 - A5 证据护照：每个 code artifact 的 `metadata_payload` 带 `purpose` + `evidence_refs`（仅真实存在的 E 编号）
 
 `run.result` 新增 `blueprint` / `static_review` / `rubric` / `token_usage(llm_calls)`。
@@ -223,3 +224,45 @@ workspace_retrieval → module_design（蓝图 JSON，1800 token）
 ### 实机演示注意
 
 Celery worker 需重启后才会加载新流水线（Windows solo 池不热载）；uvicorn 若带 `--reload` 无需重启。
+
+---
+
+## 九、Phase B1 CodeRAG-lite 实施记录（2026-08-19）
+
+- `_retrieve` 重构：抽出 `_evidence_list`（可限长）与 `_materialize_citations`（聊天引用物化），单查询检索仍供其它 agent 使用
+- 新增 `_code_rag_evidence(run, plan, fallback)`：
+  - 4 条分面查询：method（方法步骤/算法细节）、formula（公式/损失函数）、setup（数据集/基线/超参/实验设置）、preprocess（预处理/特征工程/数据划分）
+  - 每条 `top_k=CODE_RAG_FACET_TOP_K(4)`，全量合并按 chunk 去重，取 `agent_rag_top_k`（10）条
+  - **分面为主**：全部命中时 fallback 单查询不参与；全部分面失败才回退 fallback（容错）
+  - 证据打标：逐分面 probe，给命中 chunk 的 evidence 打 `facets: [...]` + `is_code_grounding: true`（进入 prompt 与上下文，帮助模型定位方法来源）
+- code_generation 的 Step1 摘要改为“已选取 N 条证据（分面检索）”
+- 测试：`test_code_rag_facets_label_evidence`（分面路由、去重、四类 facets 打标、fallback 不动）；全量 400/400
+- 说明：分面查询多打 8 次 Milvus，但都是轻量嵌入检索；token 无增加（证据上限仍是 10 条，仅打标更精准）
+
+---
+
+## 十、沙箱方案已砍掉（2026-08-19 决策记录）
+
+**Phase B2/B3（Docker 有界冒烟 + 一次修复迭代）曾经实现并在实机跑通，但最终决定整体移除。**
+
+### 为什么砍
+
+1. **复杂度**：sandbox 模块 + Dockerfile + 镜像构建 + entrypoint 元数据接线 + 前端验证面板 + 测试隔离，对封版期比赛项目是实打实的维护面。
+2. **Docker 依赖**：验证要 `AGENT_CODE_EXECUTION_ENABLED=true` + Docker Desktop + 构建好的镜像。实机两次失败（缺 pytest、然后真实代码缺陷）就是演示风险样本。
+3. **性价比**：PaperBench 最强 agent 复现只有 21%，一次生成直接跑通本就是小概率；为一个 demo 功能配一条 LLM 修复循环 ROI 很低。
+4. **与铁律一致**：项目铁律本就"默认不自动执行 Agent 生成的完整代码项目（只预览/下载）"，沙箱是对它的破例。
+
+### 砍掉后保留了什么
+
+- **B1 CodeRAG-lite（分面检索）保留**：纯检索零基础设施，是调研里真正值得搬的东西。
+- **语法检查零成本接回**：`_static_review` 新增第 6 项 `syntax_valid`——纯 Python `ast.parse` 全量编译 .py，报具体语法错误（文件 + 行号）。把沙箱唯一的真实价值（抓住语法错误）用零依赖方式保留。
+- 删除清单：`sandbox.py`、`sandbox.Dockerfile`、config 全部 `agent_sandbox_*`/`agent_docker_*`/`agent_code_execution_enabled`、`request_code_validation` + `AgentExecutionDisabledError`、`validate` 端点 + Celery `validate_agent_code` 任务、`test_agent_sandbox.py`、conftest 隔离 fixture、前端"隔离验证"按钮/面板/`agentApi.validate`。
+- 语义：代码生成 = **诚实不执行**——蓝图 → 逐文件 → 静态检查（含语法）→ rubric 覆盖度 → 预览/下载，验证的深度止步于"语法可解析 + 计划覆盖度诚实报告"。
+
+### 实机踩坑（留存，避免重蹈）
+
+- `python:3.11-slim` 无 pytest/torch → 冒烟 `No module named pytest`（如果以后要恢复沙箱，需补丁层镜像）。
+- `pip install torch --index-url <pytorch>` 会让**所有包**都去 pytorch index 找 → 必须分开装。
+- 冒烟顺序若 pytest 在入口加载之前，测试路径缺依赖会遮蔽入口问题 → 入口优先。
+- `backend/.env` 的 `AGENT_CODE_EXECUTION_ENABLED=true` 会污染测试环境（曾致 422→202 失败）。
+- Git Bash 下 `docker run -v` 路径转换需 `MSYS_NO_PATHCONV=1`。
