@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
@@ -60,6 +62,10 @@ SUPPORTED_AGENT_TYPES = {
 # Agents that must be attached to an existing research plan.
 PLAN_REQUIRED_AGENT_TYPES = {"code_generation", "deep_research"}
 PLAN_OPTIONAL_AGENT_TYPES = {"analyze", "write", "respond"}
+
+# Code generation Phase A (docs/0819_code_generation_improvement.md):
+# blueprint first, then one bounded LLM call per file.
+CODE_BLUEPRINT_MAX_FILES = 8
 
 
 class AgentService:
@@ -563,13 +569,50 @@ class AgentService:
         if not evidence:
             raise AgentInputError("当前工作区没有已索引证据，不能生成有依据的实验代码")
         self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
-        self._transition(run, "running", "code_generation", 0.4)
-        prompt = self._code_prompt(run, plan, evidence)
-        raw, usage = self._structured_completion(prompt, max_tokens=7000)
-        files = self._normalize_files(raw.get("files"))
-        if not files:
-            raise AgentInputError("模型没有返回有效代码文件")
-        for file in files:
+        self._transition(run, "running", "code_generation", 0.3)
+        blueprint_raw, blueprint_usage = self._structured_completion(
+            self._code_blueprint_prompt(run, plan, evidence), max_tokens=1800
+        )
+        blueprint = self._normalize_blueprint(blueprint_raw, evidence)
+        if not blueprint["files"]:
+            raise AgentInputError("模型没有返回有效的项目蓝图")
+        self._step(
+            run,
+            2,
+            "module_design",
+            "completed",
+            f"蓝图：{len(blueprint['modules'])} 个模块 / {len(blueprint['files'])} 个文件",
+            {**blueprint_usage, "files": [file["path"] for file in blueprint["files"]]},
+        )
+        files: list[dict[str, Any]] = []
+        interface_summaries: list[dict[str, str]] = []
+        usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        llm_calls = 1  # blueprint
+        for offset, spec in enumerate(blueprint["files"]):
+            file, usage, attempts = self._generate_file(
+                run, plan, blueprint, spec, evidence, interface_summaries
+            )
+            llm_calls += attempts
+            files.append(file)
+            if file["path"].endswith(".py"):
+                interface_summaries.append(self._interface_summary(file["path"], file["content"]))
+            for key in usage_totals:
+                usage_totals[key] += int(usage.get(key, 0))
+            self._step(
+                run,
+                3 + offset,
+                "code_generation",
+                "completed",
+                f"已生成 {file['path']}（{len(file['content'])} 字符）",
+                usage,
+            )
+            self._transition(
+                run,
+                "running",
+                "code_generation",
+                0.3 + 0.6 * (offset + 1) / len(blueprint["files"]),
+            )
+        for file, spec in zip(files, blueprint["files"]):
             self.db.add(
                 AgentArtifact(
                     run_id=run.id,
@@ -577,7 +620,11 @@ class AgentService:
                     filename=file["path"],
                     mime_type=self._mime_type(file["path"]),
                     content=file["content"],
-                    metadata_payload={"language": file.get("language", "text")},
+                    metadata_payload={
+                        "language": file.get("language", "text"),
+                        "purpose": spec["purpose"],
+                        "evidence_refs": spec["evidence_refs"],
+                    },
                     validation_status="not_run",
                 )
             )
@@ -585,15 +632,74 @@ class AgentService:
             **dict(run.context_snapshot or {}),
             "research_plan_id": plan.id,
             "evidence": evidence,
+            "blueprint": blueprint,
         }
         run.result = {
             "research_plan_id": plan.id,
-            "summary": str(raw.get("summary") or "实验代码项目已生成"),
+            "summary": blueprint["summary"] or "实验代码项目已生成",
             "file_count": len(files),
+            "blueprint": {
+                "modules": [module["name"] for module in blueprint["modules"]],
+                "files": [file["path"] for file in blueprint["files"]],
+            },
+            "token_usage": {**usage_totals, "llm_calls": llm_calls},
             "validation": {"status": "not_run"},
         }
-        self._step(run, 2, "code_generation", "completed", f"已生成 {len(files)} 个文件", usage)
-        self._step(run, 3, "static_review", "completed", "文件路径和产物规模检查通过")
+        review = self._static_review(files, blueprint)
+        passed = sum(1 for check in review["checks"] if check["passed"])
+        # JSON columns need wholesale reassignment; in-place mutation is not tracked
+        run.result = {
+            **run.result,
+            "static_review": {
+                "passed": passed,
+                "total": len(review["checks"]),
+                "checks": review["checks"],
+            },
+        }
+        self._transition(run, "running", "static_review", 0.9)
+        self._step(
+            run,
+            3 + len(files),
+            "static_review",
+            "completed",
+            f"静态检查通过 {passed}/{len(review['checks'])} 项",
+            {"checks": review["checks"]},
+        )
+        rubric_raw, rubric_usage = self._structured_completion(
+            self._code_rubric_prompt(plan, files, blueprint), max_tokens=1600
+        )
+        rubric = self._normalize_rubric(rubric_raw, plan)
+        for key in usage_totals:
+            usage_totals[key] += int(rubric_usage.get(key, 0))
+        run.result = {
+            **run.result,
+            "token_usage": {**usage_totals, "llm_calls": llm_calls + 1},  # + rubric
+            "rubric": {
+                "covered": rubric["covered"],
+                "partial": rubric["partial"],
+                "missing": rubric["missing"],
+            },
+        }
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="code_review",
+                filename="code_rubric.md",
+                mime_type="text/markdown",
+                content=rubric["markdown"],
+                metadata_payload={"kind": "rubric_checklist"},
+                validation_status="not_run",
+            )
+        )
+        self._transition(run, "running", "rubric_check", 0.95)
+        self._step(
+            run,
+            4 + len(files),
+            "rubric_check",
+            "completed",
+            f"计划覆盖度：{rubric['covered']} 项覆盖 / {rubric['partial']} 部分覆盖 / {rubric['missing']} 未覆盖",
+            {**rubric_usage, "items": rubric["items"]},
+        )
         run.status = "succeeded"
         run.current_stage = "artifacts_ready"
         run.progress = 1.0
@@ -1035,6 +1141,13 @@ class AgentService:
         )
         parsed = self._parse_json(response.content)
         if parsed is None:
+            finish_reason = None
+            try:
+                finish_reason = response.raw.choices[0].finish_reason
+            except (AttributeError, IndexError, TypeError):
+                finish_reason = None
+            if finish_reason == "length":
+                raise AgentInputError("模型输出被 max_tokens 截断，JSON 不完整")
             raise AgentInputError("模型返回的结构化结果无效")
         return parsed, {
             "prompt_tokens": response.prompt_tokens,
@@ -1095,9 +1208,58 @@ class AgentService:
             f"可用证据：{json.dumps(evidence, ensure_ascii=False)}"
         )
 
+    def _code_blueprint_prompt(
+        self, run: AgentRun, plan: ResearchPlan, evidence: list[dict[str, Any]]
+    ) -> str:
+        plan_payload = self._code_plan_payload(plan)
+        return (
+            "为下面的研究计划设计一个最小、可复现、便于审查的 Python 实验项目蓝图（只做设计，不写代码）。"
+            f"文件数量控制在 4-{CODE_BLUEPRINT_MAX_FILES} 个；必须包含 README.md、requirements.txt、"
+            "配置文件、训练或评估入口和至少一个测试。"
+            "evidence_refs 只能从给定证据的 evidence_id（如 E1）中选择，且只写该文件真正依赖的证据，可以为空。\n"
+            "返回 JSON：summary、modules（每项 name+responsibility）、files"
+            "（每项 path, language, purpose, depends_on, evidence_refs）、entrypoint、test_files。\n\n"
+            f"用户要求：{run.input_payload.get('prompt')}\n"
+            f"偏好框架：{run.input_payload.get('framework', 'PyTorch')}\n"
+            f"研究计划：{json.dumps(plan_payload, ensure_ascii=False)}\n"
+            f"论文证据：{json.dumps(evidence, ensure_ascii=False)}"
+        )
+
+    def _file_prompt(
+        self,
+        run: AgentRun,
+        plan: ResearchPlan,
+        blueprint: dict[str, Any],
+        spec: dict[str, Any],
+        evidence: list[dict[str, Any]],
+        interface_summaries: list[dict[str, str]],
+    ) -> str:
+        relevant = [item for item in evidence if item["evidence_id"] in set(spec["evidence_refs"])]
+        if not relevant:
+            relevant = evidence[:3]
+        blueprint_compact = {
+            "summary": blueprint["summary"],
+            "modules": blueprint["modules"],
+            "files": [{"path": f["path"], "purpose": f["purpose"]} for f in blueprint["files"]],
+            "entrypoint": blueprint["entrypoint"],
+        }
+        return (
+            "按项目蓝图只生成指定的这一个文件，不要返回其它文件。代码要最小、可复现、便于审查；"
+            "不要包含密钥，不要访问用户本机路径，不要返回二进制内容；"
+            "第三方依赖只能使用 requirements.txt 中常见的 PyPI 包。\n"
+            "返回 JSON：files 数组（恰好一项，含 path, language, content）。\n\n"
+            f"目标文件：{json.dumps(spec, ensure_ascii=False)}\n"
+            f"项目蓝图：{json.dumps(blueprint_compact, ensure_ascii=False)}\n"
+            f"已生成文件的接口摘要：{json.dumps(interface_summaries, ensure_ascii=False) or '无'}\n"
+            f"研究计划：{json.dumps(self._code_plan_payload(plan), ensure_ascii=False)}\n"
+            f"相关证据：{json.dumps(relevant, ensure_ascii=False)}\n"
+            f"用户要求：{run.input_payload.get('prompt')}\n"
+            f"偏好框架：{run.input_payload.get('framework', 'PyTorch')}"
+        )
+
     @staticmethod
-    def _code_prompt(run: AgentRun, plan: ResearchPlan, evidence: list[dict[str, Any]]) -> str:
-        plan_payload = {
+    def _code_plan_payload(plan: ResearchPlan) -> dict[str, Any]:
+        return {
             "title": plan.title,
             "research_question": plan.research_question,
             "hypothesis": plan.hypothesis,
@@ -1107,15 +1269,309 @@ class AgentService:
             "validation_steps": plan.validation_steps,
             "constraints": plan.resource_constraints,
         }
-        return (
-            "生成一个最小、可复现、便于审查的 Python 实验项目。不要包含密钥，不要访问用户本机路径，"
-            "不要返回二进制内容。返回 JSON：summary 和 files；files 每项包含 path, language, content。"
-            "必须包含 README.md、requirements.txt、配置、训练或评估入口和至少一个测试。\n\n"
-            f"用户要求：{run.input_payload.get('prompt')}\n"
-            f"偏好框架：{run.input_payload.get('framework', 'PyTorch')}\n"
-            f"研究计划：{json.dumps(plan_payload, ensure_ascii=False)}\n"
-            f"论文证据：{json.dumps(evidence, ensure_ascii=False)}"
+
+    @staticmethod
+    def _normalize_blueprint(raw: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+        valid_refs = {item["evidence_id"] for item in evidence}
+        modules: list[dict[str, str]] = []
+        for raw_module in (raw.get("modules") or [])[:12]:
+            if not isinstance(raw_module, dict):
+                continue
+            name = str(raw_module.get("name") or "").strip()
+            if not name:
+                continue
+            modules.append(
+                {"name": name[:60], "responsibility": str(raw_module.get("responsibility") or "")[:200]}
+            )
+        files: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_file in (raw.get("files") or [])[:CODE_BLUEPRINT_MAX_FILES]:
+            if not isinstance(raw_file, dict):
+                continue
+            path = str(raw_file.get("path") or "").replace("\\", "/").strip("/")
+            pure = PurePosixPath(path)
+            if not path or pure.is_absolute() or ".." in pure.parts:
+                continue
+            if any(part.startswith(".") for part in pure.parts):
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            refs = [
+                str(ref)
+                for ref in (raw_file.get("evidence_refs") or [])
+                if str(ref) in valid_refs
+            ][:4]
+            files.append(
+                {
+                    "path": str(pure),
+                    "language": str(raw_file.get("language") or "text"),
+                    "purpose": str(raw_file.get("purpose") or "")[:200],
+                    "depends_on": [
+                        str(dep) for dep in (raw_file.get("depends_on") or []) if str(dep) in seen
+                    ][:4],
+                    "evidence_refs": refs,
+                }
+            )
+        for default_path, default_language, default_purpose in (
+            ("README.md", "markdown", "项目说明：运行方式与结构"),
+            ("requirements.txt", "text", "依赖清单"),
+        ):
+            if not any(file["path"] == default_path for file in files):
+                files.append(
+                    {
+                        "path": default_path,
+                        "language": default_language,
+                        "purpose": default_purpose,
+                        "depends_on": [],
+                        "evidence_refs": [],
+                    }
+                )
+        return {
+            "summary": str(raw.get("summary") or "").strip()[:500],
+            "modules": modules,
+            "files": files,
+            "entrypoint": str(raw.get("entrypoint") or ""),
+            "test_files": [str(t) for t in (raw.get("test_files") or [])][:4],
+        }
+
+    def _generate_file(
+        self,
+        run: AgentRun,
+        plan: ResearchPlan,
+        blueprint: dict[str, Any],
+        spec: dict[str, Any],
+        evidence: list[dict[str, Any]],
+        interface_summaries: list[dict[str, str]],
+    ) -> tuple[dict[str, Any], dict[str, int], int]:
+        prompt = self._file_prompt(run, plan, blueprint, spec, evidence, interface_summaries)
+        retry_prompt = (
+            prompt
+            + "\n\n注意：上一次返回无效或被截断。请大幅精简该文件内容（正文控制在 2000 字符内），"
+            "只保留必要内容，务必返回完整闭合的 JSON。"
         )
+        last_error = "模型没有返回有效代码文件"
+        for attempt in range(1, 3):  # retry adapts: force brevity so JSON can close
+            try:
+                raw, usage = self._structured_completion(
+                    prompt if attempt == 1 else retry_prompt, max_tokens=4000
+                )
+                candidates = self._normalize_files(raw.get("files"))
+            except AgentInputError as exc:
+                last_error = str(exc)
+                continue
+            if not candidates:
+                continue
+            matched = next((f for f in candidates if f["path"] == spec["path"]), candidates[0])
+            matched["path"] = spec["path"]  # the blueprint is the contract
+            return matched, usage, attempt
+        raise AgentInputError(f"生成 {spec['path']} 失败：{last_error}")
+
+    @staticmethod
+    def _interface_summary(path: str, content: str) -> dict[str, str]:
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return {"path": path, "summary": "(语法不完整，供后续文件参考)"}
+        lines: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names = ", ".join(alias.name for alias in node.names)
+                lines.append(f"import {names}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                lines.append(f"from {node.module} import …")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = ", ".join(argument.arg for argument in node.args.args)
+                lines.append(f"def {node.name}({args})")
+            elif isinstance(node, ast.ClassDef):
+                methods = [
+                    child.name
+                    for child in node.body
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
+                lines.append(f"class {node.name}: {'/'.join(methods[:4])}")
+        return {"path": path, "summary": "; ".join(lines[:12])[:600] or "(空文件)"}
+
+    # import name -> requirements.txt package name for common mismatches
+    REQUIREMENT_ALIASES = {
+        "sklearn": "scikit-learn",
+        "cv2": "opencv-python",
+        "PIL": "pillow",
+        "yaml": "pyyaml",
+        "matplotlib": "matplotlib",
+    }
+
+    @staticmethod
+    def _static_review(files: list[dict[str, Any]], blueprint: dict[str, Any]) -> dict[str, Any]:
+        paths = {file["path"] for file in files}
+        checks: list[dict[str, Any]] = []
+
+        def check(name: str, passed: bool, detail: str) -> None:
+            checks.append({"name": name, "passed": passed, "detail": detail})
+
+        blueprint_paths = [spec["path"] for spec in blueprint["files"]]
+        missing = [path for path in blueprint_paths if path not in paths]
+        check(
+            "blueprint_files_present",
+            not missing,
+            "蓝图文件全部生成" if not missing else f"缺失：{', '.join(missing)}",
+        )
+        entrypoint = str(blueprint.get("entrypoint") or "")
+        check(
+            "entrypoint_present",
+            not entrypoint or entrypoint in paths,
+            f"入口 {entrypoint or '（未指定）'}"
+            + ("" if not entrypoint or entrypoint in paths else " 不在生成文件中"),
+        )
+        test_files = [path for path in paths if "test" in PurePosixPath(path).name.lower()]
+        check(
+            "test_present",
+            bool(test_files),
+            f"测试文件：{', '.join(sorted(test_files))}" if test_files else "没有识别到测试文件",
+        )
+        check(
+            "scaffolding_present",
+            {"README.md", "requirements.txt"} <= paths,
+            "README.md 与 requirements.txt 齐全"
+            if {"README.md", "requirements.txt"} <= paths
+            else "缺少 README.md 或 requirements.txt",
+        )
+        third_party: set[str] = set()
+        for file in files:
+            if not file["path"].endswith(".py"):
+                continue
+            try:
+                tree = ast.parse(file["content"])
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                module: str | None = None
+                if isinstance(node, ast.Import):
+                    module = node.names[0].name.split(".")[0] if node.names else None
+                elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                    module = node.module.split(".")[0]
+                if module and module not in sys.stdlib_module_names and module != "src":
+                    third_party.add(module)
+        requirements = next(
+            (file["content"] for file in files if file["path"] == "requirements.txt"), ""
+        )
+        declared: set[str] = set()
+        for line in requirements.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            name = re.split(r"[\s=<>~\[;!,]", line, 1)[0].strip().lower().replace("_", "-")
+            if name:
+                declared.add(name)
+        uncovered: set[str] = set()
+        for module in sorted(third_party):
+            package = AgentService.REQUIREMENT_ALIASES.get(module, module).lower().replace("_", "-")
+            if package not in declared:
+                uncovered.add(module)
+        check(
+            "imports_covered_by_requirements",
+            not uncovered,
+            "第三方依赖均已在 requirements.txt 声明"
+            if not uncovered
+            else f"未声明：{', '.join(sorted(uncovered))}",
+        )
+        return {"checks": checks}
+
+    def _code_rubric_prompt(
+        self, plan: ResearchPlan, files: list[dict[str, Any]], blueprint: dict[str, Any]
+    ) -> str:
+        file_overview = [
+            {
+                "path": file["path"],
+                "purpose": spec["purpose"],
+                "evidence_refs": spec["evidence_refs"],
+            }
+            for file, spec in zip(files, blueprint["files"])
+        ]
+        plan_payload = self._code_plan_payload(plan)
+        return (
+            "对照研究计划逐项核对已生成的实验项目覆盖度（覆盖度自检，不要写代码）。"
+            "对计划中每个 dataset、baseline、metric、validation_step 各输出一条，"
+            "status 只能是 covered / partial / missing，note 用中文说明依据或缺口。\n"
+            "返回 JSON：items（每项 dimension, target, status, note）和 overall_note。\n\n"
+            f"研究计划：{json.dumps(plan_payload, ensure_ascii=False)}\n"
+            f"生成的文件：{json.dumps(file_overview, ensure_ascii=False)}\n"
+            f"入口：{blueprint.get('entrypoint') or '未指定'}"
+        )
+
+    @staticmethod
+    def _normalize_rubric(raw: dict[str, Any], plan: ResearchPlan) -> dict[str, Any]:
+        by_target: dict[str, dict[str, str]] = {}
+        for raw_item in raw.get("items") or []:
+            if not isinstance(raw_item, dict):
+                continue
+            target = str(raw_item.get("target") or "").strip()
+            status = str(raw_item.get("status") or "").strip()
+            if not target or status not in {"covered", "partial", "missing"}:
+                continue
+            by_target[target] = {
+                "dimension": str(raw_item.get("dimension") or "")[:30],
+                "target": target[:120],
+                "status": status,
+                "note": str(raw_item.get("note") or "")[:200],
+            }
+        items: list[dict[str, str]] = []
+        for dimension, entries in (
+            ("dataset", plan.datasets),
+            ("baseline", plan.baselines),
+            ("metric", plan.metrics),
+            ("validation_step", plan.validation_steps),
+        ):
+            for entry in entries or []:
+                text = str(entry).strip()
+                matched = by_target.get(text) or next(
+                    (
+                        item
+                        for target, item in by_target.items()
+                        if text and (text in target or target in text)
+                    ),
+                    None,
+                )
+                if matched and matched["dimension"] in ("", dimension):
+                    items.append({**matched, "dimension": dimension})
+                else:
+                    items.append(
+                        {
+                            "dimension": dimension,
+                            "target": text[:120],
+                            "status": "missing",
+                            "note": "模型未核对到该项",
+                        }
+                    )
+        counts = {
+            status: sum(1 for item in items if item["status"] == status)
+            for status in ("covered", "partial", "missing")
+        }
+        lines = [
+            "# 计划覆盖度自检（rubric）",
+            "",
+            f"覆盖 {counts['covered']} 项 / 部分覆盖 {counts['partial']} 项 / 未覆盖 {counts['missing']} 项",
+            "",
+            "| 维度 | 计划条目 | 状态 | 说明 |",
+            "| --- | --- | --- | --- |",
+        ]
+        status_label = {"covered": "✅ 覆盖", "partial": "🟡 部分覆盖", "missing": "❌ 未覆盖"}
+        for item in items:
+            note = item["note"].replace("|", "\\|")
+            lines.append(
+                f"| {item['dimension']} | {item['target'].replace('|', chr(92) + '|')} "
+                f"| {status_label[item['status']]} | {note} |"
+            )
+        overall = str(raw.get("overall_note") or "").strip()
+        if overall:
+            lines += ["", f"**总评**：{overall[:300]}"]
+        return {
+            "items": items,
+            "covered": counts["covered"],
+            "partial": counts["partial"],
+            "missing": counts["missing"],
+            "markdown": "\n".join(lines),
+        }
 
     def _normalize_plan(
         self, data: dict[str, Any], run: AgentRun, opportunity: dict[str, Any] | None
@@ -1498,10 +1954,14 @@ class AgentService:
 
     @staticmethod
     def _parse_json(content: str) -> dict[str, Any] | None:
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
         try:
-            value = json.loads(content)
+            value = json.loads(text)
         except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}", content)
+            match = re.search(r"\{[\s\S]*\}", text)
             if not match:
                 return None
             try:
