@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from dataclasses import dataclass
 from unittest.mock import patch
 
@@ -31,11 +33,13 @@ class FakeGateway:
         blueprint_payload: dict | None = None,
         rubric_payload: dict | None = None,
         invalid_first_file: bool = False,
+        fail_paths: set[str] | None = None,
     ) -> None:
         self.payload = payload
         self.blueprint_payload = blueprint_payload
         self.rubric_payload = rubric_payload
         self.invalid_first_file = invalid_first_file
+        self.fail_paths = fail_paths or set()
         self.file_calls = 0
         self.calls: list[str] = []
 
@@ -51,6 +55,20 @@ class FakeGateway:
             if self.invalid_first_file and self.file_calls == 1:
                 # truncated mid-string, like a max_tokens cut: no closing braces
                 return FakeResponse('{"files": [{"path": "README.md", "content": "tru')
+            if self.fail_paths:
+                # match the exact target-file spec line, e.g. 目标文件：{"path": "README.md", ...}
+                import re as _re
+
+                match = _re.search(r'目标文件：(\{.*?\})\n', user_prompt)
+                if match and '"path": "' in match.group(1):
+                    import json as _json
+
+                    try:
+                        target = _json.loads(match.group(1))
+                    except ValueError:
+                        target = {}
+                    if target.get("path") in self.fail_paths:
+                        return FakeResponse("not json at all")
             payload = self.payload
         return FakeResponse(json.dumps(payload, ensure_ascii=False))
 
@@ -379,12 +397,18 @@ def test_code_agent_requires_plan_and_generates_safe_downloadable_files(
     assert steps["module_design"]["summary"].startswith("蓝图：1 个模块")
     assert steps["static_review"]["sequence"] == 6
     # static review is real now: no test file in this blueprint -> 4/5 checks pass
-    assert steps["static_review"]["summary"] == "静态检查通过 4/5 项"
+    assert steps["static_review"]["summary"] == "静态检查通过 5/6 项"
     check_names = {check["name"]: check["passed"] for check in detail["result"]["static_review"]["checks"]}
     assert check_names["test_present"] is False
     assert check_names["imports_covered_by_requirements"] is True
+    assert check_names["syntax_valid"] is True  # Phase B-removal: pure-AST syntax gate
     # rubric self-check (A4): counts mirror the fake payload
     assert detail["result"]["rubric"] == {"covered": 3, "partial": 1, "missing": 1}
+    # known_gaps (A4 follow-up): structured partial/missing items, one per plan entry
+    assert detail["result"]["known_gaps"] == [
+        {"dimension": "validation_step", "target": "train", "status": "partial", "note": "入口存在"},
+        {"dimension": "validation_step", "target": "evaluate", "status": "missing", "note": "未实现"},
+    ]
     rubric_artifact = next(
         item for item in detail["artifacts"] if item["artifact_type"] == "code_review"
     )
@@ -400,6 +424,12 @@ def test_code_agent_requires_plan_and_generates_safe_downloadable_files(
     bundle = client.get(f"/api/v1/workspaces/{workspace['id']}/agent-runs/{run_id}/bundle")
     assert bundle.status_code == 200
     assert bundle.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
+        names = zf.namelist()
+        assert "RESEARCH_PLAN.md" in names  # plan included alongside the code
+        assert "README.md" in names
+        assert "src/train.py" in names
+        assert "研究问题" in zf.read("RESEARCH_PLAN.md").decode("utf-8")
 
 
 def test_code_agent_recovers_from_truncated_file_json(
@@ -473,7 +503,208 @@ def test_code_agent_recovers_from_truncated_file_json(
     assert detail["result"]["token_usage"]["llm_calls"] == 5
 
 
-def test_agent_workspace_isolation_and_validation_is_disabled_by_default(
+def test_code_rag_facets_label_evidence(client, db_session: Session, monkeypatch):
+    workspace, conversation = _workspace_conversation(client)
+    plan = ResearchPlan(
+        workspace_id=workspace["id"],
+        opportunity_id=None,
+        opportunity_version_id=None,
+        source_type="agent",
+        status="draft",
+        research_question="Contrastive graph learning",
+        hypothesis="Topology-aware contrast helps",
+        scope_and_assumptions="",
+        datasets=["Cora"],
+        baselines=["GCN"],
+        metrics=["accuracy"],
+        validation_steps=["train"],
+        expected_supporting_result="",
+        falsification_criteria="",
+        risks=[],
+        resource_constraints="",
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    def routed(workspace_id=None, query="", top_k=None, use_reranker=None):
+        def item(chunk_id, text, score, section="Methods"):
+            return RetrievalResultItem(
+                paper_id="paper-1",
+                paper_title="Grounded Paper",
+                chunk_id=chunk_id,
+                section=section,
+                text=text,
+                score=score,
+            )
+        if "方法步骤" in query:
+            items = [item("chunk-method", "topology-aware contrastive learning algorithm", 0.9)]
+        elif "公式" in query:
+            items = [item("chunk-formula", "L = -sum(log p)", 0.85, "Equations")]
+        elif "实验设置" in query:
+            items = [item("chunk-setup", "Adam lr=1e-3 batch 128", 0.8)]
+        elif "数据预处理" in query:
+            items = [item("chunk-pre", "normalize features split 8:2", 0.75)]
+        else:
+            items = [item("chunk-1", "base contrastive learning", 0.7)]
+        return RetrievalResponse(workspace_id=workspace_id, status="succeeded", items=items)
+
+    monkeypatch.setattr("app.domains.agent.service.semantic_search", routed)
+    with patch("app.domains.agent.router.spawn_agent_task", return_value="celery-code"):
+        created = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/agent-runs",
+            json={
+                "agent_type": "code_generation",
+                "prompt": "生成最小实验",
+                "conversation_id": conversation["id"],
+                "input": {"research_plan_id": plan.id},
+            },
+        )
+    run_id = created.json()["id"]
+    gateway = FakeGateway(
+        blueprint_payload={
+            "summary": "最小项目",
+            "modules": [],
+            "files": [
+                {
+                    "path": "src/train.py",
+                    "language": "python",
+                    "purpose": "训练入口",
+                    "depends_on": [],
+                    "evidence_refs": ["E1", "E9"],
+                }
+            ],
+        },
+        payload={
+            "files": [
+                {"path": "src/train.py", "language": "python", "content": "print('train')"},
+            ],
+        },
+    )
+    AgentService(db_session, gateway=gateway).execute(run_id)
+    run = AgentService(db_session).get(workspace["id"], run_id)
+    evidence = run.context_snapshot["evidence"]
+    # facets are the primary source; the single-query fallback only kicks in when
+    # every facet search comes back empty
+    assert len(evidence) == 4
+    assert "chunk-1" not in {entry["chunk_id"] for entry in evidence}
+    by_chunk = {entry["chunk_id"]: entry for entry in evidence}
+    assert "method" in by_chunk["chunk-method"]["facets"]
+    assert "formula" in by_chunk["chunk-formula"]["facets"]
+    assert "setup" in by_chunk["chunk-setup"]["facets"]
+    assert "preprocess" in by_chunk["chunk-pre"]["facets"]
+    assert all(entry["is_code_grounding"] for entry in evidence)
+    # fallback branch: every facet search fails -> single-query evidence is used
+    def failed(workspace_id=None, query="", top_k=None, use_reranker=None):
+        if any(marker in query for marker in ("方法步骤", "公式", "实验设置", "数据预处理")):
+            return RetrievalResponse(workspace_id=workspace_id, status="failed", items=[])
+        return RetrievalResponse(
+            workspace_id=workspace_id,
+            status="succeeded",
+            items=[
+                RetrievalResultItem(
+                    paper_id="paper-1",
+                    paper_title="Grounded Paper",
+                    chunk_id="chunk-1",
+                    section="Methods",
+                    text="base contrastive learning",
+                    score=0.7,
+                )
+            ],
+        )
+
+    monkeypatch.setattr("app.domains.agent.service.semantic_search", failed)
+    service = AgentService(db_session)
+    fallback = [{"evidence_id": "E1", "chunk_id": "chunk-1", "text": "base"}]
+    result = service._code_rag_evidence(run, plan, fallback)
+    assert result == fallback
+    assert not any("facets" in entry for entry in result)  # fallback untouched
+
+
+def test_code_agent_survives_single_file_generation_failure(
+    client, db_session: Session, monkeypatch
+):
+    workspace, conversation = _workspace_conversation(client)
+    plan = ResearchPlan(
+        workspace_id=workspace["id"],
+        opportunity_id=None,
+        opportunity_version_id=None,
+        source_type="agent",
+        status="draft",
+        research_question="Q",
+        hypothesis="H",
+        scope_and_assumptions="",
+        datasets=[],
+        baselines=[],
+        metrics=[],
+        validation_steps=[],
+        expected_supporting_result="",
+        falsification_criteria="",
+        risks=[],
+        resource_constraints="",
+    )
+    db_session.add(plan)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.domains.agent.service.semantic_search", lambda **_: _retrieval(workspace["id"])
+    )
+    with patch("app.domains.agent.router.spawn_agent_task", return_value="celery-code"):
+        created = client.post(
+            f"/api/v1/workspaces/{workspace['id']}/agent-runs",
+            json={
+                "agent_type": "code_generation",
+                "prompt": "生成最小实验",
+                "conversation_id": conversation["id"],
+                "input": {"research_plan_id": plan.id},
+            },
+        )
+    run_id = created.json()["id"]
+    gateway = FakeGateway(
+        blueprint_payload={
+            "summary": "最小项目",
+            "modules": [],
+            "files": [
+                {
+                    "path": "README.md",
+                    "language": "markdown",
+                    "purpose": "说明",
+                    "depends_on": [],
+                    "evidence_refs": [],
+                },
+                {
+                    "path": "src/train.py",
+                    "language": "python",
+                    "purpose": "训练入口",
+                    "depends_on": [],
+                    "evidence_refs": [],
+                },
+            ],
+            "entrypoint": "src/train.py",
+            "test_files": [],
+        },
+        payload={
+            "files": [
+                {"path": "src/train.py", "language": "python", "content": "print('train')"},
+            ],
+        },
+        fail_paths={"README.md"},
+    )
+    AgentService(db_session, gateway=gateway).execute(run_id)
+    detail = client.get(f"/api/v1/workspaces/{workspace['id']}/agent-runs/{run_id}").json()
+    assert detail["status"] == "succeeded"
+    # README generation kept failing (invalid JSON): run survives with the rest
+    assert {item["filename"] for item in detail["artifacts"] if item["artifact_type"] == "code"} == {
+        "src/train.py", "requirements.txt"
+    }
+    assert "README.md" in {g["path"] for g in detail["result"]["file_errors"]}
+    # ZIP contains only the successfully generated files, never a placeholder
+    bundle = client.get(f"/api/v1/workspaces/{workspace['id']}/agent-runs/{run_id}/bundle")
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
+        names = zf.namelist()
+        assert "src/train.py" in names
+        assert "README.md" not in names
+
+
+def test_agent_workspace_isolation(
     client, db_session: Session
 ):
     workspace, conversation = _workspace_conversation(client)
@@ -512,9 +743,10 @@ def test_agent_workspace_isolation_and_validation_is_disabled_by_default(
         client.get(f"/api/v1/workspaces/{other['id']}/agent-runs/{created['id']}").status_code
         == 404
     )
-    run = AgentService(db_session).get(workspace["id"], created["id"])
-    run.status = "succeeded"
-    db_session.commit()
-    disabled = client.post(f"/api/v1/workspaces/{workspace['id']}/agent-runs/{run.id}/validate")
-    assert disabled.status_code == 422
-    assert disabled.json()["detail"]["error"] == "agent_execution_disabled"
+    # the code-execution sandbox was removed (08-19): there is no validate
+    # endpoint anymore, so an unknown path stays 404
+    assert (
+        client.post(f"/api/v1/workspaces/{workspace['id']}/agent-runs/{created['id']}/validate")
+        .status_code
+        == 404
+    )

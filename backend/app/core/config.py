@@ -81,13 +81,6 @@ class Settings(BaseSettings):
     agent_rag_top_k: int = 10
     agent_code_max_files: int = 30
     agent_code_max_chars: int = 300000
-    agent_code_execution_enabled: bool = False
-    agent_docker_binary: str = "docker"
-    agent_sandbox_image: str = "python:3.11-slim"
-    agent_sandbox_timeout_seconds: int = 60
-    agent_sandbox_memory: str = "512m"
-    agent_sandbox_cpus: float = 1.0
-    agent_sandbox_pids: int = 128
 
     # ---- Embedding (SiliconFlow, BGE-m3) ----
     siliconflow_api_key: str = ""

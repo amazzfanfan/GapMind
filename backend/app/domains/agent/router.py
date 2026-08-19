@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
@@ -18,9 +19,9 @@ from app.domains.agent.schemas import (
 )
 from app.domains.agent.service import AgentService
 from app.domains.agent.service import AgentInputError
+from app.domains.discover.models import ResearchPlan
 from app.domains.task.models import Task
-from app.domains.task.schemas import TaskRead
-from app.workers.tasks.run_agent import spawn_agent_task, spawn_agent_validation_task
+from app.workers.tasks.run_agent import spawn_agent_task
 
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/agent-runs", tags=["agent"])
@@ -102,28 +103,34 @@ def confirm_agent(workspace_id: str, run_id: str, service: AgentService = Depend
     )
 
 
-@router.post("/{run_id}/validate", response_model=TaskRead, status_code=status.HTTP_202_ACCEPTED)
-def validate_agent_code(workspace_id: str, run_id: str, service: AgentService = Depends(_service)) -> TaskRead:
-    task = service.request_code_validation(workspace_id, run_id)
-    task.celery_task_id = spawn_agent_validation_task(task.id)
-    service.db.commit()
-    service.db.refresh(task)
-    return TaskRead.model_validate(task)
-
-
 @router.get("/{run_id}/artifacts/{artifact_id}")
 def download_artifact(workspace_id: str, run_id: str, artifact_id: str, service: AgentService = Depends(_service)) -> Response:
     artifact = service.artifact(workspace_id, run_id, artifact_id)
+    # RFC 5987: URL-encode the filename so non-ASCII names download correctly;
+    # also expose a plain ASCII header the frontend can read without parsing
+    # Content-Disposition quoting.
+    filename = artifact.filename.split("/")[-1]
     return Response(
         content=artifact.content,
         media_type=artifact.mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{artifact.filename.split("/")[-1]}"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+            "X-File-Name": quote(filename),
+        },
     )
 
 
 @router.get("/{run_id}/bundle")
-def download_bundle(workspace_id: str, run_id: str, service: AgentService = Depends(_service)) -> Response:
-    _, _, artifacts = service.detail(workspace_id, run_id)
+def download_bundle(
+    workspace_id: str,
+    run_id: str,
+    service: AgentService = Depends(_service),
+    db: Session = Depends(get_db),
+) -> Response:
+    run, _, artifacts = service.detail(workspace_id, run_id)
     code = [item for item in artifacts if item.artifact_type == "code"]
     if not code:
         raise AgentInputError("该运行没有代码产物")
@@ -131,6 +138,13 @@ def download_bundle(workspace_id: str, run_id: str, service: AgentService = Depe
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for artifact in code:
             archive.writestr(artifact.filename, artifact.content)
+        # include the research plan the code was generated from (complete snapshot)
+        plan_id = str((run.result or {}).get("research_plan_id") or "")
+        plan = db.get(ResearchPlan, plan_id) if plan_id else None
+        if plan and plan.workspace_id == workspace_id:
+            snapshot = AgentService._plan_snapshot(plan)
+            evidence = list((run.context_snapshot or {}).get("evidence") or [])
+            archive.writestr("RESEARCH_PLAN.md", AgentService._plan_markdown(snapshot, evidence))
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",

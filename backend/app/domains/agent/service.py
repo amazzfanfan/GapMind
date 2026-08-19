@@ -23,6 +23,7 @@ from app.domains.discover.models import (
     ResearchOpportunity,
     ResearchPlan,
 )
+from app.domains.retrieval.schemas import RetrievalResultItem
 from app.domains.retrieval.service import semantic_search
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
@@ -40,10 +41,6 @@ class AgentInputError(ValueError):
 
 
 class AgentConflictError(RuntimeError):
-    pass
-
-
-class AgentExecutionDisabledError(RuntimeError):
     pass
 
 
@@ -66,6 +63,11 @@ PLAN_OPTIONAL_AGENT_TYPES = {"analyze", "write", "respond"}
 # Code generation Phase A (docs/0819_code_generation_improvement.md):
 # blueprint first, then one bounded LLM call per file.
 CODE_BLUEPRINT_MAX_FILES = 8
+
+# CodeRAG-lite (Phase B1): facet the workspace chunks before generation so the
+# model gets method/formula/hyperparam/preprocessing grounding, not just one query.
+CODE_RAG_FACET_TOP_K = 4
+CODE_RAG_MAX_EVIDENCE = 10
 
 
 class AgentService:
@@ -374,33 +376,6 @@ class AgentService:
             raise AgentRunNotFoundError("Agent 产物不存在")
         return artifact
 
-    def request_code_validation(self, workspace_id: str, run_id: str) -> Task:
-        run = self.get(workspace_id, run_id)
-        if run.agent_type != "code_generation" or run.status != "succeeded":
-            raise AgentConflictError("只有已完成的代码生成任务可以验证")
-        if not settings.agent_code_execution_enabled:
-            raise AgentExecutionDisabledError(
-                "代码验证默认关闭；如需启用，请设置 AGENT_CODE_EXECUTION_ENABLED=true"
-            )
-        existing = self.db.scalar(
-            select(Task)
-            .where(
-                Task.workspace_id == workspace_id,
-                Task.task_type == "validate_agent_code",
-                Task.status.in_({"queued", "running"}),
-            )
-            .order_by(Task.created_at.desc())
-        )
-        if existing and str((existing.payload or {}).get("agent_run_id")) == run.id:
-            raise AgentConflictError("该代码任务正在验证")
-        return TaskService(self.db).create(
-            TaskCreate(
-                workspace_id=workspace_id,
-                task_type="validate_agent_code",
-                payload={"agent_run_id": run.id},
-            )
-        )
-
     def _execute_research_plan(self, run: AgentRun) -> dict[str, Any]:
         self._step(run, 1, "workspace_retrieval", "running", "正在检索工作区证据")
         evidence = self._retrieve(run, str(run.input_payload.get("prompt") or ""))
@@ -565,10 +540,17 @@ class AgentService:
         if plan is None or plan.workspace_id != run.workspace_id:
             raise AgentInputError("研究计划不存在或不属于当前工作区")
         self._step(run, 1, "workspace_retrieval", "running", "正在检索方法与实验细节")
-        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis}") if plan else []
+        fallback = self._retrieve(run, f"{plan.research_question} {plan.hypothesis}") if plan else []
+        evidence = self._code_rag_evidence(run, plan, fallback) if plan else fallback
         if not evidence:
             raise AgentInputError("当前工作区没有已索引证据，不能生成有依据的实验代码")
-        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "completed",
+            f"已选取 {len(evidence)} 条证据（分面检索）",
+        )
         self._transition(run, "running", "code_generation", 0.3)
         blueprint_raw, blueprint_usage = self._structured_completion(
             self._code_blueprint_prompt(run, plan, evidence), max_tokens=1800
@@ -588,10 +570,25 @@ class AgentService:
         interface_summaries: list[dict[str, str]] = []
         usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         llm_calls = 1  # blueprint
+        file_errors: list[dict[str, str]] = []
         for offset, spec in enumerate(blueprint["files"]):
-            file, usage, attempts = self._generate_file(
-                run, plan, blueprint, spec, evidence, interface_summaries
-            )
+            try:
+                file, usage, attempts = self._generate_file(
+                    run, plan, blueprint, spec, evidence, interface_summaries
+                )
+            except AgentInputError as exc:
+                # a single file must not sink the whole run: record the gap,
+                # keep going, and surface the failure list at the end
+                file_errors.append({"path": spec["path"], "reason": str(exc)})
+                self._step(
+                    run,
+                    3 + offset,
+                    "code_generation",
+                    "failed",
+                    f"生成 {spec['path']} 失败",
+                    {"error": str(exc)},
+                )
+                continue
             llm_calls += attempts
             files.append(file)
             if file["path"].endswith(".py"):
@@ -612,7 +609,11 @@ class AgentService:
                 "code_generation",
                 0.3 + 0.6 * (offset + 1) / len(blueprint["files"]),
             )
-        for file, spec in zip(files, blueprint["files"]):
+        files_by_path = {file["path"]: file for file in files}
+        for spec in blueprint["files"]:
+            file = files_by_path.get(spec["path"])
+            if file is None:
+                continue  # generation failed for this file; recorded in file_errors
             self.db.add(
                 AgentArtifact(
                     run_id=run.id,
@@ -644,6 +645,7 @@ class AgentService:
             },
             "token_usage": {**usage_totals, "llm_calls": llm_calls},
             "validation": {"status": "not_run"},
+            "file_errors": file_errors,
         }
         review = self._static_review(files, blueprint)
         passed = sum(1 for check in review["checks"] if check["passed"])
@@ -659,7 +661,7 @@ class AgentService:
         self._transition(run, "running", "static_review", 0.9)
         self._step(
             run,
-            3 + len(files),
+            3 + len(blueprint["files"]),
             "static_review",
             "completed",
             f"静态检查通过 {passed}/{len(review['checks'])} 项",
@@ -671,6 +673,9 @@ class AgentService:
         rubric = self._normalize_rubric(rubric_raw, plan)
         for key in usage_totals:
             usage_totals[key] += int(rubric_usage.get(key, 0))
+        # expose the concrete gaps (Phase A4 follow-up): structured partial/missing
+        # items so the UI can surface them instead of leaving them inside the report
+        known_gaps = [item for item in rubric["items"] if item["status"] != "covered"]
         run.result = {
             **run.result,
             "token_usage": {**usage_totals, "llm_calls": llm_calls + 1},  # + rubric
@@ -679,6 +684,7 @@ class AgentService:
                 "partial": rubric["partial"],
                 "missing": rubric["missing"],
             },
+            "known_gaps": known_gaps,
         }
         self.db.add(
             AgentArtifact(
@@ -694,7 +700,7 @@ class AgentService:
         self._transition(run, "running", "rubric_check", 0.95)
         self._step(
             run,
-            4 + len(files),
+            4 + len(blueprint["files"]),
             "rubric_check",
             "completed",
             f"计划覆盖度：{rubric['covered']} 项覆盖 / {rubric['partial']} 部分覆盖 / {rubric['missing']} 未覆盖",
@@ -710,11 +716,19 @@ class AgentService:
                 progress=1.0,
                 result={"agent_run_id": run.id, "file_count": len(files)},
             )
-        self._finish_assistant(
-            run,
-            f"代码生成完成，共生成 **{len(files)}** 个文件。你可以预览单个文件或下载完整 ZIP。",
-            failed=False,
+        finish_message = (
+            f"代码生成完成，共生成 **{len(files)}** 个文件。"
+            "注意：代码由 AI 自动生成，可能存在未实现或不完整之处，仅供预览与人工审查；"
+            "建议先查看“计划覆盖度自检”中的已知缺口，再决定是否使用。"
+            "你可以预览或下载单个文件，也可以下载完整 ZIP。"
         )
+        if file_errors:
+            failed_names = "、".join(item["path"] for item in file_errors)
+            finish_message += (
+                f"\n\n部分文件生成失败：{failed_names}。"
+                "可调整研究计划或重试生成；未生成的文件不会包含在 ZIP 中。"
+            )
+        self._finish_assistant(run, finish_message, failed=False)
         self.db.commit()
         return {"status": run.status, "run_id": run.id, "file_count": len(files)}
 
@@ -1005,21 +1019,15 @@ class AgentService:
         )
         if response.status == "failed":
             raise AgentInputError(response.error or "工作区检索失败")
-        if run.assistant_message_id and not self.db.scalar(
-            select(ChatMessageEvidence.id)
-            .where(ChatMessageEvidence.message_id == run.assistant_message_id)
-            .limit(1)
-        ):
-            workspace = WorkspaceService(self.db).get(run.workspace_id)
-            citations = ChatService(self.db)._materialize_evidence(
-                workspace,
-                run.assistant_message_id,
-                response.items,
-            )
-            self.db.add_all(citations)
-            self.db.flush()
+        self._materialize_citations(run, response.items)
+        return self._evidence_list(response.items)
+
+    @staticmethod
+    def _evidence_list(items: list[RetrievalResultItem], limit: int | None = None) -> list[dict[str, Any]]:
         evidence: list[dict[str, Any]] = []
-        for index, item in enumerate(response.items, 1):
+        for index, item in enumerate(items, 1):
+            if limit is not None and index > limit:
+                break
             text = ChatService._postgres_safe_text(item.text).strip()
             if not item.paper_id or not text:
                 continue
@@ -1034,6 +1042,84 @@ class AgentService:
                     "text": text[:3000],
                 }
             )
+        return evidence
+
+    def _materialize_citations(self, run: AgentRun, items: list[RetrievalResultItem]) -> None:
+        if not run.assistant_message_id or self.db.scalar(
+            select(ChatMessageEvidence.id)
+            .where(ChatMessageEvidence.message_id == run.assistant_message_id)
+            .limit(1)
+        ):
+            return
+        workspace = WorkspaceService(self.db).get(run.workspace_id)
+        citations = ChatService(self.db)._materialize_evidence(
+            workspace,
+            run.assistant_message_id,
+            items,
+        )
+        self.db.add_all(citations)
+        self.db.flush()
+
+    def _code_rag_evidence(
+        self, run: AgentRun, plan: ResearchPlan, fallback: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Facet the workspace chunks for code grounding (CodeRAG-lite, Phase B1).
+
+        Runs a short set of targeted queries (method/formula/experiment setup/
+        preprocessing) instead of a single free-form query, then fuses the hits
+        in result order and labels each chunk with the facets it matched.
+        """
+        self._transition(run, "running", "workspace_retrieval", 0.18)
+        facets: list[tuple[str, str]] = [
+            ("method", f"{plan.research_question} {plan.hypothesis} 方法步骤 算法细节"),
+            ("formula", f"{plan.research_question} 公式 损失函数 数学模型"),
+            ("setup", f"{plan.datasets or plan.baselines or ''} 实验设置 超参数 基线 数据集"),
+            ("preprocess", "数据预处理 特征工程 数据加载 划分 归一化"),
+        ]
+        all_items: list[RetrievalResultItem] = []
+        for _, query in facets:
+            response = semantic_search(
+                workspace_id=run.workspace_id,
+                query=query,
+                top_k=CODE_RAG_FACET_TOP_K,
+                use_reranker=True,
+            )
+            if response.status != "failed":
+                all_items.extend(response.items)
+        if not all_items:
+            return fallback
+        merged: list[RetrievalResultItem] = []
+        seen: set[str] = set()
+        for item in all_items:
+            key = item.chunk_id or f"{item.paper_id}:{item.text[:80]}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        items = merged[: max(settings.agent_rag_top_k, CODE_RAG_MAX_EVIDENCE)]
+        self._materialize_citations(run, items)
+        evidence = self._evidence_list(items)
+        matched_facets: dict[str, list[str]] = {}
+        for facet, query in facets:
+            probe = semantic_search(
+                workspace_id=run.workspace_id,
+                query=query,
+                top_k=CODE_RAG_FACET_TOP_K,
+                use_reranker=True,
+            )
+            if probe.status == "failed":
+                continue
+            for probe_item in probe.items:
+                chunk_id = probe_item.chunk_id
+                if not chunk_id:
+                    continue
+                for entry in evidence:
+                    if entry["chunk_id"] == chunk_id:
+                        matched_facets.setdefault(entry["evidence_id"], []).append(facet)
+                        break
+        for entry in evidence:
+            entry["facets"] = sorted(set(matched_facets.get(entry["evidence_id"], [])))
+            entry["is_code_grounding"] = True
         return evidence
 
     def _opportunity_context(self, run: AgentRun) -> dict[str, Any] | None:
@@ -1148,7 +1234,11 @@ class AgentService:
                 finish_reason = None
             if finish_reason == "length":
                 raise AgentInputError("模型输出被 max_tokens 截断，JSON 不完整")
-            raise AgentInputError("模型返回的结构化结果无效")
+            # surface the raw tail so a real failure is diagnosable from the log
+            snippet = response.content[-300:].replace("\n", " ")[:300]
+            raise AgentInputError(
+                f"模型返回的结构化结果无效（finish_reason={finish_reason}，响应尾部：{snippet}）"
+            )
         return parsed, {
             "prompt_tokens": response.prompt_tokens,
             "completion_tokens": response.completion_tokens,
@@ -1365,7 +1455,9 @@ class AgentService:
             matched = next((f for f in candidates if f["path"] == spec["path"]), candidates[0])
             matched["path"] = spec["path"]  # the blueprint is the contract
             return matched, usage, attempt
-        raise AgentInputError(f"生成 {spec['path']} 失败：{last_error}")
+        raise AgentInputError(
+            f"生成 {spec['path']} 失败（已重试一次）：{last_error}"
+        )
 
     @staticmethod
     def _interface_summary(path: str, content: str) -> dict[str, str]:
@@ -1415,6 +1507,21 @@ class AgentService:
             "blueprint_files_present",
             not missing,
             "蓝图文件全部生成" if not missing else f"缺失：{', '.join(missing)}",
+        )
+        syntax_errors: list[str] = []
+        for file in files:
+            if not file["path"].endswith(".py"):
+                continue
+            try:
+                ast.parse(file["content"])
+            except SyntaxError as exc:
+                syntax_errors.append(f"{file['path']}：{exc.msg}（行 {exc.lineno}）")
+        check(
+            "syntax_valid",
+            not syntax_errors,
+            "所有 Python 文件语法可解析"
+            if not syntax_errors
+            else "语法错误：" + "; ".join(syntax_errors[:3]),
         )
         entrypoint = str(blueprint.get("entrypoint") or "")
         check(
