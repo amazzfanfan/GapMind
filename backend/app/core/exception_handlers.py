@@ -49,7 +49,6 @@ from app.domains.task.service import InvalidTaskTransition, TaskNotFoundError
 from app.domains.workspace.service import WorkspaceNotFoundError
 from app.domains.agent.service import (
     AgentConflictError,
-    AgentExecutionDisabledError,
     AgentInputError,
     AgentRunNotFoundError,
 )
@@ -82,7 +81,6 @@ EXCEPTION_REGISTRY: dict[type[Exception], tuple[int, str, bool]] = {
     DiscoverInputError: (422, "discover_input_invalid", False),
     KnowledgeItemReviewError: (422, "invalid_review", False),
     AgentInputError: (422, "agent_input_invalid", False),
-    AgentExecutionDisabledError: (422, "agent_execution_disabled", False),
 }
 
 

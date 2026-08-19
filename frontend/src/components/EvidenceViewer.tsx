@@ -71,8 +71,8 @@ export default function EvidenceViewer({
           <Button icon={<DownloadOutlined />} href={downloadUrl} target="_blank">下载解析后的 Markdown</Button>
         </div>
         <Alert type="info" showIcon message="证据偏移对应 parsed_markdown 字符位置；黄色区域为当前 Knowledge Item 的证据原文。" style={{ marginBottom: 12 }} />
-        <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "#fafafa", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
-          {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation ? evidenceRelationLabel(segment.relation) : undefined}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
+        <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "var(--gm-surface-3)", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
+          {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "var(--gm-mark-danger)" : "var(--gm-mark)", padding: 0 }} title={segment.relation ? evidenceRelationLabel(segment.relation) : undefined}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
         </pre>
         <Tag color={span.relation === "contradicts" ? "red" : "gold"}>{evidenceRelationLabel(span.relation)}</Tag>
       </>}
@@ -138,7 +138,7 @@ export function OpportunityEvidenceViewer({
               <Text type="secondary">{context.filename ?? "parsed_markdown"} · {context.start_char ?? "—"}–{context.end_char ?? "—"}</Text>
               <Tag color="green">{evidenceLevelDisplayLabel("full_text")} · {evidenceRelationLabel(evidence.relation)}</Tag>
             </div>
-            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "#fafafa", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
+            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.75, background: "var(--gm-surface-3)", padding: 16, borderRadius: 8, maxHeight: "70vh", overflow: "auto" }}>
               {segments.map((segment, index) => segment.highlighted ? <mark key={index} style={{ background: segment.relation === "contradicts" ? "#ffccc7" : "#fff566", padding: 0 }} title={segment.relation ? evidenceRelationLabel(segment.relation) : undefined}>{segment.text}</mark> : <span key={index}>{segment.text}</span>)}
             </pre>
           </>

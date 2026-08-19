@@ -48,7 +48,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <pre
             style={{
               textAlign: "left",
-              background: "#f5f5f5",
+              background: "var(--gm-surface-3)",
               padding: 12,
               borderRadius: 4,
               fontSize: 12,

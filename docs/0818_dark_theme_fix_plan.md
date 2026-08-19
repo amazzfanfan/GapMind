@@ -2,7 +2,7 @@
 
 > 日期：2026-08-18。作者：yx（评估）。
 > 背景：P0.5-4 亮/暗主题已上线（`state/theme.tsx` localStorage + `data-theme` 属性 + antd `darkAlgorithm` 双轨），但手写 CSS 与内联样式中约 250 处颜色写死为亮色，暗色下出现"文字与背景融合"与"亮色孤岛"。
-> 本文档为修复方案，**尚未实施**。
+> 本文档为修复方案。**已于 2026-08-19 实施完成**（见文末"五、实施与验证记录"）。
 
 ---
 
@@ -124,3 +124,32 @@
 - ❌ 不引入 CSS-in-JS / 换主题库（封版期不做大重构）
 - ❌ 不动 antd 组件默认行为与 `main.tsx` 主题配置（双轨机制是对的）
 - ❌ 不改节点/关系语义配色（`TYPE_COLORS`/`RELATION_COLORS` 两主题通用）
+
+---
+
+## 五、实施与验证记录（2026-08-19）
+
+### 改动文件（7 个，均在前端）
+
+| 文件 | 改动 |
+|---|---|
+| `src/index.css` | 扩展 `:root`/`[data-theme="dark"]` 变量集（surface×3/border×2/ink/mark/code-bg/primary-soft/chip/表格×5 等）；约 45 处写死颜色替换为变量；hero 渐变、gap 格子底色等补暗色覆写 |
+| `src/components/KnowledgeGraph.tsx` | Cytoscape 双套样式（`useTheme().isDark` 三元）：节点边框/边线/聚焦边框/展开底衬/画布渐变/标签底色；JS 侧容器、工具栏、悬浮条、开发信息 pre 换变量 |
+| `src/components/EvidenceViewer.tsx` | pre 背景×2、mark 高亮×2 → 变量 |
+| `src/components/ErrorBoundary.tsx` | pre 背景 → `--gm-surface-3` |
+| `src/components/KnowledgeWorkbench.tsx` | 结构化内容 pre → `--gm-surface-3` |
+| `src/pages/DiscoverPage.tsx` | 运行历史选中行 → `--gm-hover` |
+| `src/pages/ResearchPlansPage.tsx` | 报告弹窗 header/footer 边框与底色 → 变量 |
+
+### 验证
+
+- `tsc --noEmit` 0 错误；`npm test -- --run` 43/43 通过。
+- 无头 Chrome（puppeteer-core，localStorage 预设 `gm-theme`）对 6 个页面 × 2 主题共 13 张截图（对话/会话列表/棋盘/图谱/发现/计划/计划详情弹窗），逐张视觉检查无文字-背景融合。
+- DOM 计算样式抽查（决定性证据）：暗色下 `.gm-sider`=#141414、assistant 气泡=#2a2a2a+白字、棋盘表头=#262626/单元格=#1a1a1a+`rgba(255,255,255,.9)` 文字、引用条=白 4% 底；亮色下各值与改动前原值一致（无回归）。
+- 视觉模型两次误报（"亮色侧边栏深蓝""AI 回复深灰底"）均被 DOM 实测推翻：亮色侧边栏实为 `rgb(255,255,255)`、AI 气泡 `#f7f8fa`。
+- KnowledgeGraph 主题切换即时生效（stylesheet useMemo 依赖 `isDark`），无需刷新页面。
+
+### 补充修复（2026-08-19，用户反馈）
+
+- **用户消息气泡暗色下白字浅蓝底融合**：根因是 `index.css` 只在气泡容器上设字色，但文字实际是 antd `Typography.Paragraph`，antd 暗色算法在 `.ant-typography` 上直接给出白色 token，压过了继承色。修复：新增 `--gm-user-bubble-bg`/`--gm-user-bubble-ink` 变量（亮色 `#eaf3ff`/`#164477` 不变；暗色反转为 `#164477`/`#eaf3ff`），并用 `.gm-chat-message.is-user .gm-chat-plain-text` 显式钉住段落字色。实测暗色段落字 `rgb(234,243,255)` on 底 `rgb(22,68,119)`（对比度 ≈8.9:1），亮色与原版一致；43/43 测试通过。
+- 经验：凡是"自定义底色容器内放 antd Typography"的地方，字色必须在 Typography 元素本身设置，不能依赖父级继承（antd 直接规则永远赢）。
