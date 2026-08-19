@@ -50,6 +50,7 @@ import {
 import CytoscapeComponent from "react-cytoscapejs";
 import type { Core, EventObject } from "cytoscape";
 import { useNavigate } from "react-router-dom";
+import { useTheme } from "../state/theme";
 import knowledgeApi from "../api/knowledge";
 import paperApi from "../api/paper";
 import type { Paper } from "../api/types/domain";
@@ -333,7 +334,7 @@ function Inspector({
           children: (
             <>
               <Text copyable type="secondary">节点 ID：{node.id}</Text>
-              <pre style={{ whiteSpace: "pre-wrap", background: "#f7f8fa", padding: 12, borderRadius: 8 }}>
+              <pre style={{ whiteSpace: "pre-wrap", background: "var(--gm-surface-3)", padding: 12, borderRadius: 8 }}>
                 {JSON.stringify(node.content, null, 2)}
               </pre>
             </>
@@ -346,6 +347,7 @@ function Inspector({
 
 export default function KnowledgeGraph({ workspaceId }: { workspaceId: string }) {
   const { message } = App.useApp();
+  const { isDark } = useTheme();
   const screens = useBreakpoint();
   const cyRef = useRef<Core | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -548,15 +550,19 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
     ];
   }, [active.expandedNodeIds, displayGraph.edges, displayGraph.nodes, highlightedIds, selectedNodeId, showRelationLabels]);
 
+  // P0.5-4: canvas chrome adapts to the theme; node/relation hues are
+  // mid-saturation and stay identical in both themes.
+  const canvasInk = isDark ? "rgba(255, 255, 255, .92)" : "#172033";
+  const canvasLabelBg = isDark ? "#141414" : "#ffffff";
   const stylesheet = useMemo(() => [
     {
       selector: "node",
       style: {
         label: "data(label)", "background-color": "data(color)", shape: "data(shape)",
-        opacity: "data(opacity)", "border-color": "#ffffff", "border-width": 3,
-        "border-style": "data(borderStyle)", color: "#172033", "font-size": 10,
+        opacity: "data(opacity)", "border-color": isDark ? "#1f1f1f" : "#ffffff", "border-width": 3,
+        "border-style": "data(borderStyle)", color: canvasInk, "font-size": 10,
         "text-wrap": "wrap", "text-max-width": 125, "text-valign": "bottom",
-        "text-halign": "center", "text-background-color": "#ffffff",
+        "text-halign": "center", "text-background-color": canvasLabelBg,
         "text-background-opacity": 0.92, "text-background-padding": 3,
         "text-margin-y": 7, width: 50, height: 50,
       },
@@ -570,16 +576,16 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
       style: {
         label: "data(label)", "line-color": "data(color)", "target-arrow-color": "data(color)",
         "target-arrow-shape": "triangle", "curve-style": "bezier", "line-style": "data(lineStyle)",
-        width: 1.5, "font-size": 9, color: "#334155", "text-background-color": "#ffffff",
+        width: 1.5, "font-size": 9, color: isDark ? "rgba(255, 255, 255, .78)" : "#334155", "text-background-color": canvasLabelBg,
         "text-background-opacity": 0.94, "text-background-padding": 3,
       },
     },
-    { selector: "node.focused", style: { "border-color": "#0f172a", "border-width": 5, opacity: 1, "z-index": 20 } },
+    { selector: "node.focused", style: { "border-color": isDark ? "#e6f0ff" : "#0f172a", "border-width": 5, opacity: 1, "z-index": 20 } },
     { selector: "node.neighbor", style: { "border-color": "#60a5fa", "border-width": 4, opacity: 1 } },
-    { selector: "node.expanded", style: { "underlay-color": "#dbeafe", "underlay-opacity": 0.7, "underlay-padding": 7 } },
+    { selector: "node.expanded", style: { "underlay-color": isDark ? "rgba(96, 165, 250, .3)" : "#dbeafe", "underlay-opacity": 0.7, "underlay-padding": 7 } },
     { selector: "edge.active", style: { width: 3.5, opacity: 1, "z-index": 10 } },
     { selector: ".dimmed", style: { opacity: 0.2 } },
-  ], []);
+  ], [isDark, canvasInk, canvasLabelBg]);
 
   const expandNode = useCallback(async (nodeId: string) => {
     if (active.expandedNodeIds.includes(nodeId) || expanding) return;
@@ -803,7 +809,7 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
   );
 
   return (
-    <div ref={canvasRef} style={{ background: "#f5f7fb", padding: isFullscreen ? 20 : 0 }}>
+    <div ref={canvasRef} style={{ background: "var(--gm-surface-2)", padding: isFullscreen ? 20 : 0 }}>
       <Card className="gm-graph-overview">
         <Flex className="gm-graph-overview-header" justify="space-between" align="flex-start" wrap gap={12}>
           <div className="gm-graph-overview-copy">
@@ -906,7 +912,7 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
             }
             styles={{ body: { padding: 0 } }}
           >
-            <Flex justify="space-between" align="center" wrap gap={8} style={{ padding: "10px 14px", borderBottom: "1px solid #edf0f5" }}>
+            <Flex justify="space-between" align="center" wrap gap={8} style={{ padding: "10px 14px", borderBottom: "1px solid var(--gm-border-2)" }}>
               <Space wrap>
                 <Checkbox checked={showRelationLabels} onChange={(event) => setShowRelationLabels(event.target.checked)}>显示全部关系标签</Checkbox>
                 <Checkbox checked={showLowConfidence} onChange={(event) => setShowLowConfidence(event.target.checked)}>显示低置信度节点</Checkbox>
@@ -924,8 +930,8 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
                 height: 38,
                 padding: "8px 14px",
                 boxSizing: "border-box",
-                background: hoveredEdge || hoveredNode ? "#eaf4ff" : "#f8fafc",
-                borderBottom: "1px solid #e8edf3",
+                background: hoveredEdge || hoveredNode ? "var(--gm-hover)" : "var(--gm-surface-2)",
+                borderBottom: "1px solid var(--gm-border)",
                 overflow: "hidden",
                 whiteSpace: "nowrap",
                 textOverflow: "ellipsis",
@@ -948,7 +954,7 @@ export default function KnowledgeGraph({ workspaceId }: { workspaceId: string })
               <Alert type="warning" showIcon message="刷新失败，已保留当前画布" description={error} action={<Button size="small" onClick={() => void loadInitial(mode, true)}>重试</Button>} />
             )}
 
-            <div style={{ height: isFullscreen ? "calc(100vh - 300px)" : "clamp(650px, 72vh, 900px)", minHeight: 480, background: "radial-gradient(circle at center, #ffffff 0%, #f8fafc 72%, #f1f5f9 100%)" }}>
+            <div style={{ height: isFullscreen ? "calc(100vh - 300px)" : "clamp(650px, 72vh, 900px)", minHeight: 480, background: isDark ? "radial-gradient(circle at center, #1f1f1f 0%, #161616 72%, #141414 100%)" : "radial-gradient(circle at center, #ffffff 0%, #f8fafc 72%, #f1f5f9 100%)" }}>
               {loading && !active.loaded ? (
                 <Flex justify="center" align="center" style={{ height: "100%" }}><Spin tip="正在构建知识图谱…" /></Flex>
               ) : displayGraph.nodes.length === 0 ? (

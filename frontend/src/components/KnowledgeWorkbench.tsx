@@ -367,7 +367,7 @@ export default function KnowledgeWorkbench({
                 <Descriptions.Item label="Extraction run">{selectedItem.extraction_run_id ?? "—"}</Descriptions.Item>
               </Descriptions>
               <Divider orientation="left">Structured content</Divider>
-              <pre style={{ whiteSpace: "pre-wrap", background: "#f7f8fa", padding: 12, borderRadius: 6 }}>
+              <pre style={{ whiteSpace: "pre-wrap", background: "var(--gm-surface-3)", padding: 12, borderRadius: 6 }}>
                 {JSON.stringify(selectedItem.content, null, 2)}
               </pre>
 

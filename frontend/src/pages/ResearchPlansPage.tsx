@@ -397,9 +397,9 @@ export default function ResearchPlansPage() {
         onCancel={() => setSelectedRun(null)}
         styles={{
           content: { height: "86vh", maxHeight: 920, display: "flex", flexDirection: "column", padding: 0, overflow: "hidden" },
-          header: { flex: "0 0 auto", margin: 0, padding: "18px 56px 18px 24px", borderBottom: "1px solid #e8edf3" },
+          header: { flex: "0 0 auto", margin: 0, padding: "18px 56px 18px 24px", borderBottom: "1px solid var(--gm-border)" },
           body: { flex: "1 1 auto", minHeight: 0, padding: 0, overflow: "hidden" },
-          footer: { flex: "0 0 auto", margin: 0, padding: "14px 24px", borderTop: "1px solid #e8edf3", background: "#fff" },
+          footer: { flex: "0 0 auto", margin: 0, padding: "14px 24px", borderTop: "1px solid var(--gm-border)", background: "var(--gm-surface)" },
         }}
         footer={<Space>
           {selectedRun?.status === "waiting_for_user" && <Button type="primary" loading={actionId === selectedRun.id} onClick={() => void confirmRun(selectedRun)}>确认报告</Button>}
