@@ -1,8 +1,8 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { App, Button, Card, Collapse, Descriptions, Modal, Progress, Space, Steps, Tag, Typography } from "antd";
-import { CheckCircleOutlined, CodeOutlined, DownloadOutlined, ExperimentOutlined, FileSearchOutlined, FileTextOutlined, MessageOutlined, SafetyCertificateOutlined, StopOutlined, WarningOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Collapse, Descriptions, Modal, Progress, Space, Steps, Tag, Typography } from "antd";
+import { CheckCircleOutlined, CodeOutlined, DownloadOutlined, ExperimentOutlined, FileSearchOutlined, FileTextOutlined, InfoCircleOutlined, MessageOutlined, StopOutlined, WarningOutlined } from "@ant-design/icons";
 import type { AgentRunDetail } from "../../api/agent";
 
 const { Paragraph, Text } = Typography;
@@ -25,6 +25,16 @@ const asStaticChecks = (value: unknown): StaticCheck[] =>
         typeof item === "object" && item !== null && "passed" in item && "detail" in item)
     : [];
 
+interface KnownGap { dimension: string; target: string; status: string; note?: unknown }
+
+const asKnownGaps = (value: unknown): KnownGap[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is KnownGap =>
+        typeof item === "object" && item !== null
+        && typeof (item as Record<string, unknown>).dimension === "string"
+        && typeof (item as Record<string, unknown>).target === "string")
+    : [];
+
 const asStringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
@@ -36,17 +46,17 @@ const AGENT_META: Record<string, { label: string; icon: React.ReactNode }> = {
   respond: { label: "审稿回复 Agent", icon: <MessageOutlined /> },
 };
 
-export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, onCancel, onValidate, onDownload }: {
+export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, onCancel, onDownload, onDownloadArtifact }: {
   run: AgentRunDetail;
   loading?: boolean;
   onRefresh: () => void;
   onConfirm: () => void;
   onCancel: () => void;
-  onValidate: () => void;
   onDownload: () => void;
+  onDownloadArtifact?: (run: AgentRunDetail, artifactId: string) => void;
 }) {
   const { message } = App.useApp();
-  const [preview, setPreview] = useState<{ filename: string; content: string } | null>(null);
+  const [preview, setPreview] = useState<{ id: string; filename: string; content: string } | null>(null);
   const isPlan = run.agent_type === "research_plan";
   const isDeep = run.agent_type === "deep_research";
   const isCode = run.agent_type === "code_generation";
@@ -65,6 +75,7 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
   const rubricCounts = rubric && typeof rubric.covered === "number" && typeof rubric.partial === "number" && typeof rubric.missing === "number"
     ? { covered: rubric.covered, partial: rubric.partial, missing: rubric.missing }
     : null;
+  const knownGaps = asKnownGaps(result.known_gaps);
   const copy = async (value: string) => { await navigator.clipboard?.writeText(value); message.success("已复制"); };
   return <Card className="gm-agent-run-card" size="small" title={<Space>{meta.icon}<Text strong>{meta.label}</Text><Tag color={run.status === "succeeded" ? "green" : run.status === "failed" ? "red" : run.status === "waiting_for_user" ? "gold" : "blue"}>{stageLabel[run.current_stage] ?? run.current_stage}</Tag></Space>} extra={<Button type="link" size="small" onClick={onRefresh}>刷新</Button>}>
     <Progress percent={Math.round(run.progress * 100)} status={run.status === "failed" ? "exception" : run.status === "succeeded" ? "success" : "active"} />
@@ -80,14 +91,16 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
       <Tag color="gold">部分 {rubricCounts.partial}</Tag>
       <Tag color="red">未覆盖 {rubricCounts.missing}</Tag>
     </Space>}
-    {codeArtifacts.length > 0 && <Collapse size="small" items={[{ key: "files", label: `${codeArtifacts.length} 个代码文件`, children: <Space wrap>{codeArtifacts.map((artifact) => <Space key={artifact.id} size={4}>{<Button size="small" onClick={() => setPreview({ filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>}{asStringList(artifact.metadata.evidence_refs).map((ref) => <Tag key={ref} color="blue" style={{ marginInlineEnd: 0 }}>{ref}</Tag>)}</Space>)}</Space> }]} />}
-    {reviewArtifacts.length > 0 && <Collapse size="small" items={[{ key: "rubric", label: "计划覆盖度自检报告", children: <Space wrap>{reviewArtifacts.map((artifact) => <Button key={artifact.id} size="small" onClick={() => setPreview({ filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>)}</Space> }]} />}
-    {lifecycleArtifacts.length > 0 && <Collapse size="small" items={[{ key: "docs", label: `${lifecycleArtifacts.length} 份文档产物`, children: <Space wrap>{lifecycleArtifacts.map((artifact) => <Button key={artifact.id} size="small" onClick={() => setPreview({ filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>)}</Space> }]} />}
+    {isCode && knownGaps.length > 0 && <Alert type="warning" showIcon icon={<WarningOutlined />} style={{ marginTop: 8 }} message={`已知缺口 ${knownGaps.length} 项`} description={<Space direction="vertical" size={2}>{knownGaps.map((gap) => <Text key={`${gap.dimension}:${gap.target}`} style={{ fontSize: 12 }}><Tag>{gap.dimension}</Tag>{gap.target}{typeof gap.note === "string" && gap.note ? `：${gap.note}` : `（${gap.status === "partial" ? "部分覆盖" : "未覆盖"}）`}</Text>)}<Text type="secondary" style={{ fontSize: 12 }}>可到研究计划页调整范围后重新生成代码。</Text></Space>} />}
+    {isCode && codeArtifacts.length > 0 && <Alert type="info" showIcon icon={<InfoCircleOutlined />} style={{ marginTop: 8 }} message="AI 生成的实验骨架" description="代码由 AI 自动生成，可能存在未实现或不完整之处，仅供预览与人工审查；使用前请查看“计划覆盖度自检”与已知缺口。" />}
+    {codeArtifacts.length > 0 && <Collapse size="small" items={[{ key: "files", label: `${codeArtifacts.length} 个代码文件`, children: <Space wrap>{codeArtifacts.map((artifact) => <Space key={artifact.id} size={4}>{<Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>}{asStringList(artifact.metadata.evidence_refs).map((ref) => <Tag key={ref} color="blue" style={{ marginInlineEnd: 0 }}>{ref}</Tag>)}</Space>)}</Space> }]} />}
+    {reviewArtifacts.length > 0 && <Collapse size="small" items={[{ key: "rubric", label: "计划覆盖度自检报告", children: <Space wrap>{reviewArtifacts.map((artifact) => <Space key={artifact.id} size={4}><Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>{onDownloadArtifact && <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => onDownloadArtifact(run, artifact.id)} aria-label={`下载 ${artifact.filename}`} />}</Space>)}</Space> }]} />}
+    {lifecycleArtifacts.length > 0 && <Collapse size="small" items={[{ key: "docs", label: `${lifecycleArtifacts.length} 份文档产物`, children: <Space wrap>{lifecycleArtifacts.map((artifact) => <Button key={artifact.id} size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>)}</Space> }]} />}
     <Space wrap style={{ marginTop: 12 }}>
       {run.status === "waiting_for_user" && (isPlan || isDeep) && <Button type="primary" icon={<CheckCircleOutlined />} loading={loading} onClick={onConfirm}>{isDeep ? "确认深度研究报告" : "确认并保存到研究中心"}</Button>}
       {active && <Button danger icon={<StopOutlined />} loading={loading} onClick={onCancel}>停止任务</Button>}
-      {isCode && run.status === "succeeded" && <><Button type="primary" icon={<DownloadOutlined />} onClick={onDownload}>下载 ZIP</Button><Button icon={<SafetyCertificateOutlined />} onClick={onValidate}>隔离验证</Button></>}
+      {isCode && run.status === "succeeded" && <Button type="primary" icon={<DownloadOutlined />} onClick={onDownload}>下载 ZIP</Button>}
     </Space>
-    <Modal open={Boolean(preview)} title={preview?.filename} width={900} footer={<Space><Button onClick={() => void copy(preview?.content ?? "")}>复制</Button><Button type="primary" onClick={() => setPreview(null)}>关闭</Button></Space>} onCancel={() => setPreview(null)}>{preview?.filename.endsWith(".md") ? <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.content}</ReactMarkdown></div> : <pre className="gm-agent-code-preview"><code>{preview?.content}</code></pre>}</Modal>
+    <Modal open={Boolean(preview)} title={preview?.filename} width={900} footer={<Space>{onDownloadArtifact && preview?.id && <Button icon={<DownloadOutlined />} onClick={() => onDownloadArtifact(run, preview.id)}>下载此文件</Button>}<Button onClick={() => void copy(preview?.content ?? "")}>复制</Button><Button type="primary" onClick={() => setPreview(null)}>关闭</Button></Space>} onCancel={() => setPreview(null)}>{preview?.filename.endsWith(".md") ? <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.content}</ReactMarkdown></div> : <pre className="gm-agent-code-preview"><code>{preview?.content}</code></pre>}</Modal>
   </Card>;
 }

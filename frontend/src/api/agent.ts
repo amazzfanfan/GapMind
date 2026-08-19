@@ -77,9 +77,20 @@ export const agentApi = {
     const { data } = await apiClient.post<{ run: AgentRunDetail; research_plan_id: string | null }>(`/workspaces/${workspaceId}/agent-runs/${runId}/confirm`);
     return data;
   },
-  async validate(workspaceId: string, runId: string) {
-    const { data } = await apiClient.post<{ id: string; status: string }>(`/workspaces/${workspaceId}/agent-runs/${runId}/validate`);
-    return data;
+  async downloadArtifact(workspaceId: string, runId: string, artifactId: string) {
+    const response = await apiClient.get<Blob>(`/workspaces/${workspaceId}/agent-runs/${runId}/artifacts/${artifactId}`, { responseType: "blob" });
+    const url = URL.createObjectURL(response.data);
+    const link = document.createElement("a");
+    link.href = url;
+    // server sends X-File-Name (URL-encoded, RFC 5987); parse it, else fall back
+    const headers = response.headers as unknown as Record<string, string>;
+    const rawName = headers["x-file-name"] ?? "";
+    link.download = rawName ? decodeURIComponent(rawName) : "artifact";
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   async downloadBundle(workspaceId: string, runId: string) {
     const { data } = await apiClient.get<Blob>(`/workspaces/${workspaceId}/agent-runs/${runId}/bundle`, { responseType: "blob" });
