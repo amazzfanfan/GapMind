@@ -7,6 +7,7 @@ import agentApi, { type AgentRunDetail } from "../api/agent";
 import { discoverApi, type ResearchPlan } from "../api/discover";
 import type { Workspace } from "../api/types/workspace";
 import { chatConversationPath, chatErrorMessage, sortChatMessages } from "../state/chatState";
+import { isIndependentWorkspaceName } from "../state/independentMode";
 import ChatComposer, { type ChatMode } from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
 import ChatHeader from "../components/chat/ChatHeader";
@@ -54,6 +55,8 @@ export default function ChatPage() {
   const workspaceNames = Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.name]));
   const activeWorkspaceId = conversation?.workspace_id ?? selectedWorkspaceId;
   const activeWorkspaceName = activeWorkspaceId ? workspaceNames[activeWorkspaceId] : undefined;
+  const independentMode = isIndependentWorkspaceName(activeWorkspaceName);
+  const workspaceEnabled = Boolean(activeWorkspaceId) && !independentMode;
 
   useEffect(() => {
     if (!conversationId && promptFromReader) setInput(promptFromReader);
@@ -96,9 +99,12 @@ export default function ChatPage() {
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
   useEffect(() => {
-    if (!activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); return; }
+    if (!workspaceEnabled || !activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); return; }
     discoverApi.listPlans(activeWorkspaceId, { limit: 100 }).then((response) => setResearchPlans(response.items)).catch(() => setResearchPlans([]));
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, workspaceEnabled]);
+  useEffect(() => {
+    if (independentMode && (mode === "research_plan" || mode === "code_generation")) setMode("chat");
+  }, [independentMode, mode]);
   useEffect(() => {
     if (conversationId && activeWorkspaceId) void loadAgentRuns(activeWorkspaceId, conversationId);
     else setAgentRuns([]);
@@ -121,7 +127,13 @@ export default function ChatPage() {
     let wsId = activeWorkspaceId;
     if (!wsId) {
       // P1.5: standalone W7 agents run in the system independent workspace.
-      try { wsId = (await workspaceApi.independent()).id; }
+      try {
+        const independent = await workspaceApi.independent();
+        wsId = independent.id;
+        setWorkspaces((current) => current.some((workspace) => workspace.id === independent.id)
+          ? current
+          : [...current, independent]);
+      }
       catch (error) { message.error(chatErrorMessage(error)); return; }
     }
     setSending(true);
@@ -133,7 +145,7 @@ export default function ChatPage() {
         targetConversationId = created.id;
         setConversation(created);
       }
-      const planOrNone = researchPlanId || undefined; // P1.5: W7 works standalone without a plan
+      const planOrNone = workspaceEnabled ? researchPlanId || undefined : undefined;
       const agentInput = mode === "research_plan"
         ? {}
         : mode === "code_generation"
@@ -317,5 +329,5 @@ export default function ChatPage() {
   };
 
   const historyPanel = <ChatHistory items={history} selectedId={conversationId} loading={historyLoading} query={historyQuery} workspaceNames={workspaceNames} onQueryChange={setHistoryQuery} onNew={newConversation} onSelect={selectConversation} onRename={rename} onDelete={remove} />;
-  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={activeWorkspaceName} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在创建 Agent 任务，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={Boolean(activeWorkspaceId)} mode={mode} onModeChange={setMode} planOptions={researchPlans.map((plan) => ({ value: plan.id, label: plan.research_question }))} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
+  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} independent={independentMode} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={workspaceEnabled ? activeWorkspaceName : undefined} independent={independentMode} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{independentMode ? <Alert className="gm-chat-scope-note" type="info" showIcon message="当前为独立模式：仅使用本次提供的材料，不会检索课题空间论文或知识库。" /> : activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在创建 Agent 任务，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={workspaceEnabled} mode={mode} onModeChange={setMode} planOptions={researchPlans.map((plan) => ({ value: plan.id, label: plan.research_question }))} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
 }
