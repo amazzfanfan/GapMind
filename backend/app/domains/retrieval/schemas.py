@@ -26,6 +26,17 @@ CounterEmptyReason = Literal[
     "genuinely_no_counter_evidence",  # Judge ran, no contradicting / qualifying chunk
 ]
 
+# Safe, stable diagnostics for failures that can be shown by the UI.  The
+# exception text from an embedding provider or Milvus is deliberately not part
+# of this contract: it may contain infrastructure details or credentials.
+RetrievalDiagnosticCode = Literal[
+    "embedding_unavailable",
+    "milvus_unavailable",
+    "collection_unloaded",
+    "reranker_degraded",
+    "unknown",
+]
+
 
 # ------------------------------------------------------------------
 # Contract B: Chunk record (input from parse_pdf JSONL)
@@ -117,6 +128,7 @@ class RetrievalResponse(BaseModel):
     latency_ms: float = 0.0
     filters_applied: dict = Field(default_factory=dict)
     error: str | None = None
+    diagnostic_code: RetrievalDiagnosticCode | None = None
     # Populated only when ``total == 0`` and ``purpose == "counter_evidence"``
     # so the Discover Agent / UI can distinguish three empty states:
     # retrieval_empty | judge_failed | genuinely_no_counter_evidence.

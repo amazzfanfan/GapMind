@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Button, Empty, Space, Spin, Tooltip, Typography } from "antd";
+import { Alert, Button, Empty, Space, Spin, Tooltip, Typography } from "antd";
 import { CheckOutlined, CopyOutlined, ReloadOutlined } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { ChatMessage } from "../../api/chat";
-import { chatFailureMessage } from "../../state/chatState";
+import { chatFailureMessage, retrievalDiagnosticCopy } from "../../state/chatState";
 import ChatCitations from "./ChatCitations";
 import ChatSources from "./ChatSources";
 import ChatAgentRunCard from "./ChatAgentRunCard";
@@ -125,10 +125,12 @@ function ChatMessageItem({ conversationId, message, onRetry, retrying }: { conve
   };
   const isUser = message.role === "user";
   const normalizedContent = isUser ? message.content : normalizeConversationMath(message.content);
+  const retrievalDiagnostic = !isUser ? retrievalDiagnosticCopy(message.retrieval_diagnostic_code) : null;
   return <article className={`gm-chat-message ${isUser ? "is-user" : "is-assistant"}`}>
     <div className="gm-chat-message-body">
       {message.status === "generating" ? (message.content ? <div className="gm-chat-markdown gm-chat-streaming"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizedContent}</ReactMarkdown><div className="gm-chat-streaming-hint"><Spin size="small" /><Typography.Text type="secondary">正在生成…</Typography.Text></div></div> : <Space><Spin size="small" /><Typography.Text type="secondary">正在思考…</Typography.Text></Space>) : message.status === "failed" ? <div><Typography.Text type="danger">{chatFailureMessage(message)}</Typography.Text><div><Button type="link" size="small" icon={<ReloadOutlined />} loading={retrying} onClick={() => onRetry(message)}>重新尝试</Button></div></div> : isUser ? <Typography.Paragraph className="gm-chat-plain-text">{message.content}</Typography.Paragraph> : <div className="gm-chat-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizedContent}</ReactMarkdown></div>}
       {!isUser && message.status === "completed" && message.grounding_status === "no_evidence" && <Typography.Text type="warning">本次没有使用工作区证据。</Typography.Text>}
+      {!isUser && message.status === "completed" && retrievalDiagnostic && <Alert type="warning" showIcon message={retrievalDiagnostic.title} description={retrievalDiagnostic.recovery} />}
       {!isUser && message.status === "completed" && message.citation_check && !message.citation_check.ok && <Typography.Text type="danger">检测到失效引用：[E{message.citation_check.broken.join("]、[E")}] 未找到对应证据，请核对来源。</Typography.Text>}
       {!isUser && message.status === "completed" && message.citation_check?.grounded_without_citations && <Typography.Text type="warning">已使用工作区证据，但回答未标注 [E] 引用，关键结论可能缺少直接支撑。</Typography.Text>}
       {!isUser && message.status === "completed" && message.source_check && !message.source_check.ok && <Typography.Text type="danger">检测到失效上下文来源标记：{message.source_check.broken.join("、")}，请核对来源。</Typography.Text>}

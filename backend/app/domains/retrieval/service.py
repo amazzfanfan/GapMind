@@ -71,6 +71,71 @@ LOW_VALUE_SECTIONS: frozenset[str] = frozenset({
     "supplementary material",
 })
 
+# Keep this mapping intentionally small and user-facing.  Provider/Milvus
+# exception strings are logged for operators, but never returned as an API
+# diagnostic because they can expose topology or credential-related details.
+RETRIEVAL_DIAGNOSTIC_MESSAGES: dict[str, str] = {
+    "embedding_unavailable": "工作区论文检索暂时无法生成查询向量。请检查 embedding API Key、服务地址和网络后重试。",
+    "milvus_unavailable": "工作区论文检索暂时无法连接向量库。请检查 Milvus、etcd 和 minio 基础设施后重试。",
+    "collection_unloaded": "论文向量集合尚未加载。请重新加载 collection 后重试；当前不需要直接重建索引。",
+    "reranker_degraded": "重排服务暂时不可用，已降级使用向量召回结果。可先查看当前结果，恢复重排服务后重试。",
+    "unknown": "工作区论文检索失败：遇到未分类故障。请稍后重试，并查看后端诊断日志。",
+}
+
+
+def _diagnostic_message(code: str) -> str:
+    return RETRIEVAL_DIAGNOSTIC_MESSAGES.get(code, RETRIEVAL_DIAGNOSTIC_MESSAGES["unknown"])
+
+
+def _classify_failure(exc: Exception, *, stage: str) -> str:
+    """Map a retrieval-stage failure to a stable, non-sensitive code."""
+
+    if stage == "embedding":
+        return "embedding_unavailable"
+    if stage == "reranker":
+        return "reranker_degraded"
+
+    raw = f"{type(exc).__name__}: {exc}".lower()
+    if stage == "milvus":
+        if "collection" in raw and any(
+            marker in raw for marker in ("not loaded", "unloaded", "load state", "load collection")
+        ):
+            return "collection_unloaded"
+        return "milvus_unavailable"
+    if "embedding" in raw or "siliconflow" in raw or "api key" in raw:
+        return "embedding_unavailable"
+    if "collection" in raw and any(
+        marker in raw for marker in ("not loaded", "unloaded", "load state")
+    ):
+        return "collection_unloaded"
+    if "milvus" in raw or "pymilvus" in raw or "grpc" in raw:
+        return "milvus_unavailable"
+    return "unknown"
+
+
+def _failed_response(
+    *,
+    request_id: str,
+    workspace_id: str,
+    query: str,
+    purpose: str,
+    start_time: float,
+    diagnostic_code: str,
+    filters_applied: dict | None = None,
+) -> RetrievalResponse:
+    latency = (time.perf_counter() - start_time) * 1000
+    return RetrievalResponse(
+        request_id=request_id,
+        workspace_id=workspace_id,
+        query=query,
+        purpose=purpose,
+        status="failed",
+        latency_ms=round(latency, 2),
+        error=_diagnostic_message(diagnostic_code),
+        diagnostic_code=diagnostic_code,
+        filters_applied=filters_applied or {},
+    )
+
 
 # ==================================================================
 # Step ④: Index paper chunks into Milvus
@@ -239,12 +304,14 @@ def semantic_search(
     """
     start_time = time.perf_counter()
     request_id = str(uuid4())
-    gateway = get_embedding_gateway()
+    stage = "embedding"
 
     try:
+        gateway = get_embedding_gateway()
         # Stage 1: Vector recall (over-fetch for reranker)
         recall_k = top_k * 3 if use_reranker else top_k
         query_vector = gateway.embed_one(query)
+        stage = "milvus"
         hits = milvus_client.search(
             query_vector,
             workspace_id,
@@ -271,18 +338,20 @@ def semantic_search(
             )
 
         # Stage 2: Rerank
+        diagnostic_codes: list[str] = []
         if use_reranker and len(hits) > 1:
-            items = _rerank_hits(query, hits, top_k)
+            items = _rerank_hits(query, hits, top_k, diagnostic_codes)
         else:
             items = [_hit_to_result_item(hit) for hit in hits[:top_k]]
 
         latency = (time.perf_counter() - start_time) * 1000
+        diagnostic_code = diagnostic_codes[0] if diagnostic_codes else None
         return RetrievalResponse(
             request_id=request_id,
             workspace_id=workspace_id,
             query=query,
             purpose="semantic",
-            status="succeeded",
+            status="degraded" if diagnostic_code else "succeeded",
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
@@ -290,18 +359,27 @@ def semantic_search(
                 "section": section,
                 "excluded_paper_ids": sorted(exclude_paper_ids or set()),
             },
+            error=_diagnostic_message(diagnostic_code) if diagnostic_code else None,
+            diagnostic_code=diagnostic_code,
         )
     except Exception as e:
-        latency = (time.perf_counter() - start_time) * 1000
-        logger.error("retrieval.semantic_search_failed", error=str(e))
-        return RetrievalResponse(
+        diagnostic_code = _classify_failure(e, stage=stage)
+        logger.error(
+            "retrieval.semantic_search_failed",
+            error=str(e),
+            diagnostic_code=diagnostic_code,
+        )
+        return _failed_response(
             request_id=request_id,
             workspace_id=workspace_id,
             query=query,
             purpose="semantic",
-            status="failed",
-            latency_ms=round(latency, 2),
-            error=str(e),
+            start_time=start_time,
+            diagnostic_code=diagnostic_code,
+            filters_applied={
+                "section": section,
+                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+            },
         )
 
 
@@ -320,19 +398,21 @@ def find_similar_work(
     """
     start_time = time.perf_counter()
     request_id = str(uuid4())
-    gateway = get_embedding_gateway()
+    stage = "embedding"
 
     try:
+        gateway = get_embedding_gateway()
+        stage = "data"
         # Load representative chunks from the target paper as queries
         chunks = _load_chunks_jsonl(workspace_id, paper_id)
         if not chunks:
-            return RetrievalResponse(
+            return _failed_response(
                 request_id=request_id,
                 workspace_id=workspace_id,
                 query=f"paper:{paper_id}",
                 purpose="similar_work",
-                status="failed",
-                error=f"No chunks found for paper {paper_id}",
+                start_time=start_time,
+                diagnostic_code="unknown",
             )
 
         # Use up to 5 representative chunks (spread across the paper)
@@ -340,7 +420,9 @@ def find_similar_work(
         query_texts = [chunks[i].text for i in sample_indices]
 
         # Embed all query chunks
+        stage = "embedding"
         embed_result = gateway.embed_texts(query_texts)
+        stage = "milvus"
 
         # Exclusion set: the source paper is ALWAYS excluded (it's "similar
         # work" by definition), plus any caller-supplied papers.
@@ -404,13 +486,14 @@ def find_similar_work(
             candidates.extend(hits[:SIMILAR_WORK_MAX_CHUNKS_PER_PAPER])
 
         # Step 3: rerank the diversified candidate pool (or sort by score if reranker disabled).
+        diagnostic_codes: list[str] = []
         if use_reranker and len(candidates) > 1:
             rerank_query = query_texts[0][:500]
             # Rerank the whole pool, then blend with the raw vector score and
             # keep the top chunk per paper: the top-k slots then surface k
             # DISTINCT papers, and papers the reranker alone would demote (same
             # topic, different phrasing) stay in contention.
-            reranked_all = _rerank_hits(rerank_query, candidates, len(candidates))
+            reranked_all = _rerank_hits(rerank_query, candidates, len(candidates), diagnostic_codes)
             items = _hybrid_rerank_top_k(candidates, reranked_all, top_k)
         else:
             candidates.sort(key=lambda h: h.get("score", 0.0), reverse=True)
@@ -419,12 +502,13 @@ def find_similar_work(
             )
 
         latency = (time.perf_counter() - start_time) * 1000
+        diagnostic_code = diagnostic_codes[0] if diagnostic_codes else None
         return RetrievalResponse(
             request_id=request_id,
             workspace_id=workspace_id,
             query=f"paper:{paper_id}",
             purpose="similar_work",
-            status="succeeded",
+            status="degraded" if diagnostic_code else "succeeded",
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
@@ -433,18 +517,23 @@ def find_similar_work(
                 "low_value_section_filter": True,
                 "max_chunks_per_paper": SIMILAR_WORK_MAX_CHUNKS_PER_PAPER,
             },
+            error=_diagnostic_message(diagnostic_code) if diagnostic_code else None,
+            diagnostic_code=diagnostic_code,
         )
     except Exception as e:
-        latency = (time.perf_counter() - start_time) * 1000
-        logger.error("retrieval.similar_work_failed", error=str(e))
-        return RetrievalResponse(
+        diagnostic_code = _classify_failure(e, stage=stage)
+        logger.error(
+            "retrieval.similar_work_failed",
+            error=str(e),
+            diagnostic_code=diagnostic_code,
+        )
+        return _failed_response(
             request_id=request_id,
             workspace_id=workspace_id,
             query=f"paper:{paper_id}",
             purpose="similar_work",
-            status="failed",
-            latency_ms=round(latency, 2),
-            error=str(e),
+            start_time=start_time,
+            diagnostic_code=diagnostic_code,
         )
 
 
@@ -465,15 +554,17 @@ def find_counter_evidence(
     """
     start_time = time.perf_counter()
     request_id = str(uuid4())
-    gateway = get_embedding_gateway()
+    stage = "embedding"
 
     try:
+        gateway = get_embedding_gateway()
         # Stage 1: Vector recall (over-fetch). Exclusion of the claim's source
         # paper is pushed down into the Milvus filter so the source's own
         # chunks never enter the recall pool — otherwise they would crowd out
         # genuinely countering evidence.
         recall_k = top_k * 3 if (use_reranker or use_judge) else top_k
         query_vector = gateway.embed_one(claim_text)
+        stage = "milvus"
         hits = milvus_client.search(
             query_vector,
             workspace_id,
@@ -507,9 +598,10 @@ def find_counter_evidence(
         # paper so the top-k slots surface k DISTINCT papers. A single paper's
         # many chunks would otherwise crowd out counter evidence from other
         # papers — and the Gate measures recall at the paper level.
+        diagnostic_codes: list[str] = []
         if use_reranker and len(hits) > 1:
             reranked_items = _paper_max_top_k(
-                _rerank_hits(claim_text, hits, len(hits)), top_k
+                _rerank_hits(claim_text, hits, len(hits), diagnostic_codes), top_k
             )
         else:
             reranked_items = _paper_max_top_k(
@@ -532,6 +624,8 @@ def find_counter_evidence(
         # pushes the response into "degraded" so the UI can distinguish it
         # from a clean "no counter-evidence found".
         status = "succeeded"
+        if diagnostic_codes:
+            status = "degraded"
         judge_failed = any(
             item.judgement == "unknown" and item.judgement_confidence == 0.0
             for item in items
@@ -576,18 +670,26 @@ def find_counter_evidence(
                 "role_priority": COUNTER_ROLE_PRIORITY,
             },
             empty_reason=empty_reason,
+            error=_diagnostic_message(diagnostic_codes[0]) if diagnostic_codes else None,
+            diagnostic_code=diagnostic_codes[0] if diagnostic_codes else None,
         )
     except Exception as e:
-        latency = (time.perf_counter() - start_time) * 1000
-        logger.error("retrieval.counter_evidence_failed", error=str(e))
-        return RetrievalResponse(
+        diagnostic_code = _classify_failure(e, stage=stage)
+        logger.error(
+            "retrieval.counter_evidence_failed",
+            error=str(e),
+            diagnostic_code=diagnostic_code,
+        )
+        return _failed_response(
             request_id=request_id,
             workspace_id=workspace_id,
             query=claim_text,
             purpose="counter_evidence",
-            status="failed",
-            latency_ms=round(latency, 2),
-            error=str(e),
+            start_time=start_time,
+            diagnostic_code=diagnostic_code,
+            filters_applied={
+                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+            },
         )
 
 
@@ -600,6 +702,7 @@ def _rerank_hits(
     query: str,
     hits: list[dict[str, Any]],
     top_k: int,
+    diagnostic_codes: list[str] | None = None,
 ) -> list[RetrievalResultItem]:
     """Rerank Milvus hits using cross-encoder, return top_k items."""
     reranker = get_reranker_gateway()
@@ -609,7 +712,13 @@ def _rerank_hits(
         rerank_result = reranker.rerank(query, documents, top_n=top_k)
     except Exception as e:
         # Graceful degradation: fall back to vector score ordering
-        logger.warning("retrieval.rerank_failed_fallback", error=str(e))
+        logger.warning(
+            "retrieval.rerank_failed_fallback",
+            error=str(e),
+            diagnostic_code="reranker_degraded",
+        )
+        if diagnostic_codes is not None:
+            diagnostic_codes.append("reranker_degraded")
         hits_sorted = sorted(hits, key=lambda h: h.get("score", 0.0), reverse=True)
         return [_hit_to_result_item(hit) for hit in hits_sorted[:top_k]]
 

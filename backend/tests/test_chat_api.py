@@ -564,6 +564,7 @@ def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(
             query=kwargs["query"],
             status="failed",
             error="embedding provider unavailable",
+            diagnostic_code="embedding_unavailable",
         ),
     )
 
@@ -574,11 +575,13 @@ def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(
 
     assert resp.status_code == 200, resp.text
     assert '"type": "error"' in resp.text
-    assert "工作区论文检索失败" in resp.text
+    assert "无法生成查询向量" in resp.text
+    assert '"diagnostic_code": "embedding_unavailable"' in resp.text
     detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["status"] == "failed"
     assert assistant["grounding_status"] == "retrieval_failed"
+    assert assistant["retrieval_diagnostic_code"] == "embedding_unavailable"
 
 
 def test_stream_client_disconnect_marks_failed_not_generating(db_session, fake_gateway):

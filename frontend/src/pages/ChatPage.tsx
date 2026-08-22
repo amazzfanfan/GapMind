@@ -5,7 +5,7 @@ import chatApi, { type ChatContextArtifactOption, type ChatContextPlanOption, ty
 import workspaceApi from "../api/workspace";
 import agentApi, { type AgentRunDetail } from "../api/agent";
 import type { Workspace } from "../api/types/workspace";
-import { chatConversationPath, chatErrorMessage, sortChatMessages } from "../state/chatState";
+import { chatConversationPath, chatErrorMessage, retrievalDiagnosticCopy, sortChatMessages, type ChatRetrievalDiagnosticCode } from "../state/chatState";
 import { isIndependentWorkspaceName } from "../state/independentMode";
 import ChatComposer, { type ChatMode } from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
@@ -285,8 +285,20 @@ export default function ChatPage() {
       void loadHistory();
     } catch (error) {
       setStreaming(false);
-      const displayError = chatErrorMessage(error);
-      setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const, error_message: displayError } : m));
+      const rawDiagnosticCode = error && typeof error === "object" && "diagnostic_code" in error
+        ? String((error as { diagnostic_code?: unknown }).diagnostic_code || "") || null
+        : null;
+      const diagnostic = retrievalDiagnosticCopy(rawDiagnosticCode);
+      const diagnosticCode: ChatRetrievalDiagnosticCode | null = diagnostic && rawDiagnosticCode
+        ? rawDiagnosticCode as ChatRetrievalDiagnosticCode
+        : null;
+      const displayError = diagnostic ? `${diagnostic.title} ${diagnostic.recovery}` : chatErrorMessage(error);
+      setMessages((current) => current.map((m) => m.id === assistantKey ? {
+        ...m,
+        status: "failed" as const,
+        error_message: displayError,
+        retrieval_diagnostic_code: diagnosticCode,
+      } : m));
       message.error(displayError);
       void loadHistory();
     } finally { setSending(false); }
@@ -315,7 +327,7 @@ export default function ChatPage() {
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
-        let event: { type?: string; content?: string; message?: string } | undefined;
+        let event: { type?: string; content?: string; message?: string; diagnostic_code?: ChatRetrievalDiagnosticCode | null } | undefined;
         try {
           event = JSON.parse(line.slice(6)) as { type?: string; content?: string; message?: string };
         } catch { /* ignore malformed SSE line */ }
@@ -325,7 +337,9 @@ export default function ChatPage() {
           appendDelta(event.content);
         }
         if (event?.type === "error") {
-          throw new Error(event.message || "回答失败，请重试。");
+          const streamError = new Error(event.message || "回答失败，请重试。") as Error & { diagnostic_code?: string | null };
+          streamError.diagnostic_code = event.diagnostic_code;
+          throw streamError;
         }
       }
     }

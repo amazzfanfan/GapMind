@@ -91,6 +91,9 @@ def _extras_for_chat(exc: ChatConfigurationError | ChatUpstreamError | ChatRetri
         extras["conversation_id"] = exc.conversation_id
     if exc.assistant_message_id is not None:
         extras["assistant_message_id"] = exc.assistant_message_id
+    diagnostic_code = getattr(exc, "diagnostic_code", None)
+    if diagnostic_code:
+        extras["diagnostic_code"] = diagnostic_code
     return extras
 
 

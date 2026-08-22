@@ -58,14 +58,51 @@ export function chatErrorMessage(error: unknown): string {
   return requestErrorMessage(error);
 }
 
+export type ChatRetrievalDiagnosticCode =
+  | "embedding_unavailable"
+  | "milvus_unavailable"
+  | "collection_unloaded"
+  | "reranker_degraded"
+  | "unknown";
+
+const RETRIEVAL_DIAGNOSTIC_COPY: Record<ChatRetrievalDiagnosticCode, { title: string; recovery: string }> = {
+  embedding_unavailable: {
+    title: "无法生成论文检索向量",
+    recovery: "请检查 embedding API Key、服务地址和网络后重试。",
+  },
+  milvus_unavailable: {
+    title: "无法连接工作区向量库",
+    recovery: "请检查 Milvus、etcd 和 minio 基础设施状态后重试。",
+  },
+  collection_unloaded: {
+    title: "论文向量集合尚未加载",
+    recovery: "请重新加载 collection 后重试；当前不需要直接重建索引。",
+  },
+  reranker_degraded: {
+    title: "重排服务暂时不可用，已降级为向量召回",
+    recovery: "当前结果仍可查看；恢复 reranker 服务后可重新尝试。",
+  },
+  unknown: {
+    title: "工作区论文检索遇到未分类故障",
+    recovery: "请稍后重试；若持续发生，请查看后端诊断日志。",
+  },
+};
+
+export function retrievalDiagnosticCopy(code?: string | null): { title: string; recovery: string } | null {
+  if (!code || !(code in RETRIEVAL_DIAGNOSTIC_COPY)) return null;
+  return RETRIEVAL_DIAGNOSTIC_COPY[code as ChatRetrievalDiagnosticCode];
+}
+
 /**
  * Failed messages are persisted so a reload must keep their remediation copy,
  * without leaking raw upstream errors into the research workspace UI.
  */
 export function chatFailureMessage(
-  message: Pick<ChatMessage, "grounding_status" | "error_message">,
+  message: Pick<ChatMessage, "grounding_status" | "error_message" | "retrieval_diagnostic_code">,
 ): string {
   if (message.grounding_status === "retrieval_failed") {
+    const diagnostic = retrievalDiagnosticCopy(message.retrieval_diagnostic_code);
+    if (diagnostic) return `${diagnostic.title} ${diagnostic.recovery}`;
     return "工作区论文检索暂不可用，请检查向量化服务与 Milvus 后重试。";
   }
   if (message.error_message?.includes("流式响应中断")) {

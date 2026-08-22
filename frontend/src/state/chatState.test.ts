@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatConversationPath, chatErrorMessage, chatFailureMessage, groupConversations, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
+import { chatConversationPath, chatErrorMessage, chatFailureMessage, groupConversations, retrievalDiagnosticCopy, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
 
 const conversation = (id: string, date: string) => ({ id, title: id, model: null, last_message_at: date, created_at: date, updated_at: date });
 
@@ -29,6 +29,9 @@ describe("chat helpers", () => {
   it("keeps a safe remediation message for persisted failed chats", () => {
     expect(chatFailureMessage({ grounding_status: "retrieval_failed", error_message: "embedding provider unavailable" }))
       .toBe("工作区论文检索暂不可用，请检查向量化服务与 Milvus 后重试。");
+    expect(chatFailureMessage({ grounding_status: "retrieval_failed", error_message: "不展示原始异常", retrieval_diagnostic_code: "collection_unloaded" }))
+      .toContain("重新加载 collection");
+    expect(retrievalDiagnosticCopy("reranker_degraded")?.title).toContain("降级");
     expect(chatFailureMessage({ grounding_status: "not_requested", error_message: "流式响应中断：客户端提前断开" }))
       .toBe("生成过程意外中断，请重新尝试。");
   });

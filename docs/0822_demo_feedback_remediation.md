@@ -74,6 +74,14 @@
 - 无向量命中不会被报告为服务故障。
 - 工作区事实问答在检索失败时仍然 fail closed，不产生无依据断言。
 
+### D2 实施记录（2026-08-23）
+
+- 检索响应新增安全 `diagnostic_code`：`embedding_unavailable`、`milvus_unavailable`、`collection_unloaded`、`reranker_degraded`、`unknown`。原始上游异常只写后端日志，不进入工作区 API 文案；collection 未加载单独提示重新加载，不把所有问题指向重建索引。
+- `semantic_search`、similar work 和 counter evidence 都保留失败/空结果边界。reranker 异常继续回退到向量分数，但响应状态变为 `degraded` 并携带 `reranker_degraded`；Milvus 返回零命中仍是正常成功结果，不转成故障。
+- workspace Chat 在检索失败时把安全诊断码持久化到 `chat_messages.retrieval_diagnostic_code`（Alembic `0020_chat_retrieval_diagnostic`），回答不调用 LLM，流式请求结束为可重试的失败状态；降级结果仍可回答但前端显示对应恢复动作。现有失败消息的“重新尝试”入口继续作为重试检索入口。
+- 前端按诊断码区分 embedding Key/地址、Milvus 基础设施、collection 加载和 reranker 降级提示；未知故障不展示原始异常。未命中仍展示“没有使用工作区证据”，不伪造论文事实。
+- 验收测试覆盖 embedding、Milvus、collection、reranker、普通零命中、流式 fail-closed 与前端诊断文案。当前验证：后端 `422 passed`，前端 `53 passed`，TypeScript 类型检查和生产构建通过；Alembic 已升级到 `0020_chat_retrieval_diagnostic`。
+
 ## D3：代码生成的检查语义与候选修复
 
 ### 现象与根因

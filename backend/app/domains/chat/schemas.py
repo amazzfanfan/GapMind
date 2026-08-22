@@ -151,6 +151,7 @@ class ChatMessageRead(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     grounding_status: str = "not_requested"
+    retrieval_diagnostic_code: str | None = None
     citations: list[ChatMessageEvidenceRead] = Field(default_factory=list)
     citation_check: CitationCheckRead | None = None
     sources: list[ChatMessageSourceRead] = Field(default_factory=list)

@@ -2008,6 +2008,8 @@ export interface components {
              * @default not_requested
              */
             grounding_status: string;
+            /** Retrieval Diagnostic Code */
+            retrieval_diagnostic_code?: string | null;
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             citation_check?: components["schemas"]["CitationCheckRead"] | null;
@@ -3881,6 +3883,8 @@ export interface components {
             filters_applied?: Record<string, never>;
             /** Error */
             error?: string | null;
+            /** Diagnostic Code */
+            diagnostic_code?: ("embedding_unavailable" | "milvus_unavailable" | "collection_unloaded" | "reranker_degraded" | "unknown") | null;
             /** Empty Reason */
             empty_reason?: ("retrieval_empty" | "judge_failed" | "genuinely_no_counter_evidence") | null;
         };

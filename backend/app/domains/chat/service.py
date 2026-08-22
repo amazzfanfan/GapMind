@@ -18,7 +18,11 @@ from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEv
 from app.domains.discover.models import ResearchOpportunity, ResearchPlan
 from app.domains.paper.models import Paper
 from app.domains.retrieval.schemas import RetrievalResultItem
-from app.domains.retrieval.service import find_chunk_record, semantic_search
+from app.domains.retrieval.service import (
+    RETRIEVAL_DIAGNOSTIC_MESSAGES,
+    find_chunk_record,
+    semantic_search,
+)
 from app.domains.workspace.models import Workspace
 from app.domains.workspace.service import WorkspaceService
 from app.gateway.llm import LLMGateway, get_llm_gateway
@@ -38,6 +42,7 @@ class WorkspaceContext:
     evidence: list[ChatMessageEvidence]
     sources: list[dict[str, Any]]
     plan: ResearchPlan | None = None
+    retrieval_diagnostic_code: str | None = None
 
 
 @dataclass
@@ -91,10 +96,12 @@ class ChatRetrievalError(RuntimeError):
         *,
         conversation_id: str | None = None,
         assistant_message_id: str | None = None,
+        diagnostic_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
         self.assistant_message_id = assistant_message_id
+        self.diagnostic_code = diagnostic_code
 
 
 def make_conversation_title(content: str) -> str:
@@ -271,6 +278,7 @@ class ChatService:
         assistant.status = "generating"
         assistant.error_message = None
         assistant.content = ""
+        assistant.retrieval_diagnostic_code = None
         self.db.commit()
         previous_sources = list(assistant.source_manifest or [])
         plan_id = next(
@@ -419,6 +427,7 @@ class ChatService:
                     workspace_context.sources,
                 )
                 assistant.source_manifest = sources
+                assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
                 if not evidence and not sources:
                     return self._complete_without_evidence(
                         conversation,
@@ -565,6 +574,7 @@ class ChatService:
                     workspace_context.sources,
                 )
                 assistant.source_manifest = sources
+                assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
@@ -579,7 +589,11 @@ class ChatService:
             # documented SSE error event instead of closing the connection
             # while the browser still shows the optimistic message as
             # "generating".
-            yield {"type": "error", "message": str(exc)}
+            yield {
+                "type": "error",
+                "message": str(exc),
+                "diagnostic_code": exc.diagnostic_code,
+            }
             return
         except ChatInputError as exc:
             self._mark_failed(assistant, "上下文选择无效")
@@ -667,16 +681,23 @@ class ChatService:
             use_reranker=True,
         )
         if result.status == "failed":
+            diagnostic_code = result.diagnostic_code or "unknown"
+            diagnostic_message = RETRIEVAL_DIAGNOSTIC_MESSAGES.get(
+                diagnostic_code,
+                RETRIEVAL_DIAGNOSTIC_MESSAGES["unknown"],
+            )
             assistant = self.db.get(ChatMessage, assistant_id)
             self._mark_failed(
                 assistant,
-                result.error or "Workspace retrieval failed",
+                diagnostic_message,
                 grounding_status="retrieval_failed",
+                retrieval_diagnostic_code=diagnostic_code,
             )
             raise ChatRetrievalError(
-                "工作区论文检索失败，请检查向量化服务与 Milvus 后重试",
+                diagnostic_message,
                 conversation_id=conversation.id,
                 assistant_message_id=assistant_id,
+                diagnostic_code=diagnostic_code,
             )
 
         evidence = self._materialize_evidence(
@@ -703,7 +724,13 @@ class ChatService:
                 f"工作区论文检索证据（仅此部分可作为论文事实依据）：\n{evidence_text}"
             ),
         }
-        return WorkspaceContext([system_message, *context], evidence, sources, selection.plan)
+        return WorkspaceContext(
+            [system_message, *context],
+            evidence,
+            sources,
+            selection.plan,
+            result.diagnostic_code,
+        )
 
     def context_options(self, workspace_id: str) -> dict[str, list[dict[str, str]]]:
         """List only current-workspace plan/report/code context candidates."""
@@ -1108,9 +1135,11 @@ class ChatService:
         error_message: str,
         *,
         grounding_status: str | None = None,
+        retrieval_diagnostic_code: str | None = None,
     ) -> None:
         assistant.status = "failed"
         assistant.error_message = error_message[:1000]
+        assistant.retrieval_diagnostic_code = retrieval_diagnostic_code
         if grounding_status:
             assistant.grounding_status = grounding_status
         conversation = self.db.get(ChatConversation, assistant.conversation_id)

@@ -57,6 +57,11 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     # ``chat_message_evidence`` for source navigation; this field also records
     # plan/report/code provenance without presenting those artifacts as papers.
     source_manifest: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    # Stable, non-sensitive retrieval diagnosis.  Raw provider/Milvus errors
+    # stay in server logs and are never persisted into the workspace UI.
+    retrieval_diagnostic_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     citations: Mapped[list["ChatMessageEvidence"]] = relationship(
         back_populates="message",
         cascade="all, delete-orphan",

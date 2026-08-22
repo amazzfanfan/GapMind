@@ -23,6 +23,7 @@ export interface ChatMessage {
   completion_tokens: number | null;
   total_tokens: number | null;
   grounding_status?: "not_requested" | "grounded" | "plan_context" | "context_selection_required" | "no_evidence" | "retrieval_failed";
+  retrieval_diagnostic_code?: "embedding_unavailable" | "milvus_unavailable" | "collection_unloaded" | "reranker_degraded" | "unknown" | null;
   citations?: ChatMessageEvidence[];
   citation_check?: CitationCheck | null;
   sources?: ChatMessageSource[];
