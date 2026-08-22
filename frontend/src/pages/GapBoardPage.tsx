@@ -38,7 +38,10 @@ const candidatePresentation: Record<
   corpus_only: { label: "语料库未覆盖", tone: "uncovered", shortDescription: "仅由方法与问题轴组合产生" },
 };
 
-const TIER_FILTER_OPTIONS: Array<{ value: GapBoardCell["candidate_tier"] | "all"; label: string }> = [
+type GapTierFilter = GapBoardCell["candidate_tier"] | "all" | "recommended";
+
+const TIER_FILTER_OPTIONS: Array<{ value: GapTierFilter; label: string }> = [
+  { value: "recommended", label: "推荐核验（优先）" },
   { value: "all", label: "全部机会" },
   { value: "explicit_limitation", label: "明确剩余局限" },
   { value: "same_paper_unlinked", label: "同篇共现待核验" },
@@ -66,7 +69,7 @@ export default function GapBoardPage() {
   const [rebuilding, setRebuilding] = useState(false);
   const [discovering, setDiscovering] = useState<string | null>(null);
   // P0-5: 矩阵可按机会类型筛选（只看某一类，如"明确剩余局限"），矩阵变大后不至于难读。
-  const [tierFilter, setTierFilter] = useState<GapBoardCell["candidate_tier"] | "all">("all");
+  const [tierFilter, setTierFilter] = useState<GapTierFilter>("recommended");
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
@@ -125,9 +128,9 @@ export default function GapBoardPage() {
       if (submitted === 0) {
         message.info(`全部 ${skipped} 篇论文已完成专项标注，无需重复抽取。`);
       } else if (skipped > 0) {
-        message.success(`已提交 ${submitted} 篇论文抽取，跳过 ${skipped} 篇已完成标注的论文。`);
+        message.success(`已提交 ${submitted} 篇论文抽取，跳过 ${skipped} 篇已完成标注；可在“课题活动 → 处理中心”查看进度或失败原因。`);
       } else {
-        message.success(`已提交 ${submitted} 篇论文。完成后请刷新并重建棋盘。`);
+        message.success(`已提交 ${submitted} 篇论文；可在“课题活动 → 处理中心”查看进度，完成后刷新并重建棋盘。`);
       }
     } catch (error) {
       message.error(`提交专项抽取失败：${errorMessage(error)}`);
@@ -177,6 +180,9 @@ export default function GapBoardPage() {
   const filteredCells = useMemo(() => {
     const all = board?.cells ?? [];
     if (tierFilter === "all") return all;
+    if (tierFilter === "recommended") {
+      return all.filter((cell) => !cell.addressed && cell.eligible_for_discovery);
+    }
     return all.filter((cell) => (cell.addressed ? "covered" : cell.candidate_tier) === tierFilter);
   }, [board, tierFilter]);
 
@@ -308,6 +314,7 @@ export default function GapBoardPage() {
     (item) => !item.addressed && item.candidate_tier === "explicit_limitation",
   ).length || 0;
   const coveredCount = board?.cells.filter((item) => item.addressed).length || 0;
+  const visibleUncoveredCount = filteredCells.filter((item) => !item.addressed).length;
 
   return (
     <div className="gm-gap-board-page">
@@ -368,7 +375,7 @@ export default function GapBoardPage() {
         <div className="gm-gap-board-card-heading">
           <div>
             <Title level={4}>方法 × 问题机会矩阵</Title>
-            <Text type="secondary">共 {uncoveredCount} 个未覆盖组合，颜色越醒目代表越值得优先核验。</Text>
+            <Text type="secondary">{tierFilter === "recommended" ? `优先显示 ${visibleUncoveredCount} 个推荐核验候选；可切换查看全部 ${uncoveredCount} 个未覆盖组合。` : `共 ${uncoveredCount} 个未覆盖组合，颜色越醒目代表越值得优先核验。`}</Text>
           </div>
           <Space wrap align="center">
             <Select

@@ -36,7 +36,10 @@ class InvalidTaskTransition(Exception):
 # Allowed forward transitions. Keys are the current status, values are the
 # set of statuses the task may move INTO from that status.
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    "queued": {"running", "cancel_requested", "cancelled"},
+    # A queueing failure can happen after retrying a failed task (for example
+    # when the local worker/broker is unavailable).  It must return to failed
+    # instead of looking queued forever in the UI.
+    "queued": {"running", "failed", "cancel_requested", "cancelled"},
     "running": {
         "waiting_for_user",
         "succeeded",
@@ -212,10 +215,22 @@ class TaskService:
         transited = self.transition(task_id, "queued")
         from app.workers.tasks.dispatch import redispatch_task
 
-        celery_task_id = redispatch_task(task)
-        if celery_task_id:
-            task.celery_task_id = celery_task_id
-            self.db.commit()
+        try:
+            celery_task_id = redispatch_task(task)
+        except Exception as exc:
+            return self.transition(
+                task_id,
+                "failed",
+                error=f"任务重新派发失败，请确认本地 Worker 与 Redis 正在运行后重试：{exc}",
+            )
+        if not celery_task_id:
+            return self.transition(
+                task_id,
+                "failed",
+                error="此任务暂不支持重新派发，请从对应功能页面重新发起。",
+            )
+        task.celery_task_id = celery_task_id
+        self.db.commit()
         return transited
 
     # ----------------------------------------------------------------- update

@@ -97,6 +97,30 @@ def test_task_retry_from_failed(
     assert client.get(f"/api/v1/tasks/{tid}").json()["celery_task_id"] == "fake-celery-id"
 
 
+def test_task_retry_reports_redispatch_failure_instead_of_staying_queued(
+    client: TestClient, task_factory, task_transitioner, monkeypatch
+) -> None:
+    ws = _create_workspace(client)
+    tid = task_factory(ws["id"])
+    task_transitioner(tid, "running")
+    task_transitioner(tid, "failed", error="old failure")
+
+    import app.workers.tasks.dispatch as dispatch_mod
+
+    monkeypatch.setattr(
+        dispatch_mod,
+        "redispatch_task",
+        lambda task: (_ for _ in ()).throw(RuntimeError("broker offline")),
+    )
+
+    resp = client.post(f"/api/v1/tasks/{tid}/retry")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "重新派发失败" in body["error"]
+    assert "broker offline" in body["error"]
+
+
 def test_task_retry_from_non_failed_returns_409(
     client: TestClient, task_factory
 ) -> None:
