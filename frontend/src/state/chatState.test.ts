@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatConversationPath, chatErrorMessage, groupConversations, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
+import { chatConversationPath, chatErrorMessage, chatFailureMessage, groupConversations, shouldSendOnEnter, sortChatMessages, truncateChatTitle } from "./chatState";
 
 const conversation = (id: string, date: string) => ({ id, title: id, model: null, last_message_at: date, created_at: date, updated_at: date });
 
@@ -24,6 +24,13 @@ describe("chat helpers", () => {
 
   it("turns API errors into friendly copy", () => {
     expect(chatErrorMessage({ response: { status: 502, data: { detail: { message: "上游错误" } } } })).toBe("操作失败，请稍后重试。");
+  });
+
+  it("keeps a safe remediation message for persisted failed chats", () => {
+    expect(chatFailureMessage({ grounding_status: "retrieval_failed", error_message: "embedding provider unavailable" }))
+      .toBe("工作区论文检索暂不可用，请检查向量化服务与 Milvus 后重试。");
+    expect(chatFailureMessage({ grounding_status: "not_requested", error_message: "流式响应中断：客户端提前断开" }))
+      .toBe("生成过程意外中断，请重新尝试。");
   });
 
   it("routes grounded conversations back to their workspace", () => {

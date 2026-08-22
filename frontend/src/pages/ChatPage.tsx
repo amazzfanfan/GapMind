@@ -226,8 +226,9 @@ export default function ChatPage() {
       void loadHistory();
     } catch (error) {
       setStreaming(false);
-      setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const } : m));
-      message.error(chatErrorMessage(error));
+      const displayError = chatErrorMessage(error);
+      setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const, error_message: displayError } : m));
+      message.error(displayError);
       void loadHistory();
     } finally { setSending(false); }
   };
@@ -252,14 +253,18 @@ export default function ChatPage() {
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
+        let event: { type?: string; content?: string; message?: string } | undefined;
         try {
-          const event = JSON.parse(line.slice(6)) as { type?: string; content?: string };
-          if (event.type === "token" && typeof event.content === "string") {
-            if (firstTokenAt === null) firstTokenAt = new Date().toISOString();
-            tokens += 1;
-            appendDelta(event.content);
-          }
+          event = JSON.parse(line.slice(6)) as { type?: string; content?: string; message?: string };
         } catch { /* ignore malformed SSE line */ }
+        if (event?.type === "token" && typeof event.content === "string") {
+          if (firstTokenAt === null) firstTokenAt = new Date().toISOString();
+          tokens += 1;
+          appendDelta(event.content);
+        }
+        if (event?.type === "error") {
+          throw new Error(event.message || "回答失败，请重试。");
+        }
       }
     }
     console.debug("[chat-stream] done", { chunks, tokens, firstTokenAt, at: new Date().toISOString() });

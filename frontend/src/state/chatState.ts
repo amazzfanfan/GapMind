@@ -43,6 +43,7 @@ export function groupConversations(conversations: ChatConversation[]): Array<{ l
 }
 
 export function chatErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === "object" && detail?.message) return String(detail.message);
@@ -52,4 +53,23 @@ export function chatErrorMessage(error: unknown): string {
     if (error.response?.status === 502) return "AI 服务暂时不可用，请稍后重试。";
   }
   return "操作失败，请稍后重试。";
+}
+
+/**
+ * Failed messages are persisted so a reload must keep their remediation copy,
+ * without leaking raw upstream errors into the research workspace UI.
+ */
+export function chatFailureMessage(
+  message: Pick<ChatMessage, "grounding_status" | "error_message">,
+): string {
+  if (message.grounding_status === "retrieval_failed") {
+    return "工作区论文检索暂不可用，请检查向量化服务与 Milvus 后重试。";
+  }
+  if (message.error_message?.includes("流式响应中断")) {
+    return "生成过程意外中断，请重新尝试。";
+  }
+  if (message.error_message?.includes("API key is not configured")) {
+    return "AI 服务尚未配置，请联系管理员。";
+  }
+  return "回答失败，请重试。";
 }

@@ -335,6 +335,42 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assert assistant["status"] == "completed"
 
 
+def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(
+    client,
+    monkeypatch,
+):
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"name": "向量服务异常工作区"},
+    ).json()
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "retrieval failure", "workspace_id": workspace["id"]},
+    ).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            status="failed",
+            error="embedding provider unavailable",
+        ),
+    )
+
+    resp = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages/stream",
+        json={"content": "检索失败时应可恢复"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert '"type": "error"' in resp.text
+    assert "工作区论文检索失败" in resp.text
+    detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
+    assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+    assert assistant["status"] == "failed"
+    assert assistant["grounding_status"] == "retrieval_failed"
+
+
 def test_stream_client_disconnect_marks_failed_not_generating(db_session, fake_gateway):
     """P0.5-1: closing the SSE generator mid-stream (client disconnect) must not
     leave the assistant row stuck in "generating" forever."""
