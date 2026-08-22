@@ -22,9 +22,11 @@ export interface ChatMessage {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;
-  grounding_status?: "not_requested" | "grounded" | "no_evidence" | "retrieval_failed";
+  grounding_status?: "not_requested" | "grounded" | "plan_context" | "context_selection_required" | "no_evidence" | "retrieval_failed";
   citations?: ChatMessageEvidence[];
   citation_check?: CitationCheck | null;
+  sources?: ChatMessageSource[];
+  source_check?: SourceCheck | null;
   created_at: string;
   updated_at: string;
 }
@@ -34,6 +36,45 @@ export interface CitationCheck {
   broken: number[];
   ok: boolean;
   grounded_without_citations: boolean;
+}
+
+export interface SourceCheck {
+  referenced: string[];
+  broken: string[];
+  ok: boolean;
+}
+
+export type ChatSourceType = "plan" | "paper" | "report" | "code_draft";
+
+export interface ChatMessageSource {
+  marker: string;
+  source_type: ChatSourceType;
+  source_id: string;
+  label: string;
+  title: string;
+  status: string;
+  detail: string | null;
+}
+
+export interface ChatContextPlanOption {
+  id: string;
+  title: string;
+  research_question: string;
+  status: string;
+}
+
+export interface ChatContextArtifactOption {
+  id: string;
+  plan_id: string;
+  source_type: "report" | "code_draft";
+  label: string;
+  title: string;
+  status: string;
+}
+
+export interface ChatContextOptionsResponse {
+  plans: ChatContextPlanOption[];
+  artifacts: ChatContextArtifactOption[];
 }
 
 export interface ChatMessageEvidence {
@@ -86,6 +127,10 @@ export const chatApi = {
     const { data } = await apiClient.get<ChatConversationListResponse>("/chat/conversations", { params });
     return data;
   },
+  async listContextOptions(workspaceId: string) {
+    const { data } = await apiClient.get<ChatContextOptionsResponse>("/chat/context-options", { params: { workspace_id: workspaceId } });
+    return data;
+  },
   async getConversation(id: string) {
     const { data } = await apiClient.get<ChatConversationDetail>(`/chat/conversations/${id}`);
     return data;
@@ -105,24 +150,34 @@ export const chatApi = {
     const { data } = await apiClient.delete<{ id: string; deleted: boolean }>(`/chat/conversations/${id}`);
     return data;
   },
-  async sendNew(content: string, workspaceId?: string) {
+  async sendNew(content: string, workspaceId?: string, context: { researchPlanId?: string; sourceArtifactIds?: string[] } = {}) {
     const { data } = await apiClient.post<ChatSendResponse>("/chat/conversations/send", {
       content,
       workspace_id: workspaceId ?? null,
+      research_plan_id: context.researchPlanId ?? null,
+      source_artifact_ids: context.sourceArtifactIds ?? [],
     });
     return data;
   },
-  async sendMessage(id: string, content: string) {
-    const { data } = await apiClient.post<ChatSendResponse>(`/chat/conversations/${id}/messages`, { content });
+  async sendMessage(id: string, content: string, context: { researchPlanId?: string; sourceArtifactIds?: string[] } = {}) {
+    const { data } = await apiClient.post<ChatSendResponse>(`/chat/conversations/${id}/messages`, {
+      content,
+      research_plan_id: context.researchPlanId ?? null,
+      source_artifact_ids: context.sourceArtifactIds ?? [],
+    });
     return data;
   },
-  async streamSend(conversationId: string, content: string): Promise<Response> {
+  async streamSend(conversationId: string, content: string, context: { researchPlanId?: string; sourceArtifactIds?: string[] } = {}): Promise<Response> {
     // P0.5-1: SSE streaming via fetch. Use a same-origin relative path so the
     // dev Vite proxy forwards it (avoids cross-origin buffering of SSE).
     return fetch(`/api/v1/chat/conversations/${conversationId}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        research_plan_id: context.researchPlanId ?? null,
+        source_artifact_ids: context.sourceArtifactIds ?? [],
+      }),
     });
   },
   async retryMessage(conversationId: string, assistantMessageId: string) {

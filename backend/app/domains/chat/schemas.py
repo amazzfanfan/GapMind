@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -37,6 +38,8 @@ class ChatConversationUpdate(BaseModel):
 class ChatMessageCreate(BaseModel):
     content: str = Field(..., min_length=1)
     workspace_id: str | None = None
+    research_plan_id: str | None = None
+    source_artifact_ids: list[str] = Field(default_factory=list, max_length=4)
 
     @field_validator("content")
     @classmethod
@@ -45,6 +48,11 @@ class ChatMessageCreate(BaseModel):
         if not value:
             raise ValueError("content cannot be empty")
         return value
+
+    @field_validator("source_artifact_ids")
+    @classmethod
+    def normalize_source_artifact_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item and item.strip()))
 
 
 class ChatConversationRead(BaseModel):
@@ -87,6 +95,47 @@ class CitationCheckRead(BaseModel):
     grounded_without_citations: bool = False
 
 
+class SourceCheckRead(BaseModel):
+    """Validation of [P1]/[D1]/[C1] markers against the source passport."""
+
+    referenced: list[str] = Field(default_factory=list)
+    broken: list[str] = Field(default_factory=list)
+    ok: bool = True
+
+
+class ChatMessageSourceRead(BaseModel):
+    """One explicitly labelled context source used for an answer."""
+
+    marker: str
+    source_type: Literal["plan", "paper", "report", "code_draft"]
+    source_id: str
+    label: str
+    title: str
+    status: str
+    detail: str | None = None
+
+
+class ChatContextPlanOption(BaseModel):
+    id: str
+    title: str
+    research_question: str
+    status: str
+
+
+class ChatContextArtifactOption(BaseModel):
+    id: str
+    plan_id: str
+    source_type: Literal["report", "code_draft"]
+    label: str
+    title: str
+    status: str
+
+
+class ChatContextOptionsResponse(BaseModel):
+    plans: list[ChatContextPlanOption] = Field(default_factory=list)
+    artifacts: list[ChatContextArtifactOption] = Field(default_factory=list)
+
+
 class ChatMessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -104,6 +153,8 @@ class ChatMessageRead(BaseModel):
     grounding_status: str = "not_requested"
     citations: list[ChatMessageEvidenceRead] = Field(default_factory=list)
     citation_check: CitationCheckRead | None = None
+    sources: list[ChatMessageSourceRead] = Field(default_factory=list)
+    source_check: SourceCheckRead | None = None
     created_at: datetime
     updated_at: datetime
 

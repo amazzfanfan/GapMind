@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
-from app.domains.chat.consistency import message_citation_check
+from app.domains.chat.consistency import message_citation_check, source_marker_check
 from app.domains.chat.models import ChatMessage
 from app.domains.chat.schemas import (
     ChatConversationCreate,
@@ -25,12 +25,17 @@ from app.domains.chat.schemas import (
     ChatConversationListResponse,
     ChatConversationRead,
     ChatConversationUpdate,
+    ChatContextArtifactOption,
+    ChatContextOptionsResponse,
+    ChatContextPlanOption,
     ChatDeleteResponse,
     ChatEvidenceContextRead,
     ChatMessageCreate,
     ChatMessageRead,
+    ChatMessageSourceRead,
     ChatSendResponse,
     CitationCheckRead,
+    SourceCheckRead,
 )
 from app.domains.chat.service import ChatService
 
@@ -56,6 +61,23 @@ def _message_view(message: ChatMessage) -> ChatMessageRead:
             broken=check.broken,
             ok=check.ok,
             grounded_without_citations=check.grounded_without_citations,
+        )
+        read.sources = [
+            ChatMessageSourceRead.model_validate(source)
+            for source in (message.source_manifest or [])
+        ]
+        source_check = source_marker_check(
+            read.content,
+            {
+                f"[{source.get('marker')}]"
+                for source in (message.source_manifest or [])
+                if source.get("marker")
+            },
+        )
+        read.source_check = SourceCheckRead(
+            referenced=source_check.referenced,
+            broken=source_check.broken,
+            ok=source_check.ok,
         )
     return read
 
@@ -95,7 +117,26 @@ def create_conversation(payload: ChatConversationCreate, service: ChatService = 
 
 @router.post("/conversations/send", response_model=ChatSendResponse)
 def send_new(payload: ChatMessageCreate, service: ChatService = Depends(_service)) -> ChatSendResponse:
-    return _send_response(service.send_new(payload.content, payload.workspace_id))
+    return _send_response(
+        service.send_new(
+            payload.content,
+            payload.workspace_id,
+            payload.research_plan_id,
+            payload.source_artifact_ids,
+        )
+    )
+
+
+@router.get("/context-options", response_model=ChatContextOptionsResponse)
+def list_context_options(
+    workspace_id: str = Query(...),
+    service: ChatService = Depends(_service),
+) -> ChatContextOptionsResponse:
+    options = service.context_options(workspace_id)
+    return ChatContextOptionsResponse(
+        plans=[ChatContextPlanOption(**item) for item in options["plans"]],
+        artifacts=[ChatContextArtifactOption(**item) for item in options["artifacts"]],
+    )
 
 
 @router.get("/conversations/{conversation_id}", response_model=ChatConversationDetail)
@@ -134,14 +175,24 @@ def stream_message(
     """
     def event_stream():
         for event in service.stream_send(
-            conversation_id, payload.content, workspace_id=payload.workspace_id
+            conversation_id,
+            payload.content,
+            workspace_id=payload.workspace_id,
+            research_plan_id=payload.research_plan_id,
+            source_artifact_ids=payload.source_artifact_ids,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatSendResponse)
 def send_message(conversation_id: str, payload: ChatMessageCreate, service: ChatService = Depends(_service)) -> ChatSendResponse:
     return _send_response(
-        service.send(conversation_id, payload.content, payload.workspace_id)
+        service.send(
+            conversation_id,
+            payload.content,
+            payload.workspace_id,
+            payload.research_plan_id,
+            payload.source_artifact_ids,
+        )
     )
 
 

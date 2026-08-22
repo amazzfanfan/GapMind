@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPKMixin
@@ -53,6 +53,10 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     grounding_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_requested"
     )
+    # Immutable provenance snapshot for this answer. Paper rows remain in
+    # ``chat_message_evidence`` for source navigation; this field also records
+    # plan/report/code provenance without presenting those artifacts as papers.
+    source_manifest: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     citations: Mapped[list["ChatMessageEvidence"]] = relationship(
         back_populates="message",
         cascade="all, delete-orphan",

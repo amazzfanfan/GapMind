@@ -13,6 +13,7 @@ from app.domains.chat.consistency import (  # noqa: E402
     CITATION_PATTERN,
     check_citation_markers,
     message_citation_check,
+    source_marker_check,
 )
 
 
@@ -71,3 +72,16 @@ def test_message_citation_check_mixed_valid_broken() -> None:
 
 def test_citation_pattern_matches_bracketed_indices() -> None:
     assert CITATION_PATTERN.findall("见 [E1] 和 [E12] 与 [E0]") == ["1", "12", "0"]
+
+
+def test_source_markers_are_checked_against_non_paper_passport() -> None:
+    result = source_marker_check("计划 [P1]，论文 [E1]，草案 [C1]。", {"[P1]", "[C1]"})
+    assert result.referenced == ["[C1]", "[P1]"]
+    assert result.broken == []
+    assert result.ok is True
+
+
+def test_source_markers_reject_unknown_plan_report_or_code_marker() -> None:
+    result = source_marker_check("报告 [D2] 不应冒充来源。", {"[D1]"})
+    assert result.broken == ["[D2]"]
+    assert result.ok is False

@@ -46,6 +46,40 @@ def fake_gateway(monkeypatch):
     return gateway
 
 
+def _confirmed_plan(db_session, workspace_id: str, title: str):
+    from app.domains.discover.models import ResearchOpportunity, ResearchPlan
+
+    opportunity = ResearchOpportunity(
+        workspace_id=workspace_id,
+        title=title,
+        summary="已确认研究机会",
+        rationale="测试用机会",
+        status="confirmed",
+    )
+    db_session.add(opportunity)
+    db_session.flush()
+    plan = ResearchPlan(
+        workspace_id=workspace_id,
+        opportunity_id=opportunity.id,
+        status="draft",
+        title=title,
+        research_question="该方法相对 ProtGNN 是否提升鲁棒性？",
+        hypothesis="拓扑约束可以提升 OOD 性能。",
+        scope_and_assumptions="节点分类",
+        datasets=["Cora"],
+        baselines=["ProtGNN"],
+        metrics=["accuracy"],
+        validation_steps=["比较基线"],
+        expected_supporting_result="OOD accuracy 提升",
+        falsification_criteria="没有稳定提升",
+        risks=[],
+        resource_constraints="单张 GPU",
+    )
+    db_session.add(plan)
+    db_session.commit()
+    return plan
+
+
 def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
     response = client.post(
         "/api/v1/chat/conversations/send", json={"content": "  什么是时间图神经网络？  "}
@@ -291,6 +325,182 @@ def test_workspace_chat_without_hits_does_not_ask_llm(client, fake_gateway, monk
     assert assistant["citations"] == []
     assert "没有检索到" in assistant["content"]
     assert fake_gateway.calls == []
+
+
+def test_workspace_chat_binds_plan_and_persists_separate_sources(
+    client, db_session, fake_gateway, monkeypatch
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "计划问答"}).json()
+    plan = _confirmed_plan(db_session, workspace["id"], "拓扑约束研究计划")
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "ProtGNN", "authors": [], "year": 2024},
+    ).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    chunk_id="chunk-plan",
+                    section="Method",
+                    text="ProtGNN uses a contrastive objective.",
+                    score=0.9,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        ),
+    )
+    fake_gateway.content = "计划提出的贡献见 [P1]；ProtGNN 论文证据见 [E1]。"
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={
+            "content": "此研究计划相对 ProtGNN 的贡献是什么、损失函数是什么？",
+            "workspace_id": workspace["id"],
+            "research_plan_id": plan.id,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assistant = response.json()["assistant_message"]
+    assert assistant["grounding_status"] == "grounded"
+    assert [source["source_type"] for source in assistant["sources"]] == ["plan", "paper"]
+    assert assistant["sources"][0]["marker"] == "P1"
+    assert assistant["sources"][0]["label"] == "已确认研究计划"
+    assert assistant["source_check"]["ok"] is True
+    prompt = fake_gateway.calls[-1][0]["content"]
+    assert "独立损失函数：研究计划未提供此字段" in prompt
+    assert "只有工作区论文可以使用 [E1]" in prompt
+
+
+def test_ambiguous_plan_reference_requires_selection_without_llm(
+    client, db_session, fake_gateway
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "多计划问答"}).json()
+    _confirmed_plan(db_session, workspace["id"], "计划 A")
+    _confirmed_plan(db_session, workspace["id"], "计划 B")
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={
+            "content": "此研究计划的损失函数是什么？",
+            "workspace_id": workspace["id"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "多个已确认研究计划" in response.json()["detail"]["message"]
+    assert "计划 A" in response.json()["detail"]["message"]
+    assert "计划 B" in response.json()["detail"]["message"]
+    assert fake_gateway.calls == []
+
+
+def test_cross_workspace_plan_is_rejected(client, db_session, fake_gateway):
+    first = client.post("/api/v1/workspaces", json={"name": "当前课题"}).json()
+    second = client.post("/api/v1/workspaces", json={"name": "另一个课题"}).json()
+    foreign_plan = _confirmed_plan(db_session, second["id"], "跨工作区计划")
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={
+            "content": "请解释这个计划",
+            "workspace_id": first["id"],
+            "research_plan_id": foreign_plan.id,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "属于当前工作区" in response.json()["detail"]["message"]
+    assert fake_gateway.calls == []
+
+
+def test_context_options_and_optional_report_code_sources_are_scoped(
+    client, db_session, fake_gateway, monkeypatch
+):
+    from app.domains.agent.models import AgentArtifact, AgentRun
+
+    workspace = client.post("/api/v1/workspaces", json={"name": "补充来源"}).json()
+    plan = _confirmed_plan(db_session, workspace["id"], "来源边界计划")
+    report_run = AgentRun(
+        workspace_id=workspace["id"],
+        agent_type="deep_research",
+        status="succeeded",
+        result={"research_plan_id": plan.id},
+        input_payload={"research_plan_id": plan.id},
+    )
+    code_run = AgentRun(
+        workspace_id=workspace["id"],
+        agent_type="code_generation",
+        status="succeeded",
+        result={"research_plan_id": plan.id},
+        input_payload={"research_plan_id": plan.id},
+    )
+    db_session.add_all([report_run, code_run])
+    db_session.flush()
+    report = AgentArtifact(
+        run_id=report_run.id,
+        artifact_type="deep_research_report",
+        filename="report.md",
+        mime_type="text/markdown",
+        content="报告内说明 [E1] 只是报告自己的引用。",
+        validation_status="confirmed",
+    )
+    code = AgentArtifact(
+        run_id=code_run.id,
+        artifact_type="code",
+        filename="train.py",
+        mime_type="text/x-python",
+        content="print('candidate')",
+        validation_status="not_run",
+    )
+    db_session.add_all([report, code])
+    db_session.commit()
+
+    options = client.get("/api/v1/chat/context-options", params={"workspace_id": workspace["id"]})
+    assert options.status_code == 200, options.text
+    option_body = options.json()
+    assert {item["id"] for item in option_body["artifacts"]} == {report.id, code.id}
+    assert {item["source_type"] for item in option_body["artifacts"]} == {"report", "code_draft"}
+
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "论文证据", "authors": [], "year": 2024},
+    ).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[RetrievalResultItem(paper_id=paper["id"], text="论文事实", score=0.8)],
+            total=1,
+        ),
+    )
+    fake_gateway.content = "计划 [P1]、论文 [E1]、报告 [D1]、代码 [C1]。"
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={
+            "content": "结合计划和补充材料说明贡献",
+            "workspace_id": workspace["id"],
+            "research_plan_id": plan.id,
+            "source_artifact_ids": [report.id, code.id],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assistant = response.json()["assistant_message"]
+    assert [item["source_type"] for item in assistant["sources"]] == [
+        "plan",
+        "paper",
+        "report",
+        "code_draft",
+    ]
+    assert assistant["source_check"]["ok"] is True
+    prompt = fake_gateway.calls[-1][0]["content"]
+    assert "报告内说明 [来源内部标记]" in prompt
+    assert "代码草案，未运行验证" in prompt
 
 
 def test_conversation_workspace_is_immutable(client):
