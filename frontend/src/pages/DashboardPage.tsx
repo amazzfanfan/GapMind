@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "antd";
 import { BookOutlined, FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router-dom";
 import workspaceApi from "../api/workspace";
 import taskApi from "../api/task";
 import { discoverApi, type DiscoverRun, type ResearchOpportunity } from "../api/discover";
-import { recommendationsApi, type PaperRecommendation } from "../api/recommendations";
+import { recommendationsApi } from "../api/recommendations";
 import type { Workspace, WorkspaceReadiness } from "../api/types/workspace";
 import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
@@ -13,6 +13,12 @@ import EmptyGuide from "../components/common/EmptyGuide";
 import LifecycleModules from "../components/LifecycleModules";
 import { useAppStore } from "../store/appStore";
 import StatusBadge from "../components/common/StatusBadge";
+import { isTaskNeedingAttention } from "../state/taskAttention";
+import {
+  aggregateDashboardRecommendations,
+  dashboardRecommendationEntries,
+  type DashboardRecommendationEntry,
+} from "../state/dashboardRecommendationState";
 
 interface WorkspaceSummary {
   workspace: Workspace;
@@ -23,42 +29,39 @@ interface WorkspaceSummary {
   pendingOpportunityCount: number | null;
 }
 
-// Homepage aggregation entry: read-only preview, full actions (import /
-// favorite / dismiss) live on the workspace overview card.
-interface RecommendationEntry {
-  workspace: Workspace;
-  item: PaperRecommendation;
-}
-
-const RECOMMENDATION_PER_WORKSPACE = 2;
-const RECOMMENDATION_MAX = 6;
-
 export default function DashboardPage() {
   const navigate = useNavigate();
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const [summaries, setSummaries] = useState<WorkspaceSummary[]>([]);
-  const [recommendations, setRecommendations] = useState<RecommendationEntry[]>([]);
+  const [recommendations, setRecommendations] = useState<DashboardRecommendationEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const recommendationRequestIdRef = useRef(0);
+  const recommendationEntriesRef = useRef(new Map<string, DashboardRecommendationEntry[]>());
 
-  const loadRecommendations = useCallback(async (workspaces: Workspace[]) => {
-    // read-only preview across workspaces; single failures are skipped
-    // silently (uncached workspaces call S2 upstream and may 502), and the
-    // system independent space (__independent__, 约定15) never appears as a source
+  const loadRecommendations = useCallback((workspaces: Workspace[]) => {
+    // Render each source as it arrives. A cold workspace can wait on S2 while
+    // the Demo workspace's persisted recommendations remain immediately useful.
     const sources = workspaces.filter((workspace) => workspace.name !== "__independent__");
-    const results = await Promise.allSettled(
-      sources.map((workspace) => recommendationsApi.list(workspace.id)),
-    );
-    setRecommendations(
-      sources
-        .flatMap((workspace, index) => {
-          const result = results[index];
-          if (result.status !== "fulfilled" || !result.value.has_profile) return [];
-          return result.value.items
-            .slice(0, RECOMMENDATION_PER_WORKSPACE)
-            .map((item) => ({ workspace, item } satisfies RecommendationEntry));
+    const requestId = ++recommendationRequestIdRef.current;
+    recommendationEntriesRef.current.clear();
+    setRecommendations([]);
+    for (const workspace of sources) {
+      void recommendationsApi.list(workspace.id)
+        .then((response) => {
+          if (requestId !== recommendationRequestIdRef.current) return;
+          recommendationEntriesRef.current.set(
+            workspace.id,
+            dashboardRecommendationEntries(workspace, response),
+          );
+          setRecommendations(
+            aggregateDashboardRecommendations(sources, recommendationEntriesRef.current),
+          );
         })
-        .slice(0, RECOMMENDATION_MAX),
-    );
+        .catch(() => {
+          // The overview card owns the actionable S2 error state. The homepage
+          // preview must remain non-blocking when a cold source is unavailable.
+        });
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -79,7 +82,7 @@ export default function DashboardPage() {
         return {
           workspace,
           counts: readiness.status === "fulfilled" ? readiness.value.counts : null,
-          pendingTasks: taskItems?.filter((task) => ["queued", "running", "waiting_for_user", "failed"].includes(task.status)) ?? taskItems,
+          pendingTasks: taskItems?.filter((task) => isTaskNeedingAttention(task)) ?? taskItems,
           waitingRuns: runItems?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? runItems,
           opportunities: opportunities.status === "fulfilled" ? opportunities.value.items : null,
           pendingOpportunityCount: opportunities.status === "fulfilled" ? opportunities.value.total : null,
@@ -100,7 +103,7 @@ export default function DashboardPage() {
   useEffect(() => { void load(); }, [load]);
 
   const actions = summaries.flatMap((summary) => [
-    ...(summary.pendingTasks ?? []).map((task) => ({ key: `task-${task.id}`, workspace: summary.workspace, title: task.status === "failed" ? "后台任务处理失败" : "后台任务正在处理", status: task.status, href: `/workspaces/${summary.workspace.id}/activity` })),
+    ...(summary.pendingTasks ?? []).map((task) => ({ key: `task-${task.id}`, workspace: summary.workspace, title: task.status === "failed" ? "近期后台任务处理失败" : "后台任务正在处理", status: task.status, href: `/workspaces/${summary.workspace.id}/activity` })),
     ...(summary.waitingRuns ?? []).map((run) => ({ key: `run-${run.id}`, workspace: summary.workspace, title: "Discover 等待继续", status: run.status, href: `/workspaces/${summary.workspace.id}/discover?run=${run.id}` })),
     ...(summary.opportunities ?? []).map((opportunity) => ({ key: `opportunity-${opportunity.id}`, workspace: summary.workspace, title: opportunity.title, status: opportunity.status, href: `/workspaces/${summary.workspace.id}/discover?opportunity=${opportunity.id}` })),
   ]).slice(0, 8);

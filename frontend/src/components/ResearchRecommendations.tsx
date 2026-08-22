@@ -28,15 +28,9 @@ import recommendationsApi, {
 import semanticScholarApi from "../api/semanticScholar";
 import readingApi from "../api/reading";
 import type { Paper } from "../api/types/domain";
+import { recommendationErrorMessage } from "../state/recommendationState";
 
 const { Paragraph, Text } = Typography;
-
-function errorMessage(error: unknown): string {
-  const detail = (
-    error as { response?: { data?: { detail?: { message?: string } } } }
-  ).response?.data?.detail;
-  return detail?.message || (error as Error).message || "请求失败";
-}
 
 function authorsLabel(paper: PaperRecommendation["paper"]): string {
   const names = (paper.authors ?? [])
@@ -74,7 +68,7 @@ export default function ResearchRecommendations({
     try {
       setData(await recommendationsApi.list(workspaceId));
     } catch (requestError) {
-      setError(errorMessage(requestError));
+      setError(recommendationErrorMessage(requestError));
     } finally {
       setLoading(false);
     }
@@ -91,8 +85,9 @@ export default function ResearchRecommendations({
       setData(await recommendationsApi.refresh(workspaceId));
       message.success("论文推荐已更新");
     } catch (requestError) {
-      setError(errorMessage(requestError));
-      message.error(`刷新推荐失败：${errorMessage(requestError)}`);
+      const displayError = recommendationErrorMessage(requestError);
+      setError(displayError);
+      message.error(`刷新推荐失败：${displayError}`);
     } finally {
       setRefreshing(false);
     }
@@ -122,7 +117,7 @@ export default function ResearchRecommendations({
       await onImported?.(paper);
       message.success(addToReading ? "论文已导入并加入阅读库" : "论文已导入当前课题");
     } catch (requestError) {
-      message.error(`导入论文失败：${errorMessage(requestError)}`);
+      message.error(`导入论文失败：${recommendationErrorMessage(requestError)}`);
     } finally {
       setActionId(null);
     }
@@ -135,7 +130,7 @@ export default function ResearchRecommendations({
       await recommendationsApi.feedback(workspaceId, item.external_paper_id, "favorite");
       message.success("已加入收藏");
     } catch (requestError) {
-      message.error(`收藏失败：${errorMessage(requestError)}`);
+      message.error(`收藏失败：${recommendationErrorMessage(requestError)}`);
     } finally {
       setActionId(null);
     }
@@ -151,7 +146,7 @@ export default function ResearchRecommendations({
       );
       message.success("已减少此类推荐");
     } catch (requestError) {
-      message.error(`操作失败：${errorMessage(requestError)}`);
+      message.error(`操作失败：${recommendationErrorMessage(requestError)}`);
     }
   };
 
@@ -188,7 +183,7 @@ export default function ResearchRecommendations({
         <Alert
           type="warning"
           showIcon
-          message="暂时无法生成论文推荐"
+          message={data ? "实时刷新失败，正在展示上次生成的推荐" : "暂时无法生成论文推荐"}
           description={error}
           action={<Button size="small" onClick={() => void load()}>重试</Button>}
           style={{ marginBottom: 16 }}
