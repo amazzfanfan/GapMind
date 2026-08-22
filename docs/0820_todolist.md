@@ -9,15 +9,15 @@ GapMind 的主链路已经完成：论文导入与解析、知识抽取、检索
 
 最近一次本地验证结果：
 
-- 后端：`408 passed`
-- 前端：`48 passed`
+- 后端：`415 passed`
+- 前端：`49 passed`
 - TypeScript 类型检查：通过
 - 前端生产构建：通过
 - 浏览器走查：首页、亮暗主题、推荐聚合、知识图谱、Discover、HITL、研究计划、代码生成、W7 独立模式均可加载
 - 本地工作区：主 Demo workspace 为 `123100ea-e75b-4110-9048-1f5b92668c32`
 - Alembic：`0018_paper_recommendations (head)`；Celery 本机 worker 可响应 `ping`
 
-本地未提交的修复包括：Workspace RAG 检索失败时通过 SSE 返回明确错误、前端停止无限“正在思考”并显示重试入口，以及对应后端测试。遵守提交纪律，未经用户明确指示不得 commit/push。
+本地未提交的修复包括：Workspace RAG 流式失败降级，以及 P1 的独立模式、棋盘隧道异常、任务重派发与矩阵默认视图改进。遵守提交纪律，未经用户明确指示不得 commit/push。
 
 ## 二、剩余工作（按优先级）
 
@@ -35,18 +35,18 @@ GapMind 的主链路已经完成：论文导入与解析、知识抽取、检索
 
 | 编号 | 工作项 | 完成标准 | 状态 |
 |---|---|---|---|
-| F1 | W7 独立模式回归 | `analyze`、`write`、`respond` 无 workspace 时可独立运行；必须研究计划的模式给出正确提示，不出现跨 workspace 误用 | ☐ |
-| F2 | Gap Board 边界回归 | Ollama SSH 隧道可用、不可用、超时时均有明确状态；棋盘筛选、高亮、候选交接 Discover 的行为一致 | ☐ |
-| F3 | HITL 与证据约束复核 | 未确认的机会不能生成正式研究计划；确认、编辑确认、拒绝、暂缓均写入 Timeline，版本与 Evidence Passport 可追溯 | ☐ |
-| F4 | 任务状态体验 | parse/extract/discover/agent 任务的失败、重试、取消和重派发状态在前端一致展示；Celery Windows solo 池重启说明补齐 | ☐ |
-| F5 | 前端错误与空状态 | 统一处理 API 错误格式、网络断开、空工作区、无证据、过期缓存和长文本；亮暗主题下均无不可读文字或按钮 | ☐ |
+| F1 | W7 独立模式回归 | `analyze`、`write`、`respond` 在系统独立空间可实际完成；计划/代码等语料依赖模式会前置拒绝；可选计划也必须属于当前工作区；界面明确标注“独立模式（不检索）” | ✅ 2026-08-22 |
+| F2 | Gap Board 边界回归 | Ollama 连接、404、超时映射为可行动中文提示；不可用时标注记录收束为 invalid、Task 保持 failed+retryable；默认聚焦推荐核验候选，筛选与 Discover 交接保留 | ✅ 2026-08-22 |
+| F3 | HITL 与证据约束复核 | 未确认机会不能转换正式研究计划；确认、编辑确认、拒绝、暂缓均有 HumanDecision、Timeline、版本及 Evidence Passport 测试覆盖 | ✅ 2026-08-22（复核） |
+| F4 | 任务状态体验 | 取消即时终态；重试派发失败会回到 failed 而非伪 queued；前端操作有 loading、成功/失败反馈；Windows solo 启动命令见本文件 §七 | ✅ 2026-08-22 |
+| F5 | 前端错误与空状态 | 本轮已补独立模式空态/证据边界、棋盘任务指引和任务操作反馈；仍需在下一轮集中审计网络断开、长文本及亮暗主题极端状态 | ◐ |
 
 ### P2：质量、文档与工程收尾
 
 | 编号 | 工作项 | 完成标准 | 状态 |
 |---|---|---|---|
 | Q1 | 外部服务失败测试 | 为 embedding、Semantic Scholar、LLM 主备切换、流式错误和缓存 stale 增加不依赖外部服务的测试 | ☐ |
-| Q2 | 完整回归基线 | 后端 pytest、前端测试、`tsc --noEmit`、生产构建全部通过；后端 API 变更后执行 `npm run gen:api` | ☐ |
+| Q2 | 完整回归基线 | 2026-08-22 已通过后端 `415 passed`、前端 `49 passed`、类型检查和生产构建；本轮未改 OpenAPI，故无需重新生成类型 | ◐ |
 | Q3 | lint 工具修复 | 补齐或确认 ESLint 9 配置，使 `npm run lint` 可执行；若暂不修复，记录原因和替代检查方式 | ☐ |
 | Q4 | 文档引用整理 | 处理 `docs/0811_demo_script.md` 对缺失历史文档的引用；补充本轮收尾记录、已知风险和演示注意事项 | ☐ |
 | Q5 | 数据与迁移检查 | 确认 Alembic head、软删除过滤、workspace 隔离、关键索引和幂等任务行为；不得通过改固定 Gold Set 绕过评测 | ☐ |
@@ -127,4 +127,4 @@ npm run build
 5. `docs/0814_independent_modules_plan.md`、`docs/0814_changes_summary.md`
 6. `docs/0818_dark_theme_fix_plan.md`
 
-默认从 P0 的 L1/L2 开始，先把外部服务不可用时的产品行为稳定下来，再处理 Demo 数据清理和完整演示回归。
+默认从 P1 的 F5 开始，集中审计网络断开、长文本与亮暗主题极端状态；随后完成 P0 的 L4 不间断预演和 P2 工程收尾。
