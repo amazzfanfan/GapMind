@@ -75,7 +75,7 @@ class RerankerGateway:
 
         if not self.api_key:
             raise RuntimeError(
-                "SILICONFLOW_API_KEY is not set. Configure backend/.env."
+                "SILICONFLOW_API_KEY is not set. Configure the repo-root .env."
             )
 
         import time

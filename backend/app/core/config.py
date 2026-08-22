@@ -1,22 +1,28 @@
 """Application configuration.
 
 Loads from environment variables with sensible defaults for local dev.
+The env file lives at the repo root (single source of truth shared with
+docker compose and vite); resolve it from this file's location so the
+CWD at launch time (backend/, repo root, IDE runner) does not matter.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -56,6 +62,11 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
+    # demo-day fuse: fall over to a backup OpenAI-compatible endpoint when the
+    # primary fails; enabled only when all three backup fields are set
+    deepseek_backup_api_key: str = ""
+    deepseek_backup_base_url: str = ""
+    deepseek_backup_model: str = ""
 
     # ---- Fine-tuned gap extractor (Ollama) ----
     gap_extractor_base_url: str = "http://127.0.0.1:11434"
