@@ -15,6 +15,8 @@ import ChatMessages from "../components/chat/ChatMessages";
 
 const localMessage = (conversationId: string, role: "user" | "assistant", content: string, sequence: number): ChatMessage => ({ id: `local-${role}-${Date.now()}-${sequence}`, conversation_id: conversationId, role, content, status: role === "assistant" ? "generating" : "completed", error_message: null, sequence, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, grounding_status: "not_requested", citations: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
 
+const MODE_VALUES: ChatMode[] = ["chat", "research_plan", "code_generation", "analyze", "write", "respond"];
+
 export default function ChatPage() {
   const { conversationId, id: routeWorkspaceId } = useParams<{ conversationId: string; id: string }>();
   const navigate = useNavigate();
@@ -36,7 +38,14 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [retryingId, setRetryingId] = useState<string>();
-  const [mode, setMode] = useState<ChatMode>("chat");
+  const [mode, setMode] = useState<ChatMode>(() => {
+    // stage direct-entry (LifecycleModules): /chat/new?mode=respond etc.
+    const requested = searchParams.get("mode");
+    if (!requested || !MODE_VALUES.includes(requested as ChatMode)) return "chat";
+    // plan/code modes are corpus-bound; ignore them on standalone /chat routes
+    if (!routeWorkspaceId && (requested === "research_plan" || requested === "code_generation")) return "chat";
+    return requested as ChatMode;
+  });
   const [researchPlans, setResearchPlans] = useState<ResearchPlan[]>([]);
   const [researchPlanId, setResearchPlanId] = useState<string>();
   const [agentRuns, setAgentRuns] = useState<AgentRunDetail[]>([]);

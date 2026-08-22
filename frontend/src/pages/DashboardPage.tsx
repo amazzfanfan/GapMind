@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "antd";
-import { FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
+import { BookOutlined, FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router-dom";
 import workspaceApi from "../api/workspace";
 import taskApi from "../api/task";
 import { discoverApi, type DiscoverRun, type ResearchOpportunity } from "../api/discover";
+import { recommendationsApi, type PaperRecommendation } from "../api/recommendations";
 import type { Workspace, WorkspaceReadiness } from "../api/types/workspace";
 import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
@@ -22,11 +23,43 @@ interface WorkspaceSummary {
   pendingOpportunityCount: number | null;
 }
 
+// Homepage aggregation entry: read-only preview, full actions (import /
+// favorite / dismiss) live on the workspace overview card.
+interface RecommendationEntry {
+  workspace: Workspace;
+  item: PaperRecommendation;
+}
+
+const RECOMMENDATION_PER_WORKSPACE = 2;
+const RECOMMENDATION_MAX = 6;
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const [summaries, setSummaries] = useState<WorkspaceSummary[]>([]);
+  const [recommendations, setRecommendations] = useState<RecommendationEntry[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const loadRecommendations = useCallback(async (workspaces: Workspace[]) => {
+    // read-only preview across workspaces; single failures are skipped
+    // silently (uncached workspaces call S2 upstream and may 502), and the
+    // system independent space (__independent__, 约定15) never appears as a source
+    const sources = workspaces.filter((workspace) => workspace.name !== "__independent__");
+    const results = await Promise.allSettled(
+      sources.map((workspace) => recommendationsApi.list(workspace.id)),
+    );
+    setRecommendations(
+      sources
+        .flatMap((workspace, index) => {
+          const result = results[index];
+          if (result.status !== "fulfilled" || !result.value.has_profile) return [];
+          return result.value.items
+            .slice(0, RECOMMENDATION_PER_WORKSPACE)
+            .map((item) => ({ workspace, item } satisfies RecommendationEntry));
+        })
+        .slice(0, RECOMMENDATION_MAX),
+    );
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,8 +86,12 @@ export default function DashboardPage() {
         } satisfies WorkspaceSummary;
       }));
       setSummaries(next);
+      // decoupled: recommendation calls can wait on the S2 upstream for
+      // uncached workspaces (~5s); the main view must not block on them
+      void loadRecommendations(workspaces);
     } catch {
       setSummaries([]);
+      setRecommendations([]);
     } finally {
       setLoading(false);
     }
@@ -84,6 +121,7 @@ export default function DashboardPage() {
       ) : (
         <>
           {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
+          {recommendations.length > 0 && <Card title={<Space size={6}><BookOutlined />论文推荐</Space>} extra={<Typography.Text type="secondary">来自各课题语料画像 · 完整操作见课题概览</Typography.Text>} style={{ marginBottom: 20 }}><List size="small" dataSource={recommendations} renderItem={({ workspace, item }) => <List.Item actions={[<Link key="open" to={`/workspaces/${workspace.id}/overview`}>查看课题 <RightOutlined /></Link>]}><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color="blue">{workspace.name}</Tag><Typography.Text strong ellipsis={{ tooltip: item.paper.title }} style={{ maxWidth: 480 }}>{item.paper.title || "未命名论文"}</Typography.Text><Typography.Text type="secondary">{item.paper.publicationDate?.slice(0, 4) || (item.paper.year ?? "年份未知")}</Typography.Text><Tag>相关度 {Math.round(item.score * 100)}%</Tag></Space>{item.reasons[0] && <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: item.reasons[0] }}>{item.reasons[0]}</Typography.Text>}</Space></List.Item>} /></Card>}
           <Typography.Title level={4}>最近课题</Typography.Title>
           <Row gutter={[16, 16]}>
             {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.counts ? `文献 ${summary.counts.papers} 篇` : "文献：暂不可用"}</Tag><Tag>{summary.counts ? `待审核知识 ${summary.counts.pending_knowledge}` : "知识：暂不可用"}</Tag><Tag color={(summary.counts?.pending_opportunities ?? summary.pendingOpportunityCount) ? "orange" : "default"}>{summary.counts ? `待处理机会 ${summary.counts.pending_opportunities}` : summary.pendingOpportunityCount === null ? "机会：暂不可用" : `待处理机会 ${summary.pendingOpportunityCount}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}

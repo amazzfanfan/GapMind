@@ -13,8 +13,11 @@ import { useNavigate } from "react-router-dom";
 /**
  * P1.5: research-lifecycle module entry cards (Discover → Plan → Execute →
  * Analyze → Publish → Respond), mirroring the standalone index.html overview.
- * Each module works as an independent entry point; workspace-bound modules
- * (Discover / Plan) ask the user to pick a workspace first.
+ *
+ * 2026-08-20: stage direct-entry. Corpus-bound modules (Discover / Plan /
+ * Execute) require a workspace; the user-material modules (Analyze / Publish /
+ * Respond) deep-link into the assistant with their mode preselected — with a
+ * workspace for evidence grounding, or standalone (independent mode) without.
  */
 
 interface LifecycleModule {
@@ -30,10 +33,17 @@ const MODULES: LifecycleModule[] = [
   { key: "discover", title: "Discover", subtitle: "研究机会发现", description: "多智能体协同，从证据链发现可验证的研究缺口", icon: <BulbOutlined />, workspaceBound: true },
   { key: "plan", title: "Plan", subtitle: "研究计划", description: "生成可证伪、回链证据的研究计划，人工确认后落库", icon: <ExperimentOutlined />, workspaceBound: true },
   { key: "execute", title: "Execute", subtitle: "代码生成", description: "基于计划生成可复现的实验代码项目，可预览/下载", icon: <FundProjectionScreenOutlined />, workspaceBound: true },
-  { key: "analyze", title: "Analyze", subtitle: "结果分析", description: "对照证伪标准分析实验结果，判定支持/否定", icon: <FileSearchOutlined />, workspaceBound: true },
-  { key: "publish", title: "Publish", subtitle: "论文写作", description: "基于计划与证据生成论文章节草稿", icon: <SafetyCertificateOutlined />, workspaceBound: true },
-  { key: "respond", title: "Respond", subtitle: "审稿回复", description: "逐条回应审稿意见，依据回链证据", icon: <SendOutlined />, workspaceBound: true },
+  { key: "analyze", title: "Analyze", subtitle: "结果分析", description: "对照证伪标准分析实验结果，判定支持/否定", icon: <FileSearchOutlined />, workspaceBound: false },
+  { key: "publish", title: "Publish", subtitle: "论文写作", description: "基于计划与证据生成论文章节草稿", icon: <SafetyCertificateOutlined />, workspaceBound: false },
+  { key: "respond", title: "Respond", subtitle: "审稿回复", description: "逐条回应审稿意见，依据回链证据", icon: <SendOutlined />, workspaceBound: false },
 ];
+
+// module key -> assistant ChatMode for direct entry (user-material modules)
+const MODE_BY_KEY: Record<string, "analyze" | "write" | "respond"> = {
+  analyze: "analyze",
+  publish: "write",
+  respond: "respond",
+};
 
 export default function LifecycleModules({ workspaceId }: { workspaceId?: string }) {
   const navigate = useNavigate();
@@ -50,15 +60,26 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
       navigate(module.key === "discover" ? `/workspaces/${workspaceId}/discover` : `/workspaces/${workspaceId}/plans`);
       return;
     }
-    // W7 modules work standalone (independent mode) — no workspace required.
-    navigate(workspaceId ? `/workspaces/${workspaceId}/assistant` : "/chat");
+    if (module.key === "execute") {
+      // code generation requires a confirmed research plan (workspace-bound)
+      if (!workspaceId) {
+        message.info("代码生成需要课题空间中的研究计划");
+        navigate("/workspaces");
+        return;
+      }
+      navigate(`/workspaces/${workspaceId}/assistant?mode=code_generation`);
+      return;
+    }
+    // user-material modules: direct entry with the mode preselected;
+    // standalone (independent mode) when no workspace is picked
+    const mode = MODE_BY_KEY[module.key];
+    navigate(workspaceId ? `/workspaces/${workspaceId}/assistant?mode=${mode}` : `/chat/new?mode=${mode}`);
   };
 
   return (
     <Card
       className="gm-section-card"
       title="研究生命周期模块"
-      extra={!workspaceId ? <Tag color="blue">请先选择课题空间</Tag> : undefined}
       style={{ marginTop: 16 }}
     >
       <Row gutter={[12, 12]}>
@@ -77,8 +98,9 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
                   <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{module.subtitle}</Typography.Text></div>
                 </div>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{module.description}</Typography.Text>
+                <div>{module.workspaceBound ? <Tag style={{ marginInlineEnd: 0 }}>需课题空间</Tag> : <Tag color="green" style={{ marginInlineEnd: 0 }}>可独立使用</Tag>}</div>
                 <Button type="link" size="small" style={{ padding: 0 }} icon={<ArrowRightOutlined />}>
-                  {workspaceId ? "进入" : module.key === "discover" || module.key === "plan" ? "选择课题空间" : "独立使用"}
+                  {workspaceId || !module.workspaceBound ? "进入" : "选择课题空间"}
                 </Button>
               </Space>
             </Card>
