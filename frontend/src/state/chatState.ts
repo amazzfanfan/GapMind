@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { ChatConversation, ChatMessage } from "../api/chat";
+import { requestErrorMessage } from "./requestFeedback";
 
 export function truncateChatTitle(title: string, maxLength = 38): string {
   const normalized = title.replace(/\s+/g, " ").trim();
@@ -10,8 +11,11 @@ export function sortChatMessages(messages: ChatMessage[]): ChatMessage[] {
   return [...messages].sort((a, b) => a.sequence - b.sequence);
 }
 
-export function chatConversationPath(conversation: ChatConversation): string {
-  return conversation.workspace_id
+export function chatConversationPath(
+  conversation: ChatConversation,
+  independentWorkspaceIds: ReadonlySet<string> = new Set(),
+): string {
+  return conversation.workspace_id && !independentWorkspaceIds.has(conversation.workspace_id)
     ? `/workspaces/${conversation.workspace_id}/assistant/${conversation.id}`
     : `/chat/${conversation.id}`;
 }
@@ -43,7 +47,6 @@ export function groupConversations(conversations: ChatConversation[]): Array<{ l
 }
 
 export function chatErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === "object" && detail?.message) return String(detail.message);
@@ -52,7 +55,7 @@ export function chatErrorMessage(error: unknown): string {
     if (error.response?.status === 503) return "AI 服务尚未配置，请联系管理员。";
     if (error.response?.status === 502) return "AI 服务暂时不可用，请稍后重试。";
   }
-  return "操作失败，请稍后重试。";
+  return requestErrorMessage(error);
 }
 
 /**

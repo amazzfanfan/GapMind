@@ -37,5 +37,6 @@ describe("chat helpers", () => {
     const date = new Date().toISOString();
     expect(chatConversationPath({ ...conversation("grounded", date), workspace_id: "ws-1" })).toBe("/workspaces/ws-1/assistant/grounded");
     expect(chatConversationPath({ ...conversation("general", date), workspace_id: null })).toBe("/chat/general");
+    expect(chatConversationPath({ ...conversation("independent", date), workspace_id: "system-ws" }, new Set(["system-ws"]))).toBe("/chat/independent");
   });
 });

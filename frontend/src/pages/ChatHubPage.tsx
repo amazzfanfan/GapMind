@@ -1,37 +1,61 @@
-import { useEffect, useMemo, useState } from "react";
-import { App, Button, Card, Col, Empty, List, Row, Skeleton, Space, Tag, Typography } from "antd";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Button, Card, Col, Empty, List, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { ArrowRightOutlined, BulbOutlined, MessageOutlined, ProjectOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import chatApi, { type ChatConversation } from "../api/chat";
 import workspaceApi from "../api/workspace";
 import type { Workspace } from "../api/types/workspace";
 import { chatConversationPath } from "../state/chatState";
+import { isIndependentWorkspaceName } from "../state/independentMode";
+import { requestErrorMessage } from "../state/requestFeedback";
 
 const { Paragraph, Text, Title } = Typography;
 
 export default function ChatHubPage() {
   const navigate = useNavigate();
-  const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [workspaceResult, conversationResult] = await Promise.allSettled([
       workspaceApi.list({ limit: 200 }),
       chatApi.listConversations({ limit: 100 }),
-    ])
-      .then(([workspaceResult, conversationResult]) => {
-        setWorkspaces(workspaceResult.items);
-        setConversations(conversationResult.items);
-      })
-      .catch(() => message.error("AI 助手中心加载失败，请稍后重试。"))
-      .finally(() => setLoading(false));
-  }, [message]);
+    ]);
+    if (workspaceResult.status === "fulfilled") {
+      setWorkspaces(workspaceResult.value.items);
+      setWorkspaceError(null);
+    } else {
+      setWorkspaces([]);
+      setWorkspaceError(requestErrorMessage(workspaceResult.reason, "课题空间暂时无法加载，请稍后重试。"));
+    }
+    if (conversationResult.status === "fulfilled") {
+      setConversations(conversationResult.value.items);
+      setConversationError(null);
+    } else {
+      setConversations([]);
+      setConversationError(requestErrorMessage(conversationResult.reason, "对话记录暂时无法加载，请稍后重试。"));
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const assistantWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => !isIndependentWorkspaceName(workspace.name)),
+    [workspaces],
+  );
+  const independentWorkspaceIds = useMemo(
+    () => new Set(workspaces.filter((workspace) => isIndependentWorkspaceName(workspace.name)).map((workspace) => workspace.id)),
+    [workspaces],
+  );
 
   const workspaceNames = useMemo(
-    () => Object.fromEntries(workspaces.map((workspace) => [workspace.id, workspace.name])),
-    [workspaces],
+    () => Object.fromEntries(assistantWorkspaces.map((workspace) => [workspace.id, workspace.name])),
+    [assistantWorkspaces],
   );
   const conversationCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -50,11 +74,11 @@ export default function ChatHubPage() {
 
     <section className="gm-assistant-section">
       <div className="gm-assistant-section-heading"><div><Title level={4}>选择课题空间</Title><Text type="secondary">进入课题后，AI 回答会检索该空间中已向量化的论文并附带原文证据。</Text></div><Button type="link" onClick={() => navigate("/workspaces")}>管理课题空间</Button></div>
-      {loading ? <Row gutter={[16, 16]}>{[1, 2, 3].map((item) => <Col xs={24} md={12} xl={8} key={item}><Card><Skeleton active paragraph={{ rows: 2 }} /></Card></Col>)}</Row> : workspaces.length === 0 ? <Card><Empty description="还没有课题空间" image={Empty.PRESENTED_IMAGE_SIMPLE}><Button type="primary" onClick={() => navigate("/workspaces")}>创建课题空间</Button></Empty></Card> : <Row gutter={[16, 16]}>{workspaces.map((workspace) => <Col xs={24} md={12} xl={8} key={workspace.id}><Card hoverable className="gm-assistant-workspace-card" onClick={() => navigate(`/workspaces/${workspace.id}/assistant`)}><Space direction="vertical" size={10} style={{ width: "100%" }}><div className="gm-assistant-workspace-title"><span className="gm-assistant-workspace-icon"><ProjectOutlined /></span><Title level={5}>{workspace.name}</Title><ArrowRightOutlined /></div><Paragraph type="secondary" ellipsis={{ rows: 2 }}>{workspace.topic || workspace.description || "尚未填写研究主题"}</Paragraph><Space wrap><Tag color="blue">证据对话</Tag><Text type="secondary">{conversationCounts[workspace.id] ?? 0} 段历史对话</Text></Space></Space></Card></Col>)}</Row>}
+      {loading ? <Row gutter={[16, 16]}>{[1, 2, 3].map((item) => <Col xs={24} md={12} xl={8} key={item}><Card><Skeleton active paragraph={{ rows: 2 }} /></Card></Col>)}</Row> : workspaceError ? <Alert type="warning" showIcon message="课题空间暂时无法加载" description={workspaceError} action={<Button size="small" onClick={() => void load()}>重试</Button>} /> : assistantWorkspaces.length === 0 ? <Card><Empty description="还没有课题空间" image={Empty.PRESENTED_IMAGE_SIMPLE}><Button type="primary" onClick={() => navigate("/workspaces")}>创建课题空间</Button></Empty></Card> : <Row gutter={[16, 16]}>{assistantWorkspaces.map((workspace) => <Col xs={24} md={12} xl={8} key={workspace.id}><Card hoverable className="gm-assistant-workspace-card" onClick={() => navigate(`/workspaces/${workspace.id}/assistant`)}><Space direction="vertical" size={10} style={{ width: "100%" }}><div className="gm-assistant-workspace-title"><span className="gm-assistant-workspace-icon"><ProjectOutlined /></span><Title level={5}>{workspace.name}</Title><ArrowRightOutlined /></div><Paragraph type="secondary" ellipsis={{ rows: 2 }}>{workspace.topic || workspace.description || "尚未填写研究主题"}</Paragraph><Space wrap><Tag color="blue">证据对话</Tag><Text type="secondary">{conversationCounts[workspace.id] ?? 0} 段历史对话</Text></Space></Space></Card></Col>)}</Row>}
     </section>
 
     <Row gutter={[18, 18]} className="gm-assistant-lower-grid">
-      <Col xs={24} lg={16}><Card title="最近的研究对话" extra={conversations.length > recent.length ? <Text type="secondary">显示最近 {recent.length} 条</Text> : null}>{loading ? <Skeleton active /> : recent.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无对话记录" /> : <List dataSource={recent} renderItem={(conversation) => <List.Item className="gm-assistant-recent-item" onClick={() => navigate(chatConversationPath(conversation))} extra={<ArrowRightOutlined />}><List.Item.Meta avatar={<span className="gm-assistant-conversation-icon"><MessageOutlined /></span>} title={conversation.title} description={conversation.workspace_id ? workspaceNames[conversation.workspace_id] ?? "课题空间" : "通用对话"} /></List.Item>} />}</Card></Col>
+      <Col xs={24} lg={16}><Card title="最近的研究对话" extra={conversations.length > recent.length ? <Text type="secondary">显示最近 {recent.length} 条</Text> : null}>{loading ? <Skeleton active /> : conversationError ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={conversationError}><Button onClick={() => void load()}>重新加载</Button></Empty> : recent.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无对话记录" /> : <List dataSource={recent} renderItem={(conversation) => <List.Item className="gm-assistant-recent-item" onClick={() => navigate(chatConversationPath(conversation, independentWorkspaceIds))} extra={<ArrowRightOutlined />}><List.Item.Meta avatar={<span className="gm-assistant-conversation-icon"><MessageOutlined /></span>} title={conversation.title} description={conversation.workspace_id && !independentWorkspaceIds.has(conversation.workspace_id) ? workspaceNames[conversation.workspace_id] ?? "课题空间" : "通用对话"} /></List.Item>} />}</Card></Col>
       <Col xs={24} lg={8}><Card className="gm-assistant-general-card"><Space direction="vertical" size={14}><span className="gm-assistant-general-icon"><BulbOutlined /></span><div><Title level={4}>通用对话</Title><Paragraph type="secondary">用于研究思路梳理、概念解释和文字润色，不会检索课题论文，也不会生成证据引用。</Paragraph></div><Button block onClick={() => navigate("/chat/new")}>开始通用对话</Button></Space></Card></Col>
     </Row>
   </div>;
