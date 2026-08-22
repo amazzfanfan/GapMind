@@ -1,99 +1,130 @@
-# GapMind 任务清单与 ChatGPT 交接（2026-08-20）
+# GapMind 本地封版收尾清单与交接（2026-08-22）
 
-> 本项目已完成大量工作。此文档第一部分是新任务清单（含历史已完成项的归档），
-> 第二部分是**给 ChatGPT 的交接说明**——如果要让一个新的 AI 会话接手后续开发，请把它连同仓库一起提供。
+> 当前策略：先完成本地功能闭环、异常降级和演示稳定性，再考虑 3090 部署。
+> 服务器部署暂不执行，也不作为本地封版的前置条件。
 
----
+## 一、当前状态
 
-## 第一部分：任务清单
+GapMind 的主链路已经完成：论文导入与解析、知识抽取、检索与 Workspace RAG、Discover 多智能体、外部新颖性核验、Critic、Evidence Passport、HITL 四决策、研究计划、代码生成、结果分析、论文写作、审稿回复，以及研究空白棋盘均已具备。
 
-### 当前未完成（按优先级）
+最近一次本地验证结果：
 
-| # | 任务 | 描述 | 状态 |
+- 后端：`408 passed`
+- 前端：`48 passed`
+- TypeScript 类型检查：通过
+- 前端生产构建：通过
+- 浏览器走查：首页、亮暗主题、推荐聚合、知识图谱、Discover、HITL、研究计划、代码生成、W7 独立模式均可加载
+- 本地工作区：主 Demo workspace 为 `123100ea-e75b-4110-9048-1f5b92668c32`
+- Alembic：`0018_paper_recommendations (head)`；Celery 本机 worker 可响应 `ping`
+
+本地未提交的修复包括：Workspace RAG 检索失败时通过 SSE 返回明确错误、前端停止无限“正在思考”并显示重试入口，以及对应后端测试。遵守提交纪律，未经用户明确指示不得 commit/push。
+
+## 二、剩余工作（按优先级）
+
+### P0：本地演示稳定性
+
+| 编号 | 工作项 | 完成标准 | 状态 |
 |---|---|---|---|
-| T1 | **现场演示预演（W6-5 完整版）** | 代码生成 Phase A/B + 首页直达/推荐已上线，需按 0811_demo_script.md 重走一遍全流程（导入→对话→Discover→代码生成→分析→写作→审稿），确认演示动线最短 | ☐ |
-| T2 | **前端回归验证** | 本批 3 处改动（LifecycleModules 直达 / ChatPage ?mode= / Dashboard 推荐聚合）+ 暗色主题，浏览器两主题走查一遍 | ☐ |
-| T3 | **部署到 3090 服务器** | 按 `deploy/README.md`（本地物料，不入库）：compose 端口已加固、nginx/systemd/Dockerfile 已备好；部署后按手册"首跑自检"7 项验证 | ☐ |
-| T4 | **S2 演示前确认** | 当前网络下 S2 SSL 偶发失败（推荐接口 502）——演示时若 S2 不通，推荐卡自动隐藏（graceful），但 Discover 外部核验会降级；演示前确认 S2 可用或准备降级话术 | ☐ |
-| T5 | **README 部署段核对** | deploy/ 不入库，README 的 Deployment 段已删；确认无死链 | ✅ 已完成 |
+| L1 | 外部 embedding 失败降级 | 流式 RAG 检索失败会结束 loading、持久化失败状态并显示向量化/Milvus 恢复提示与重试入口；无证据时不伪造答案 | ✅ 2026-08-22 |
+| L2 | Semantic Scholar 降级体验 | 429、超时、服务不可用显示稳定中文提示；缓存推荐可继续展示并标识 stale；首页推荐按 workspace 渐进加载，不等待冷源 S2 请求 | ✅ 2026-08-22 |
+| L3 | Demo workspace 状态清理 | 已定位 44 条历史失败任务（旧 Ollama 404、早期 LLM/烟雾测试等）；不删审计记录，首页/概览仅提示 24 小时内的失败，历史记录留在处理中心 | ✅ 2026-08-22 |
+| L4 | 演示脚本最终回归 | 已完成首页、知识图谱、Discover 交接/外部候选、HITL、研究计划、独立模式烟雾回归；仍需按 `docs/0811_demo_script.md` 做一次不间断全流程预演并固化备用话术 | ◐ |
+| L5 | 本地启动与健康检查 | 已确认 `health/ready`、Demo readiness、Alembic head 和 Celery worker ping；后端/前端服务可用 | ✅ 2026-08-22 |
 
-### 历史已完成（归档）
+### P1：功能边界与用户体验
 
-- **代码生成 Phase A**（已提交 `71080c5`）：蓝图→逐文件生成→静态检查（含 syntax_valid）→rubric 覆盖度自检→known_gaps→evidence_refs；详见 `0819_code_generation_improvement.md`
-- **代码生成 Phase B**（已提交 `21d7338` + `1563948`）：CodeRAG-lite 分面检索、单文件失败降级（file_errors）、产物下载（RFC 5987 + X-File-Name）、ZIP 含 RESEARCH_PLAN.md、移除 Docker 沙箱（决策记录见文档 §十）
-- **LLM 主备降级**（已提交 `a03c397`）：DEEPSEEK_BACKUP_* 三项全填启用，主失败自动切备用
-- **环境文件整合**（已提交 `a03c397`）：三份 .env.example 合并为根目录一份；config 按文件位置解析根 .env（不依赖 CWD）；vite envDir
-- **首页科研生命周期直达 + 推荐聚合**（已提交 `0ae9173`）：阶段直达（?mode=）+ 首页论文推荐卡
-- 早期归档见 `0811_todolist.md`（P0/P0.5/P1 全部完成）
+| 编号 | 工作项 | 完成标准 | 状态 |
+|---|---|---|---|
+| F1 | W7 独立模式回归 | `analyze`、`write`、`respond` 无 workspace 时可独立运行；必须研究计划的模式给出正确提示，不出现跨 workspace 误用 | ☐ |
+| F2 | Gap Board 边界回归 | Ollama SSH 隧道可用、不可用、超时时均有明确状态；棋盘筛选、高亮、候选交接 Discover 的行为一致 | ☐ |
+| F3 | HITL 与证据约束复核 | 未确认的机会不能生成正式研究计划；确认、编辑确认、拒绝、暂缓均写入 Timeline，版本与 Evidence Passport 可追溯 | ☐ |
+| F4 | 任务状态体验 | parse/extract/discover/agent 任务的失败、重试、取消和重派发状态在前端一致展示；Celery Windows solo 池重启说明补齐 | ☐ |
+| F5 | 前端错误与空状态 | 统一处理 API 错误格式、网络断开、空工作区、无证据、过期缓存和长文本；亮暗主题下均无不可读文字或按钮 | ☐ |
 
-### 明确不做（维持）
-- P2-4 外部自动生成 recall：校准完成，不再推进（gold set 过拟合）
-- 登录系统：不必要（X-User-ID 已是认证扩展点，赛后接 OIDC 即可）
-- 多模型 provider 管理：不必要（网关天然多厂商，主备降级已够）
-- 沙箱（代码执行验证）：已移除
+### P2：质量、文档与工程收尾
 
----
+| 编号 | 工作项 | 完成标准 | 状态 |
+|---|---|---|---|
+| Q1 | 外部服务失败测试 | 为 embedding、Semantic Scholar、LLM 主备切换、流式错误和缓存 stale 增加不依赖外部服务的测试 | ☐ |
+| Q2 | 完整回归基线 | 后端 pytest、前端测试、`tsc --noEmit`、生产构建全部通过；后端 API 变更后执行 `npm run gen:api` | ☐ |
+| Q3 | lint 工具修复 | 补齐或确认 ESLint 9 配置，使 `npm run lint` 可执行；若暂不修复，记录原因和替代检查方式 | ☐ |
+| Q4 | 文档引用整理 | 处理 `docs/0811_demo_script.md` 对缺失历史文档的引用；补充本轮收尾记录、已知风险和演示注意事项 | ☐ |
+| Q5 | 数据与迁移检查 | 确认 Alembic head、软删除过滤、workspace 隔离、关键索引和幂等任务行为；不得通过改固定 Gold Set 绕过评测 | ☐ |
 
-## 第二部分：给 ChatGPT 的交接说明
+## 三、暂缓事项
 
-> 如果你正在用 ChatGPT 接手本项目的后续开发，请把以下内容作为上下文的一部分提供给它。
-> 仓库：`https://github.com/yuanxing629/GapMind`（分支 `yx_dev`）
+### T3：3090 部署
 
-### 0. 一句话
-GapMind 是一个面向 AI/CS 研究者的 **Human-in-the-Loop AI Research Workspace**（比赛项目，**近封版**）：导入论文 → 抽取知识 → 语义检索 + 多智能体 Discover 发现研究机会（含 Critic 与外部新颖性核验）→ 用户确认 → 研究计划 → 代码生成 → 结果分析 → 论文写作 → 审稿回复，另有研究空白棋盘（zf 微调模型）与 Workspace RAG 对话。
+暂不执行。待本地 P0/P1 完成、演示回归稳定后，再根据 `deploy/README.md` 进行部署和 7 项首跑自检。届时需要用户另行提供服务器 SSH 地址、端口、用户名、部署路径和认证方式。
 
-### 1. 必读文件（按序）
-1. `AGENTS.md` —— 项目记忆文件（中文），含目录结构、技术栈、核心工作流、启动命令、**关键约定**（HITL 铁律、Evidence Passport、软删除、提交纪律等）、常见坑。**最重要，先读。**
-2. `docs/0811_todolist.md` —— 历史任务清单（大部分已完成，看"状态"列即可）
-3. `docs/0819_code_generation_improvement.md` —— 代码生成改进的调研 + Phase A/B 实施记录 + 决策记录（为什么砍沙箱）
-4. `docs/0814_independent_modules_plan.md` / `docs/0814_changes_summary.md` —— 独立模式模块化设计
-5. `docs/0818_dark_theme_fix_plan.md` —— 暗色主题修复（含实施记录）
-6. `docs/0811_demo_script.md` —— 现场演示脚本
+## 四、已完成事项归档
 
-### 2. 启动（本地开发）
+- 基础链路：workspace、论文、PDF 解析、知识抽取、检索、Workspace RAG 对话
+- 检索质量 Gate：semantic 1.0 / similar 0.889 / counter 0.833 / leakage 0
+- Discover：Planner → Evidence → ExternalNovelty → Critic → Gate，AgentStep 交接流可见
+- Evidence Passport、外部核验部分成功、HITL 四决策、不可变版本、Timeline 中文事件
+- 研究计划、代码生成预览/下载、结果分析、论文写作、审稿回复
+- 独立模式：`GET /workspaces/independent` 及 W7 独立入口
+- 首页六生命周期模块、阶段直达、推荐聚合、亮暗主题
+- 语义去重 feature flag、知识图谱去冗余、证据折叠、公式渲染、棋盘高亮
+- gap 抽取幂等、棋盘矩阵类型筛选、Celery retry/cancel 重派发
+- 本地前后端自动化测试与浏览器回归
+
+## 五、已知风险
+
+1. 当前环境的 SiliconFlow embedding 请求可能出现 `Connection error`，因此真实 Workspace RAG 不能作为离线测试前置条件。
+2. Semantic Scholar 可能返回 HTTP 429，或因本机网络权限报 `WinError 10013`；演示不得依赖临时实时刷新。
+3. Demo workspace 有 44 条历史失败任务，主要源于旧 Ollama 隧道 404、早期 LLM 重试和烟雾测试；概览只提示近期失败，完整审计仍在处理中心。
+4. `npm run lint` 当前因缺少 ESLint 9 配置无法执行。
+5. `docs/0811_demo_script.md` 引用了当前仓库不存在的 `0809_freeze_version.md` 和 `0811_e2e_results.md`。
+6. zf 棋盘模型依赖服务器 Ollama SSH 隧道；本机不要启动 Ollama 占用 `127.0.0.1:11434`。
+
+## 六、不可违反的项目约定
+
+- LLM 调用一律 `disable_thinking=True`，不得同时传 `reasoning_effort`
+- AI 只能产出候选；关键资产必须人工确认后才进入正式表
+- 软删除，不硬删除；Task 由系统创建；Timeline 只读
+- 数据按 `workspace_id` 隔离；检索文本进入 SQL 前必须移除 `\x00`
+- 前端 API 类型由 `npm run gen:api` 生成，不手写 `api.gen.ts`
+- 不引入微服务、K8s、图数据库或重型 Agent 框架
+- 不自动执行 Agent 生成的完整代码，默认只预览/下载
+- 改动完成并测试通过后先汇报，等待用户明确指示后才 commit；push 需单独授权
+
+## 七、常用本地命令
+
 ```bash
-cd infra && docker compose --env-file ../.env up -d   # postgres/redis/milvus
-cd backend && .venv\Scripts\activate
+# 基础设施
+cd infra && docker compose --env-file ../.env up -d
+
+# 后端
+cd backend
+.venv\\Scripts\\activate
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
-# 另开终端
-celery -A app.workers.celery_app worker --loglevel=info   # Windows 自动 solo 池
-cd frontend && npm install && npm run dev                # :5173
+
+# Celery（Windows）
+celery -A app.workers.celery_app worker --loglevel=info --pool=solo
+
+# 前端
+cd frontend
+npm run dev
+
+# 回归
+cd backend && .venv\\Scripts\\python.exe -m pytest tests/ -q
+cd frontend && npm run test -- --run
+npm run typecheck
+npm run build
 ```
-- `.env` 在**仓库根目录**（单一环境文件，后端/compose/vite 共用），从根 `.env.example` 复制
-- 测试：`cd backend && .venv/Scripts/python.exe -m pytest tests/ -q`（407 个）+ `cd frontend && npm test -- --run`（43 个）+ `npx tsc --noEmit`
-- Windows 下 `backend/.env` 的系统环境变量会覆盖 `.env`，API key 不生效先 `unset`
 
-### 3. 关键约定（违反会被打回）
-- **提交纪律**：改完代码 → 跑测试 → **汇报，等用户明确告知才 commit**；push 需用户单独指示。**绝不自行 commit/push。**
-- **HITL 铁律**：AI 只出候选，关键资产（研究计划等）必须人工确认才落正式表
-- **软删除从不硬删除**；数据按 workspace_id 隔离
-- **LLM 调用一律 `disable_thinking=True`**（勿同时传 `reasoning_effort`，会 400）；主备降级已内置（`DEEPSEEK_BACKUP_*`）
-- **OpenAPI → TS 类型自动生成**（`npm run gen:api`），`api.gen.ts` 勿手写
-- **Celery Windows 用 solo 池**；任务修改后必须重启 worker
-- **docs/ 新文档以 `MMDD_` 开头**；交付/交接类用 `MMDD_delivery.md` / `MMDD_handoff.md`
-- **zf 模型**（Gap Board）经 SSH 隧道 `127.0.0.1:11434` 访问；本机不要装本地 Ollama 遮蔽隧道
-- 沙箱/代码执行验证已移除，不要重新引入（决策记录见 0819 文档 §十）
+## 八、接手顺序
 
-### 4. 代码生成 Agent 现状（最容易改坏的地方）
-- 流水线：workspace_retrieval（CodeRAG-lite 分面检索）→ module_design（蓝图 JSON）→ code_generation（逐文件，AST 接口摘要）→ static_review（纯 Python 5 项+语法门）→ rubric_check（覆盖度自检，产出 code_rubric.md + known_gaps）→ artifacts_ready
-- **单文件失败降级**：某文件重试两次仍失败 → 跳过并记 `file_errors`，run 不炸（这是对"模型偶发非 JSON"的兜底）
-- 代码在 `backend/app/domains/agent/service.py`（较大，约 2000 行，未拆分）
-- 相关测试：`tests/test_agent_api.py`（含多调用 FakeGateway）、`tests/test_llm_fallback.py`
+新会话接手时依次阅读：
 
-### 5. 当前未完成任务（见本文件第一部分）
-- T1 现场演示预演（按 demo_script 走全流程）
-- T2 前端回归验证（本批 3 处改动 + 暗色主题）
-- T3 部署到 3090 服务器（deploy/README.md 是本地物料，不入库）
-- T4 S2 演示前确认（当前网络 S2 SSL 偶发失败，推荐接口 502——已做 graceful 容错）
+1. `AGENTS.md`
+2. 本文件
+3. `docs/0811_demo_script.md`
+4. `docs/0819_code_generation_improvement.md`
+5. `docs/0814_independent_modules_plan.md`、`docs/0814_changes_summary.md`
+6. `docs/0818_dark_theme_fix_plan.md`
 
-### 6. 本会话最近改了什么（供 ChatGPT 快速了解，勿回滚）
-- 代码生成 Phase A/B（蓝图/逐文件/静态检查/rubric/known_gaps/下载/ZIP 含计划/移除沙箱）
-- 首页：LifecycleModules 阶段直达（`?mode=`）+ 论文推荐聚合卡（解耦加载）
-- LLM 主备降级；环境文件整合到仓库根；compose 端口绑定 127.0.0.1
-- 暗色主题写死颜色修复（提交 `fb5cdb9`）；对话流式输出修复（P0.5-1）
-- 最近提交：`0ae9173`（首页直达+推荐）→ `a03c397`（主备降级+env 整合）→ `21d7338`/`1563948`（Phase B）→ `71080c5`（Phase A）→ `fb5cdb9`（暗色）
-
-### 7. 常用命令与地址
-- API 文档 http://localhost:8000/docs · API 基路径 http://localhost:8000/api/v1 · 前端 http://localhost:5173
-- 后端目录 `D:\MyCode\Spark-competition\refactor\GapMind\backend` · 分支 `yx_dev` · 项目仓库 https://github.com/yuanxing629/GapMind
+默认从 P0 的 L1/L2 开始，先把外部服务不可用时的产品行为稳定下来，再处理 Demo 数据清理和完整演示回归。
