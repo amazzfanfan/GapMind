@@ -7,6 +7,7 @@ import json
 import re
 import sys
 from datetime import datetime, timezone
+from difflib import unified_diff
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -101,6 +102,32 @@ class AgentService:
         payload["prompt"] = prompt.strip()
         if not payload["prompt"]:
             raise AgentInputError("任务描述不能为空")
+        repair_parent_run: AgentRun | None = None
+        repair_parent_id = str(payload.get("repair_parent_run_id") or "")
+        if repair_parent_id:
+            repair_parent = self.db.get(AgentRun, repair_parent_id)
+            if (
+                repair_parent is None
+                or repair_parent.workspace_id != workspace_id
+                or repair_parent.conversation_id != conversation_id
+                or repair_parent.agent_type != "code_generation"
+                or repair_parent.status != "succeeded"
+            ):
+                raise AgentInputError("候选修复必须绑定当前对话中已完成的代码生成运行")
+            existing_repair = self.db.scalar(
+                select(AgentRun.id)
+                .where(AgentRun.parent_run_id == repair_parent.id)
+                .limit(1)
+            )
+            if existing_repair:
+                raise AgentConflictError("该代码生成运行已经生成过一次候选修复")
+            repair_parent_run = repair_parent
+            if not payload.get("research_plan_id"):
+                payload["research_plan_id"] = str(
+                    (repair_parent.result or {}).get("research_plan_id")
+                    or repair_parent.input_payload.get("research_plan_id")
+                    or ""
+                )
         plan = None
         plan_id = str(payload.get("research_plan_id") or "")
         if plan_id:
@@ -159,6 +186,8 @@ class AgentService:
             "workspace_name": workspace.name,
             "independent": workspace.name == INDEPENDENT_WORKSPACE_NAME,
         }
+        if repair_parent_run is not None:
+            context_snapshot["repair_parent_run_id"] = repair_parent_run.id
         if plan is not None:
             context_snapshot["research_plan"] = self._plan_snapshot(plan)
         run = AgentRun(
@@ -167,6 +196,7 @@ class AgentService:
             trigger_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
             task_id=task.id,
+            parent_run_id=repair_parent_run.id if repair_parent_run is not None else None,
             agent_type=agent_type,
             status="queued",
             current_stage="queued",
@@ -259,6 +289,8 @@ class AgentService:
             if run.agent_type == "deep_research":
                 return self._execute_deep_research(run)
             if run.agent_type == "code_generation":
+                if run.input_payload.get("repair_parent_run_id"):
+                    return self._execute_code_repair(run)
                 return self._execute_code_generation(run)
             if run.agent_type == "analyze":
                 return self._execute_analyze(run)
@@ -545,6 +577,231 @@ class AgentService:
         self.db.commit()
         return {"status": run.status, "run_id": run.id}
 
+    def _execute_code_repair(self, run: AgentRun) -> dict[str, Any]:
+        """Generate one bounded, preview-only repair candidate for a code run."""
+
+        parent_id = str(run.input_payload.get("repair_parent_run_id") or "")
+        parent = self.get(run.workspace_id, parent_id)
+        if parent.agent_type != "code_generation" or parent.status != "succeeded":
+            raise AgentInputError("候选修复的父运行不可用")
+        if self.db.scalar(
+            select(AgentRun.id).where(AgentRun.parent_run_id == parent.id).limit(1)
+        ) not in {None, run.id}:
+            raise AgentConflictError("该代码生成运行已经生成过一次候选修复")
+
+        parent_result = dict(parent.result or {})
+        static_review = dict(parent_result.get("static_review") or {})
+        checks: list[dict[str, Any]] = []
+        parent_checks: list[dict[str, Any]] = []
+        for item in static_review.get("checks") or []:
+            if not isinstance(item, dict):
+                continue
+            check = dict(item)
+            if check.get("severity") not in {"blocking", "advisory"}:
+                check["severity"] = (
+                    "blocking"
+                    if check.get("name") in {"blueprint_files_present", "syntax_valid", "entrypoint_present"}
+                    else "advisory"
+                )
+            parent_checks.append(check)
+            if not check.get("passed"):
+                checks.append(check)
+        if not checks:
+            raise AgentInputError("原代码运行没有需要修复的交付完整性检查缺口")
+        parent_blocking = [check for check in parent_checks if check["severity"] == "blocking"]
+        parent_advisory = [check for check in parent_checks if check["severity"] == "advisory"]
+        blueprint = dict((parent.context_snapshot or {}).get("blueprint") or {})
+        if not blueprint.get("files"):
+            raise AgentInputError("原代码运行缺少项目蓝图，无法生成候选修复")
+        plan_id = str(run.input_payload.get("research_plan_id") or "")
+        plan = self.db.get(ResearchPlan, plan_id)
+        if plan is None or plan.workspace_id != run.workspace_id:
+            raise AgentInputError("候选修复绑定的研究计划不存在或不属于当前工作区")
+        _, _, parent_artifacts = self.detail(run.workspace_id, parent.id)
+        parent_files = [
+            {
+                "path": artifact.filename,
+                "language": str((artifact.metadata_payload or {}).get("language") or "text"),
+                "content": artifact.content,
+            }
+            for artifact in parent_artifacts
+            if artifact.artifact_type == "code"
+        ]
+        if not parent_files:
+            raise AgentInputError("原代码运行没有可供修复的代码文件")
+
+        self._step(run, 1, "candidate_repair", "running", "正在根据交付完整性缺口生成一次修订候选")
+        self._transition(run, "running", "candidate_repair", 0.25)
+        prompt = self._code_repair_prompt(
+            run,
+            plan,
+            blueprint,
+            checks,
+            parent_files,
+        )
+        raw, usage = self._structured_completion(prompt, max_tokens=5000)
+        candidate_files = self._normalize_files(raw.get("files"))
+        if not candidate_files:
+            raise AgentInputError("模型没有返回有效的候选修复文件")
+
+        merged_by_path = {file["path"]: dict(file) for file in parent_files}
+        for file in candidate_files:
+            merged_by_path[file["path"]] = file
+        merged_files = list(merged_by_path.values())
+        review = self._static_review(merged_files, blueprint)
+        passed = sum(1 for check in review["checks"] if check["passed"])
+        blocking = [check for check in review["checks"] if check["severity"] == "blocking"]
+        advisory = [check for check in review["checks"] if check["severity"] == "advisory"]
+        for file in candidate_files:
+            self.db.add(
+                AgentArtifact(
+                    run_id=run.id,
+                    artifact_type="code",
+                    filename=file["path"],
+                    mime_type=self._mime_type(file["path"]),
+                    content=file["content"],
+                    metadata_payload={
+                        "language": file.get("language", "text"),
+                        "candidate_repair": True,
+                        "parent_run_id": parent.id,
+                    },
+                    validation_status="not_run",
+                )
+            )
+        parent_by_path = {file["path"]: file for file in parent_files}
+        diff_sections: list[str] = []
+        for file in candidate_files:
+            previous = parent_by_path.get(file["path"])
+            before_content = previous["content"] if previous else ""
+            diff_sections.append(
+                "\n".join(
+                    unified_diff(
+                        before_content.splitlines(),
+                        file["content"].splitlines(),
+                        fromfile=f"a/{file['path']}" if previous else "/dev/null",
+                        tofile=f"b/{file['path']}",
+                        lineterm="",
+                    )
+                )
+                or f"新增或替换文件：{file['path']}（无可显示的文本差异）"
+            )
+        repair_note = (
+            "# 候选修复静态检查\n\n"
+            "本候选只针对上一轮交付完整性检查缺口生成，未运行代码。\n\n"
+            f"阻断项：{sum(1 for check in blocking if check['passed'])}/{len(blocking)} 通过；"
+            f"改进项：{sum(1 for check in advisory if check['passed'])}/{len(advisory)} 通过。\n\n"
+            + "\n".join(
+                f"- {'✅' if check['passed'] else '❌'} {check['name']}：{check['detail']}"
+                for check in review["checks"]
+            )
+        )
+        diff_note = (
+            "# 候选修复变更预览\n\n"
+            "以下仅展示候选文件相对父运行代码的文本差异；未覆盖父运行产物。\n\n"
+            + "\n\n".join(f"```diff\n{section}\n```" for section in diff_sections)
+        )
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="code_review",
+                filename="code_repair_review.md",
+                mime_type="text/markdown",
+                content=repair_note,
+                metadata_payload={"kind": "candidate_repair_review", "parent_run_id": parent.id},
+                validation_status="not_run",
+            )
+        )
+        self.db.add(
+            AgentArtifact(
+                run_id=run.id,
+                artifact_type="code_review",
+                filename="code_repair_diff.md",
+                mime_type="text/markdown",
+                content=diff_note,
+                metadata_payload={"kind": "candidate_repair_diff", "parent_run_id": parent.id},
+                validation_status="not_run",
+            )
+        )
+        run.context_snapshot = {
+            **dict(run.context_snapshot or {}),
+            "parent_run_id": parent.id,
+            "blueprint": blueprint,
+        }
+        run.result = {
+            "research_plan_id": plan.id,
+            "summary": "已生成一次候选修复，仅供预览与人工审查",
+            "file_count": len(candidate_files),
+            "parent_run_id": parent.id,
+            "candidate_repair": {
+                "attempt": 1,
+                "changed_files": [file["path"] for file in candidate_files],
+                "source_checks": checks,
+                "before": {
+                    "blocking": {
+                        "passed": sum(1 for check in parent_blocking if check["passed"]),
+                        "total": len(parent_blocking),
+                    },
+                    "advisory": {
+                        "passed": sum(1 for check in parent_advisory if check["passed"]),
+                        "total": len(parent_advisory),
+                    },
+                },
+                "after": {
+                    "blocking": {
+                        "passed": sum(1 for check in blocking if check["passed"]),
+                        "total": len(blocking),
+                    },
+                    "advisory": {
+                        "passed": sum(1 for check in advisory if check["passed"]),
+                        "total": len(advisory),
+                    },
+                },
+            },
+            "static_review": {
+                "passed": passed,
+                "total": len(review["checks"]),
+                "blocking": {
+                    "passed": sum(1 for check in blocking if check["passed"]),
+                    "total": len(blocking),
+                },
+                "advisory": {
+                    "passed": sum(1 for check in advisory if check["passed"]),
+                    "total": len(advisory),
+                },
+                "checks": review["checks"],
+            },
+            "validation": {
+                "status": "not_run",
+                "message": "候选修复只完成静态检查，未运行代码或测试。",
+            },
+            "token_usage": {**usage, "llm_calls": 1},
+        }
+        self._step(
+            run,
+            2,
+            "candidate_repair",
+            "completed",
+            f"候选修复已生成，交付完整性检查通过 {passed}/{len(review['checks'])} 项",
+            {"checks": review["checks"], "changed_files": [file["path"] for file in candidate_files]},
+        )
+        run.status = "succeeded"
+        run.current_stage = "artifacts_ready"
+        run.progress = 1.0
+        if run.task_id:
+            TaskService(self.db).transition(
+                run.task_id,
+                "succeeded",
+                progress=1.0,
+                result={"agent_run_id": run.id, "parent_run_id": parent.id},
+            )
+        self._finish_assistant(
+            run,
+            "已生成一次代码候选修复。该候选不会覆盖原代码，也未运行代码或测试；请先查看变更文件和交付完整性检查结果。",
+            failed=False,
+        )
+        self.db.commit()
+        return {"status": run.status, "run_id": run.id, "file_count": len(candidate_files)}
+
     def _execute_code_generation(self, run: AgentRun) -> dict[str, Any]:
         plan = self.db.get(ResearchPlan, str(run.input_payload.get("research_plan_id") or ""))
         if plan is None or plan.workspace_id != run.workspace_id:
@@ -659,12 +916,22 @@ class AgentService:
         }
         review = self._static_review(files, blueprint)
         passed = sum(1 for check in review["checks"] if check["passed"])
+        blocking_checks = [check for check in review["checks"] if check["severity"] == "blocking"]
+        advisory_checks = [check for check in review["checks"] if check["severity"] == "advisory"]
         # JSON columns need wholesale reassignment; in-place mutation is not tracked
         run.result = {
             **run.result,
             "static_review": {
                 "passed": passed,
                 "total": len(review["checks"]),
+                "blocking": {
+                    "passed": sum(1 for check in blocking_checks if check["passed"]),
+                    "total": len(blocking_checks),
+                },
+                "advisory": {
+                    "passed": sum(1 for check in advisory_checks if check["passed"]),
+                    "total": len(advisory_checks),
+                },
                 "checks": review["checks"],
             },
         }
@@ -674,7 +941,9 @@ class AgentService:
             3 + len(blueprint["files"]),
             "static_review",
             "completed",
-            f"静态检查通过 {passed}/{len(review['checks'])} 项",
+            f"交付完整性检查：阻断项 "
+            f"{sum(1 for check in blocking_checks if check['passed'])}/{len(blocking_checks)}，"
+            f"改进项 {sum(1 for check in advisory_checks if check['passed'])}/{len(advisory_checks)}",
             {"checks": review["checks"]},
         )
         rubric_raw, rubric_usage = self._structured_completion(
@@ -1390,6 +1659,35 @@ class AgentService:
             f"论文证据：{json.dumps(evidence, ensure_ascii=False)}"
         )
 
+    @staticmethod
+    def _code_repair_prompt(
+        run: AgentRun,
+        plan: ResearchPlan,
+        blueprint: dict[str, Any],
+        checks: list[dict[str, Any]],
+        files: list[dict[str, str]],
+    ) -> str:
+        compact_files = [
+            {
+                "path": file["path"],
+                "language": file.get("language", "text"),
+                "content": file["content"][:3500],
+            }
+            for file in files[:8]
+        ]
+        return (
+            "针对已有实验代码项目的交付完整性检查缺口，生成一次候选修订。"
+            "这是唯一一次修复机会，只输出需要新增或替换的文件，不要执行代码、安装依赖或声称运行验证通过。"
+            "候选必须保持路径安全、最小改动，并与项目蓝图和研究计划一致。"
+            "返回 JSON：files 数组（每项 path, language, content）。若需要补测试，可新增 tests/ 下文件；"
+            "不要返回未修改的文件，也不要返回 markdown 围栏。\n\n"
+            f"研究计划：{json.dumps(AgentService._code_plan_payload(plan), ensure_ascii=False)}\n"
+            f"项目蓝图：{json.dumps(blueprint, ensure_ascii=False)}\n"
+            f"上一轮失败检查：{json.dumps(checks, ensure_ascii=False)}\n"
+            f"已有代码文件：{json.dumps(compact_files, ensure_ascii=False)}\n"
+            f"用户补充要求：{run.input_payload.get('prompt')}"
+        )
+
     def _file_prompt(
         self,
         run: AgentRun,
@@ -1573,8 +1871,15 @@ class AgentService:
         paths = {file["path"] for file in files}
         checks: list[dict[str, Any]] = []
 
-        def check(name: str, passed: bool, detail: str) -> None:
-            checks.append({"name": name, "passed": passed, "detail": detail})
+        def check(name: str, passed: bool, detail: str, severity: str) -> None:
+            checks.append(
+                {
+                    "name": name,
+                    "passed": passed,
+                    "detail": detail,
+                    "severity": severity,
+                }
+            )
 
         blueprint_paths = [spec["path"] for spec in blueprint["files"]]
         missing = [path for path in blueprint_paths if path not in paths]
@@ -1582,6 +1887,7 @@ class AgentService:
             "blueprint_files_present",
             not missing,
             "蓝图文件全部生成" if not missing else f"缺失：{', '.join(missing)}",
+            "blocking",
         )
         syntax_errors: list[str] = []
         for file in files:
@@ -1597,6 +1903,7 @@ class AgentService:
             "所有 Python 文件语法可解析"
             if not syntax_errors
             else "语法错误：" + "; ".join(syntax_errors[:3]),
+            "blocking",
         )
         entrypoint = str(blueprint.get("entrypoint") or "")
         check(
@@ -1604,12 +1911,14 @@ class AgentService:
             not entrypoint or entrypoint in paths,
             f"入口 {entrypoint or '（未指定）'}"
             + ("" if not entrypoint or entrypoint in paths else " 不在生成文件中"),
+            "blocking",
         )
         test_files = [path for path in paths if "test" in PurePosixPath(path).name.lower()]
         check(
             "test_present",
             bool(test_files),
             f"测试文件：{', '.join(sorted(test_files))}" if test_files else "没有识别到测试文件",
+            "advisory",
         )
         check(
             "scaffolding_present",
@@ -1617,6 +1926,7 @@ class AgentService:
             "README.md 与 requirements.txt 齐全"
             if {"README.md", "requirements.txt"} <= paths
             else "缺少 README.md 或 requirements.txt",
+            "advisory",
         )
         third_party: set[str] = set()
         for file in files:
@@ -1656,6 +1966,7 @@ class AgentService:
             "第三方依赖均已在 requirements.txt 声明"
             if not uncovered
             else f"未声明：{', '.join(sorted(uncovered))}",
+            "advisory",
         )
         return {"checks": checks}
 

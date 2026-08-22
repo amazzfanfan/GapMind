@@ -8,9 +8,11 @@ import zipfile
 from dataclasses import dataclass
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy.orm import Session
 
-from app.domains.agent.service import AgentService
+from app.domains.agent.models import AgentArtifact
+from app.domains.agent.service import AgentConflictError, AgentInputError, AgentService
 from app.domains.discover.models import ResearchPlan
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 
@@ -396,9 +398,16 @@ def test_code_agent_requires_plan_and_generates_safe_downloadable_files(
     steps = {step["stage"]: step for step in detail["steps"]}
     assert steps["module_design"]["summary"].startswith("蓝图：1 个模块")
     assert steps["static_review"]["sequence"] == 6
-    # static review is real now: no test file in this blueprint -> 4/5 checks pass
-    assert steps["static_review"]["summary"] == "静态检查通过 5/6 项"
-    check_names = {check["name"]: check["passed"] for check in detail["result"]["static_review"]["checks"]}
+    # static review is split into delivery blockers and improvement items;
+    # no test file means 3/3 blockers and 2/3 improvement checks pass.
+    assert steps["static_review"]["summary"] == "交付完整性检查：阻断项 3/3，改进项 2/3"
+    checks = detail["result"]["static_review"]["checks"]
+    check_names = {check["name"]: check["passed"] for check in checks}
+    check_severity = {check["name"]: check["severity"] for check in checks}
+    assert check_severity["syntax_valid"] == "blocking"
+    assert check_severity["test_present"] == "advisory"
+    assert detail["result"]["static_review"]["blocking"] == {"passed": 3, "total": 3}
+    assert detail["result"]["static_review"]["advisory"] == {"passed": 2, "total": 3}
     assert check_names["test_present"] is False
     assert check_names["imports_covered_by_requirements"] is True
     assert check_names["syntax_valid"] is True  # Phase B-removal: pure-AST syntax gate
@@ -430,6 +439,151 @@ def test_code_agent_requires_plan_and_generates_safe_downloadable_files(
         assert "README.md" in names
         assert "src/train.py" in names
         assert "研究问题" in zf.read("RESEARCH_PLAN.md").decode("utf-8")
+
+
+def test_code_agent_generates_one_preview_only_repair_candidate(
+    client, db_session: Session
+):
+    workspace, conversation = _workspace_conversation(client)
+    plan = ResearchPlan(
+        workspace_id=workspace["id"],
+        opportunity_id=None,
+        opportunity_version_id=None,
+        source_type="opportunity",
+        status="confirmed",
+        title="候选修复测试计划",
+        research_question="方法是否提升节点分类效果？",
+        hypothesis="方法能够提升准确率。",
+        scope_and_assumptions="固定数据集",
+        datasets=["Cora"],
+        baselines=["GCN"],
+        metrics=["accuracy"],
+        validation_steps=["train", "evaluate"],
+        expected_supporting_result="准确率提升",
+        falsification_criteria="没有提升",
+        risks=[],
+        resource_constraints="单张 GPU",
+    )
+    db_session.add(plan)
+    db_session.commit()
+    parent = AgentService(db_session).start(
+        workspace["id"],
+        agent_type="code_generation",
+        prompt="生成实验项目",
+        conversation_id=conversation["id"],
+        input_payload={"research_plan_id": plan.id, "framework": "PyTorch"},
+    )
+    parent.status = "succeeded"
+    parent.current_stage = "artifacts_ready"
+    parent.result = {
+        "research_plan_id": plan.id,
+        "static_review": {
+            "checks": [
+                {"name": "test_present", "passed": False, "detail": "没有识别到测试文件"},
+            ]
+        },
+    }
+    parent.context_snapshot = {
+        "blueprint": {
+            "files": [
+                {"path": "README.md", "purpose": "项目说明"},
+                {"path": "requirements.txt", "purpose": "依赖清单"},
+                {"path": "src/train.py", "purpose": "训练入口"},
+            ],
+            "entrypoint": "src/train.py",
+        }
+    }
+    db_session.add(
+        AgentArtifact(
+            run_id=parent.id,
+            artifact_type="code",
+            filename="README.md",
+            mime_type="text/markdown",
+            content="# 实验项目",
+            metadata_payload={"language": "markdown"},
+            validation_status="not_run",
+        )
+    )
+    db_session.add(
+        AgentArtifact(
+            run_id=parent.id,
+            artifact_type="code",
+            filename="requirements.txt",
+            mime_type="text/plain",
+            content="",
+            metadata_payload={"language": "text"},
+            validation_status="not_run",
+        )
+    )
+    db_session.add(
+        AgentArtifact(
+            run_id=parent.id,
+            artifact_type="code",
+            filename="src/train.py",
+            mime_type="text/x-python",
+            content="def train():\n    return 1\n",
+            metadata_payload={"language": "python"},
+            validation_status="not_run",
+        )
+    )
+    db_session.commit()
+
+    gateway = FakeGateway(
+        {"files": [{"path": "tests/test_train.py", "language": "python", "content": "def test_train():\n    assert True\n"}]}
+    )
+    service = AgentService(db_session, gateway=gateway)
+    child = service.start(
+        workspace["id"],
+        agent_type="code_generation",
+        prompt="修复交付完整性缺口",
+        conversation_id=conversation["id"],
+        input_payload={"research_plan_id": plan.id, "repair_parent_run_id": parent.id},
+    )
+    service.execute(child.id)
+    detail = client.get(
+        f"/api/v1/workspaces/{workspace['id']}/agent-runs/{child.id}"
+    ).json()
+    assert detail["parent_run_id"] == parent.id
+    assert detail["result"]["candidate_repair"]["attempt"] == 1
+    assert detail["result"]["candidate_repair"]["changed_files"] == ["tests/test_train.py"]
+    assert detail["result"]["validation"]["status"] == "not_run"
+    assert {item["filename"] for item in detail["artifacts"]} == {
+        "tests/test_train.py",
+        "code_repair_review.md",
+        "code_repair_diff.md",
+    }
+    candidate_artifact = next(
+        item for item in detail["artifacts"] if item["artifact_type"] == "code"
+    )
+    assert candidate_artifact["metadata"]["candidate_repair"] is True
+    assert detail["result"]["candidate_repair"]["before"] == {
+        "blocking": {"passed": 0, "total": 0},
+        "advisory": {"passed": 0, "total": 1},
+    }
+    assert detail["result"]["candidate_repair"]["after"] == {
+        "blocking": {"passed": 3, "total": 3},
+        "advisory": {"passed": 3, "total": 3},
+    }
+    assert len([call for call in gateway.calls if "候选修订" in call]) == 1
+
+    other_workspace, other_conversation = _workspace_conversation(client)
+    with pytest.raises(AgentInputError):
+        service.start(
+            other_workspace["id"],
+            agent_type="code_generation",
+            prompt="跨工作区修复",
+            conversation_id=other_conversation["id"],
+            input_payload={"research_plan_id": plan.id, "repair_parent_run_id": parent.id},
+        )
+
+    with pytest.raises(AgentConflictError):
+        service.start(
+            workspace["id"],
+            agent_type="code_generation",
+            prompt="再次修复",
+            conversation_id=conversation["id"],
+            input_payload={"research_plan_id": plan.id, "repair_parent_run_id": parent.id},
+        )
 
 
 def test_code_agent_recovers_from_truncated_file_json(

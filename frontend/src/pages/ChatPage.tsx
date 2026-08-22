@@ -372,6 +372,39 @@ export default function ChatPage() {
     catch (error) { message.error(chatErrorMessage(error)); }
     finally { setAgentActionId(undefined); }
   };
+  const requestCodeRepair = (run: AgentRunDetail) => {
+    if (!activeWorkspaceId || !run.conversation_id || run.parent_run_id) return;
+    const repairConversationId = run.conversation_id;
+    const repairPlanId = String(
+      (run.result ?? {}).research_plan_id
+      ?? run.input_payload.research_plan_id
+      ?? "",
+    );
+    Modal.confirm({
+      title: "建议生成一次候选修复",
+      content: "确认后只会创建一次代码修复 AgentRun 和候选产物。系统不会覆盖原代码、不会运行代码或测试；请在生成后人工审查变更。",
+      okText: "确认生成候选",
+      cancelText: "暂不生成",
+      onOk: async () => {
+        setAgentActionId(run.id);
+        try {
+          const child = await agentApi.start(activeWorkspaceId, {
+            agent_type: "code_generation",
+            prompt: "针对上一轮交付完整性检查缺口生成一次最小候选修复。",
+            conversation_id: repairConversationId,
+            input: { research_plan_id: repairPlanId, framework: "PyTorch", repair_parent_run_id: run.id },
+          });
+          message.success("候选修复已启动；原代码不会被覆盖");
+          await Promise.all([loadConversation(repairConversationId), loadAgentRuns(activeWorkspaceId, repairConversationId)]);
+          setAgentActionId(child.id);
+          window.setTimeout(() => setAgentActionId(undefined), 500);
+        } catch (error) {
+          setAgentActionId(undefined);
+          message.error(chatErrorMessage(error));
+        }
+      },
+    });
+  };
   const downloadArtifact = async (run: AgentRunDetail, artifactId: string) => {
     if (!activeWorkspaceId) return;
     try { await agentApi.downloadArtifact(activeWorkspaceId, run.id, artifactId); }
@@ -398,5 +431,5 @@ export default function ChatPage() {
   const sourceOptions = contextArtifacts
     .filter((artifact) => artifact.plan_id === researchPlanId)
     .map((artifact) => ({ value: artifact.id, label: `${artifact.label}：${artifact.title}`, title: artifact.status }));
-  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} independent={independentMode} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={workspaceEnabled ? activeWorkspaceName : undefined} independent={independentMode} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{independentMode ? <Alert className="gm-chat-scope-note" type="info" showIcon message="当前为独立模式：仅使用本次提供的材料，不会检索课题空间论文或知识库。" /> : activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；计划、报告与代码草案会单独标注来源。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在执行已确认的 Agent 操作，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={workspaceEnabled} mode={mode} onModeChange={setMode} planOptions={planOptions} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} sourceOptions={sourceOptions} sourceArtifactIds={sourceArtifactIds} onSourceArtifactChange={setSourceArtifactIds} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
+  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} independent={independentMode} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={workspaceEnabled ? activeWorkspaceName : undefined} independent={independentMode} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onRepairCode={(run) => requestCodeRepair(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{independentMode ? <Alert className="gm-chat-scope-note" type="info" showIcon message="当前为独立模式：仅使用本次提供的材料，不会检索课题空间论文或知识库。" /> : activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；计划、报告与代码草案会单独标注来源。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在执行已确认的 Agent 操作，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={workspaceEnabled} mode={mode} onModeChange={setMode} planOptions={planOptions} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} sourceOptions={sourceOptions} sourceArtifactIds={sourceArtifactIds} onSourceArtifactChange={setSourceArtifactIds} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
 }

@@ -105,14 +105,14 @@ export function normalizeConversationMath(content: string): string {
   return text;
 }
 
-interface Props { conversationId?: string; messages: ChatMessage[]; agentRuns?: AgentRunDetail[]; onRetry: (message: ChatMessage) => void; retryingId?: string; agentActionId?: string; onRefreshAgent: (run: AgentRunDetail) => void; onConfirmAgent: (run: AgentRunDetail) => void; onCancelAgent: (run: AgentRunDetail) => void; onDownloadAgent: (run: AgentRunDetail) => void; onDownloadArtifact?: (run: AgentRunDetail, artifactId: string) => void; }
+interface Props { conversationId?: string; messages: ChatMessage[]; agentRuns?: AgentRunDetail[]; onRetry: (message: ChatMessage) => void; retryingId?: string; agentActionId?: string; onRefreshAgent: (run: AgentRunDetail) => void; onConfirmAgent: (run: AgentRunDetail) => void; onCancelAgent: (run: AgentRunDetail) => void; onDownloadAgent: (run: AgentRunDetail) => void; onDownloadArtifact?: (run: AgentRunDetail, artifactId: string) => void; onRepairCode?: (run: AgentRunDetail) => void; }
 
-export default function ChatMessages({ conversationId, messages, agentRuns = [], onRetry, retryingId, agentActionId, onRefreshAgent, onConfirmAgent, onCancelAgent, onDownloadAgent, onDownloadArtifact }: Props) {
+export default function ChatMessages({ conversationId, messages, agentRuns = [], onRetry, retryingId, agentActionId, onRefreshAgent, onConfirmAgent, onCancelAgent, onDownloadAgent, onDownloadArtifact, onRepairCode }: Props) {
   if (messages.length === 0) return <Empty className="gm-chat-empty-messages" image={Empty.PRESENTED_IMAGE_SIMPLE} description="开始一段新的研究对话" />;
   const byAssistant = new Map(agentRuns.map((run) => [run.assistant_message_id, run]));
   return <div className="gm-chat-messages">{messages.map((message) => {
     const run = byAssistant.get(message.id);
-    return <div key={message.id}>{run ? <><ChatAgentRunCard run={run} loading={agentActionId === run.id} onRefresh={() => onRefreshAgent(run)} onConfirm={() => onConfirmAgent(run)} onCancel={() => onCancelAgent(run)} onDownload={() => onDownloadAgent(run)} onDownloadArtifact={onDownloadArtifact} />{conversationId && (message.citations?.length ?? 0) > 0 && <div className="gm-agent-citations"><ChatCitations conversationId={conversationId} messageId={message.id} citations={message.citations ?? []} /></div>}</> : <ChatMessageItem conversationId={conversationId} message={message} onRetry={onRetry} retrying={retryingId === message.id} />}</div>;
+    return <div key={message.id}>{run ? <><ChatAgentRunCard run={run} loading={agentActionId === run.id} onRefresh={() => onRefreshAgent(run)} onConfirm={() => onConfirmAgent(run)} onCancel={() => onCancelAgent(run)} onDownload={() => onDownloadAgent(run)} onDownloadArtifact={onDownloadArtifact} onRepairCode={onRepairCode} />{conversationId && (message.citations?.length ?? 0) > 0 && <div className="gm-agent-citations"><ChatCitations conversationId={conversationId} messageId={message.id} citations={message.citations ?? []} /></div>}</> : <ChatMessageItem conversationId={conversationId} message={message} onRetry={onRetry} retrying={retryingId === message.id} />}</div>;
   })}</div>;
 }
 
