@@ -465,8 +465,15 @@ class ChatService:
             self._mark_failed(assistant, str(exc))
             yield {"type": "error", "message": str(exc)}
             return
-        except ChatRetrievalError:
-            raise
+        except ChatRetrievalError as exc:
+            # Streaming responses have already started by the time the
+            # generator body runs, so the central HTTP exception handler
+            # cannot turn this into a structured error response. Emit the
+            # documented SSE error event instead of closing the connection
+            # while the browser still shows the optimistic message as
+            # "generating".
+            yield {"type": "error", "message": str(exc)}
+            return
 
         yield {"type": "start", "conversation_id": conversation_id, "assistant_message_id": assistant_id}
         interrupted = True

@@ -1,9 +1,9 @@
 """W7 full-lifecycle agent tests: Analyze / Write / Respond.
 
-These reuse the controlled AgentRun/AgentStep/AgentArtifact protocol. All three
-are plan-bound, evidence-linked, end in "succeeded" with a markdown artifact
-in agent_artifacts (never auto-promoted), and each claim cites workspace
-evidence via [En] markers.
+These reuse the controlled AgentRun/AgentStep/AgentArtifact protocol. They end
+in "succeeded" with a markdown artifact in agent_artifacts (never
+auto-promoted). A bound plan enables workspace evidence; independent mode uses
+only user-provided material and never fabricates a workspace citation.
 """
 
 from __future__ import annotations
@@ -81,6 +81,15 @@ def _workspace_plan(client, db_session: Session) -> tuple[dict, dict, ResearchPl
     db_session.add(plan)
     db_session.commit()
     return workspace, conversation, plan
+
+
+def _independent_conversation(client) -> tuple[dict, dict]:
+    workspace = client.get("/api/v1/workspaces/independent").json()
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "独立模式对话", "workspace_id": workspace["id"]},
+    ).json()
+    return workspace, conversation
 
 
 def _start(client, workspace: dict, conversation: dict, *, agent_type: str, input_payload: dict):
@@ -216,14 +225,128 @@ def test_respond_agent_produces_rebuttal(client, db_session: Session):
 
 
 def test_analyze_standalone_without_plan(client, db_session: Session):
-    """P1.5: analyze is usable standalone (no plan/workspace needed)."""
-    workspace, conversation, _ = _workspace_plan(client, db_session)
-    response = _start(
-        client, workspace, conversation,
+    """P1: analyze executes in the system independent workspace without a plan."""
+    workspace, conversation = _independent_conversation(client)
+    started = _start(
+        client,
+        workspace,
+        conversation,
         agent_type="analyze",
         input_payload={"results": {"x": 1}, "research_plan_id": ""},
     )
-    assert response.status_code == 202  # independent mode: starts without a plan
+    assert started.status_code == 202, started.text
+    body = _execute(
+        client,
+        db_session,
+        started.json()["id"],
+        {
+            "verdict": "证据不足",
+            "conclusion": "用户提供的结果不足以支持假设。",
+            "key_findings": ["需要补充基线对照"],
+            "evidence_refs": ["E1"],
+            "risks": ["数据不完整"],
+        },
+        workspace["id"],
+    )
+    assert body["status"] == "succeeded"
+    assert body["result"]["independent"] is True
+    assert body["context_snapshot"]["evidence"] == []
+
+
+def test_write_standalone_without_plan_uses_only_user_material(client, db_session: Session):
+    workspace, conversation = _independent_conversation(client)
+    started = _start(
+        client,
+        workspace,
+        conversation,
+        agent_type="write",
+        input_payload={"research_plan_id": ""},
+    )
+    assert started.status_code == 202, started.text
+    body = _execute(
+        client,
+        db_session,
+        started.json()["id"],
+        {
+            "title": "Standalone Research Draft",
+            "abstract": "基于用户提供材料的摘要。",
+            "introduction": "背景。",
+            "method": "方法。",
+            "experiments": "实验。",
+            "conclusion": "结论。",
+            "evidence_refs": ["E1"],
+        },
+        workspace["id"],
+    )
+    assert body["status"] == "succeeded"
+    assert body["result"]["independent"] is True
+    assert body["artifacts"][0]["artifact_type"] == "paper_draft"
+
+
+def test_respond_standalone_without_plan_does_not_retrieve_missing_plan(client, db_session: Session):
+    workspace, conversation = _independent_conversation(client)
+    started = _start(
+        client,
+        workspace,
+        conversation,
+        agent_type="respond",
+        input_payload={
+            "research_plan_id": "",
+            "reviewer_comments": "缺少消融实验。",
+        },
+    )
+    assert started.status_code == 202, started.text
+    body = _execute(
+        client,
+        db_session,
+        started.json()["id"],
+        {
+            "summary": "已给出补充实验计划。",
+            "responses": [
+                {
+                    "comment": "缺少消融实验。",
+                    "response": "我们将补充关键模块消融实验。",
+                    "evidence_refs": ["E1"],
+                }
+            ],
+            "evidence_refs": ["E1"],
+        },
+        workspace["id"],
+    )
+    assert body["status"] == "succeeded"
+    assert body["result"]["independent"] is True
+    assert body["artifacts"][0]["artifact_type"] == "rebuttal"
+
+
+def test_independent_workspace_rejects_corpus_bound_agents(client):
+    workspace, conversation = _independent_conversation(client)
+    response = _start(
+        client,
+        workspace,
+        conversation,
+        agent_type="research_plan",
+        input_payload={},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "agent_input_invalid"
+
+
+def test_optional_plan_must_belong_to_the_current_workspace(client, db_session: Session):
+    _, _, plan = _workspace_plan(client, db_session)
+    other = client.post("/api/v1/workspaces", json={"name": "Other lifecycle workspace"}).json()
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "Other workspace conversation", "workspace_id": other["id"]},
+    ).json()
+    response = _start(
+        client,
+        other,
+        conversation,
+        agent_type="write",
+        input_payload={"research_plan_id": plan.id},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "agent_input_invalid"
 
 
 def test_respond_requires_reviewer_comments(client, db_session: Session):

@@ -28,7 +28,7 @@ from app.domains.retrieval.service import semantic_search
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
-from app.domains.workspace.service import WorkspaceService
+from app.domains.workspace.service import INDEPENDENT_WORKSPACE_NAME, WorkspaceService
 from app.gateway.llm import LLMGateway, get_llm_gateway
 
 
@@ -92,16 +92,23 @@ class AgentService:
             raise AgentInputError("Agent 对话与工作区不匹配")
         if agent_type not in SUPPORTED_AGENT_TYPES:
             raise AgentInputError("不支持的 Agent 类型")
+        if (
+            workspace.name == INDEPENDENT_WORKSPACE_NAME
+            and agent_type not in PLAN_OPTIONAL_AGENT_TYPES
+        ):
+            raise AgentInputError("独立模式仅支持结果分析、论文写作和审稿回复")
         payload = dict(input_payload or {})
         payload["prompt"] = prompt.strip()
         if not payload["prompt"]:
             raise AgentInputError("任务描述不能为空")
         plan = None
-        if agent_type in PLAN_REQUIRED_AGENT_TYPES:
-            plan_id = str(payload.get("research_plan_id") or "")
-            plan = self.db.get(ResearchPlan, plan_id) if plan_id else None
+        plan_id = str(payload.get("research_plan_id") or "")
+        if plan_id:
+            plan = self.db.get(ResearchPlan, plan_id)
             if plan is None or plan.workspace_id != workspace_id:
-                raise AgentInputError("该 Agent 必须选择当前工作区中的研究计划")
+                raise AgentInputError("研究计划必须属于当前工作区")
+        if agent_type in PLAN_REQUIRED_AGENT_TYPES and plan is None:
+            raise AgentInputError("该 Agent 必须选择当前工作区中的研究计划")
         if agent_type == "respond" and not str(payload.get("reviewer_comments") or "").strip():
             raise AgentInputError("审稿回复必须提供审稿意见")
 
@@ -148,7 +155,10 @@ class AgentService:
         )
         self.db.add_all([user_message, assistant_message])
         self.db.flush()
-        context_snapshot: dict[str, Any] = {"workspace_name": workspace.name}
+        context_snapshot: dict[str, Any] = {
+            "workspace_name": workspace.name,
+            "independent": workspace.name == INDEPENDENT_WORKSPACE_NAME,
+        }
         if plan is not None:
             context_snapshot["research_plan"] = self._plan_snapshot(plan)
         run = AgentRun(
@@ -749,21 +759,50 @@ class AgentService:
             return None
         return plan
 
+    @staticmethod
+    def _is_independent(run: AgentRun) -> bool:
+        """Whether this run is owned by the system standalone workspace.
+
+        The flag is captured at creation time so lifecycle agents can make the
+        source boundary explicit even when the system workspace has no corpus.
+        Older rows did not carry it; they retain the historical workspace
+        behavior instead of being reclassified.
+        """
+        return bool((run.context_snapshot or {}).get("independent"))
+
     def _execute_analyze(self, run: AgentRun) -> dict[str, Any]:
         """AnalyzeAgent: user-uploaded experiment results vs the plan's
         falsification criteria, producing a support / partial / reject verdict
         with evidence-linked findings. Eats manual data (results are supplied
         by the user, never auto-run experiments)."""
         plan = self._optional_plan(run)
-        self._step(run, 1, "workspace_retrieval", "running", "正在检索相关证据")
-        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis} {plan.falsification_criteria}") if plan else []
-        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        independent = self._is_independent(run)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "running",
+            "独立模式：仅使用用户提供材料" if independent else "正在检索相关证据",
+        )
+        query = (
+            f"{plan.research_question} {plan.hypothesis} {plan.falsification_criteria}"
+            if plan
+            else str(run.input_payload.get("prompt") or "")
+        )
+        evidence = [] if independent else self._retrieve(run, query)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "completed",
+            "独立模式：未检索课题空间" if independent else f"已选取 {len(evidence)} 条证据",
+        )
         self._transition(run, "running", "analysis", 0.45)
         prompt = self._analysis_prompt(run, plan, evidence)
         raw, usage = self._structured_completion(prompt, max_tokens=2600)
         normalized = self._normalize_analysis(raw)
         run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id if plan else None, "evidence": evidence}
-        run.result = {"research_plan_id": plan.id if plan else None, "independent": plan is None, **normalized}
+        run.result = {"research_plan_id": plan.id if plan else None, "independent": independent, **normalized}
         self._step(run, 2, "analysis", "completed", f"已得出“{normalized['verdict']}”结论", usage)
         self._step(run, 3, "saved", "completed", "结果分析已产出，关键结论回链证据", {"evidence_count": len(evidence)})
         self.db.add(
@@ -785,15 +824,33 @@ class AgentService:
     def _execute_write(self, run: AgentRun) -> dict[str, Any]:
         """WriteAgent: plan + evidence -> paper section drafts."""
         plan = self._optional_plan(run)
-        self._step(run, 1, "workspace_retrieval", "running", "正在检索方法与相关证据")
-        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis} {plan.scope_and_assumptions}") if plan else []
-        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        independent = self._is_independent(run)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "running",
+            "独立模式：仅使用用户提供材料" if independent else "正在检索方法与相关证据",
+        )
+        query = (
+            f"{plan.research_question} {plan.hypothesis} {plan.scope_and_assumptions}"
+            if plan
+            else str(run.input_payload.get("prompt") or "")
+        )
+        evidence = [] if independent else self._retrieve(run, query)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "completed",
+            "独立模式：未检索课题空间" if independent else f"已选取 {len(evidence)} 条证据",
+        )
         self._transition(run, "running", "paper_writing", 0.45)
         prompt = self._draft_prompt(run, plan, evidence)
         raw, usage = self._structured_completion(prompt, max_tokens=4000)
         normalized = self._normalize_draft(raw)
         run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id if plan else None, "evidence": evidence}
-        run.result = {"research_plan_id": plan.id if plan else None, "independent": plan is None, **normalized}
+        run.result = {"research_plan_id": plan.id if plan else None, "independent": independent, **normalized}
         self._step(run, 2, "paper_writing", "completed", f"已生成论文草稿（{len(normalized['sections'])} 个章节）", usage)
         self._step(run, 3, "saved", "completed", "论文草稿已产出，引用回链证据", {"evidence_count": len(evidence)})
         self.db.add(
@@ -816,15 +873,33 @@ class AgentService:
         """RespondAgent: reviewer comments -> per-point rebuttal draft."""
         plan = self._optional_plan(run)
         comments = str(run.input_payload.get("reviewer_comments") or "")
-        self._step(run, 1, "workspace_retrieval", "running", "正在检索相关证据")
-        evidence = self._retrieve(run, f"{plan.research_question} {plan.hypothesis}")
-        self._step(run, 1, "workspace_retrieval", "completed", f"已选取 {len(evidence)} 条证据")
+        independent = self._is_independent(run)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "running",
+            "独立模式：仅使用用户提供材料" if independent else "正在检索相关证据",
+        )
+        query = (
+            f"{plan.research_question} {plan.hypothesis}"
+            if plan
+            else f"{comments} {run.input_payload.get('prompt') or ''}"
+        )
+        evidence = [] if independent else self._retrieve(run, query)
+        self._step(
+            run,
+            1,
+            "workspace_retrieval",
+            "completed",
+            "独立模式：未检索课题空间" if independent else f"已选取 {len(evidence)} 条证据",
+        )
         self._transition(run, "running", "rebuttal", 0.45)
         prompt = self._rebuttal_prompt(run, plan, comments, evidence)
         raw, usage = self._structured_completion(prompt, max_tokens=3000)
         normalized = self._normalize_rebuttal(raw)
         run.context_snapshot = {**dict(run.context_snapshot or {}), "research_plan_id": plan.id if plan else None, "evidence": evidence}
-        run.result = {"research_plan_id": plan.id if plan else None, "independent": plan is None, **normalized}
+        run.result = {"research_plan_id": plan.id if plan else None, "independent": independent, **normalized}
         self._step(run, 2, "rebuttal", "completed", f"已生成 {len(normalized['responses'])} 条审稿回复", usage)
         self._step(run, 3, "saved", "completed", "审稿回复已产出，回复依据回链证据", {"response_count": len(normalized["responses"])})
         self.db.add(

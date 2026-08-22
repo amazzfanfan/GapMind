@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "antd";
-import { FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
+import { BookOutlined, FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router-dom";
 import workspaceApi from "../api/workspace";
 import taskApi from "../api/task";
 import { discoverApi, type DiscoverRun, type ResearchOpportunity } from "../api/discover";
+import { recommendationsApi } from "../api/recommendations";
 import type { Workspace, WorkspaceReadiness } from "../api/types/workspace";
 import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
@@ -12,6 +13,12 @@ import EmptyGuide from "../components/common/EmptyGuide";
 import LifecycleModules from "../components/LifecycleModules";
 import { useAppStore } from "../store/appStore";
 import StatusBadge from "../components/common/StatusBadge";
+import { isTaskNeedingAttention } from "../state/taskAttention";
+import {
+  aggregateDashboardRecommendations,
+  dashboardRecommendationEntries,
+  type DashboardRecommendationEntry,
+} from "../state/dashboardRecommendationState";
 
 interface WorkspaceSummary {
   workspace: Workspace;
@@ -26,7 +33,36 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const currentWorkspaceId = useAppStore((state) => state.currentWorkspaceId);
   const [summaries, setSummaries] = useState<WorkspaceSummary[]>([]);
+  const [recommendations, setRecommendations] = useState<DashboardRecommendationEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const recommendationRequestIdRef = useRef(0);
+  const recommendationEntriesRef = useRef(new Map<string, DashboardRecommendationEntry[]>());
+
+  const loadRecommendations = useCallback((workspaces: Workspace[]) => {
+    // Render each source as it arrives. A cold workspace can wait on S2 while
+    // the Demo workspace's persisted recommendations remain immediately useful.
+    const sources = workspaces.filter((workspace) => workspace.name !== "__independent__");
+    const requestId = ++recommendationRequestIdRef.current;
+    recommendationEntriesRef.current.clear();
+    setRecommendations([]);
+    for (const workspace of sources) {
+      void recommendationsApi.list(workspace.id)
+        .then((response) => {
+          if (requestId !== recommendationRequestIdRef.current) return;
+          recommendationEntriesRef.current.set(
+            workspace.id,
+            dashboardRecommendationEntries(workspace, response),
+          );
+          setRecommendations(
+            aggregateDashboardRecommendations(sources, recommendationEntriesRef.current),
+          );
+        })
+        .catch(() => {
+          // The overview card owns the actionable S2 error state. The homepage
+          // preview must remain non-blocking when a cold source is unavailable.
+        });
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,15 +82,19 @@ export default function DashboardPage() {
         return {
           workspace,
           counts: readiness.status === "fulfilled" ? readiness.value.counts : null,
-          pendingTasks: taskItems?.filter((task) => ["queued", "running", "waiting_for_user", "failed"].includes(task.status)) ?? taskItems,
+          pendingTasks: taskItems?.filter((task) => isTaskNeedingAttention(task)) ?? taskItems,
           waitingRuns: runItems?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? runItems,
           opportunities: opportunities.status === "fulfilled" ? opportunities.value.items : null,
           pendingOpportunityCount: opportunities.status === "fulfilled" ? opportunities.value.total : null,
         } satisfies WorkspaceSummary;
       }));
       setSummaries(next);
+      // decoupled: recommendation calls can wait on the S2 upstream for
+      // uncached workspaces (~5s); the main view must not block on them
+      void loadRecommendations(workspaces);
     } catch {
       setSummaries([]);
+      setRecommendations([]);
     } finally {
       setLoading(false);
     }
@@ -63,7 +103,7 @@ export default function DashboardPage() {
   useEffect(() => { void load(); }, [load]);
 
   const actions = summaries.flatMap((summary) => [
-    ...(summary.pendingTasks ?? []).map((task) => ({ key: `task-${task.id}`, workspace: summary.workspace, title: task.status === "failed" ? "后台任务处理失败" : "后台任务正在处理", status: task.status, href: `/workspaces/${summary.workspace.id}/activity` })),
+    ...(summary.pendingTasks ?? []).map((task) => ({ key: `task-${task.id}`, workspace: summary.workspace, title: task.status === "failed" ? "近期后台任务处理失败" : "后台任务正在处理", status: task.status, href: `/workspaces/${summary.workspace.id}/activity` })),
     ...(summary.waitingRuns ?? []).map((run) => ({ key: `run-${run.id}`, workspace: summary.workspace, title: "Discover 等待继续", status: run.status, href: `/workspaces/${summary.workspace.id}/discover?run=${run.id}` })),
     ...(summary.opportunities ?? []).map((opportunity) => ({ key: `opportunity-${opportunity.id}`, workspace: summary.workspace, title: opportunity.title, status: opportunity.status, href: `/workspaces/${summary.workspace.id}/discover?opportunity=${opportunity.id}` })),
   ]).slice(0, 8);
@@ -84,6 +124,7 @@ export default function DashboardPage() {
       ) : (
         <>
           {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
+          {recommendations.length > 0 && <Card title={<Space size={6}><BookOutlined />论文推荐</Space>} extra={<Typography.Text type="secondary">来自各课题语料画像 · 完整操作见课题概览</Typography.Text>} style={{ marginBottom: 20 }}><List size="small" dataSource={recommendations} renderItem={({ workspace, item }) => <List.Item actions={[<Link key="open" to={`/workspaces/${workspace.id}/overview`}>查看课题 <RightOutlined /></Link>]}><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color="blue">{workspace.name}</Tag><Typography.Text strong ellipsis={{ tooltip: item.paper.title }} style={{ maxWidth: 480 }}>{item.paper.title || "未命名论文"}</Typography.Text><Typography.Text type="secondary">{item.paper.publicationDate?.slice(0, 4) || (item.paper.year ?? "年份未知")}</Typography.Text><Tag>相关度 {Math.round(item.score * 100)}%</Tag></Space>{item.reasons[0] && <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: item.reasons[0] }}>{item.reasons[0]}</Typography.Text>}</Space></List.Item>} /></Card>}
           <Typography.Title level={4}>最近课题</Typography.Title>
           <Row gutter={[16, 16]}>
             {summaries.map((summary) => <Col xs={24} md={12} xl={8} key={summary.workspace.id}><Card className="gm-action-card" title={<Link to={`/workspaces/${summary.workspace.id}/overview`}>{summary.workspace.name}</Link>} extra={<Link to={`/workspaces/${summary.workspace.id}/settings`}><SettingOutlined /></Link>}><Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>{summary.workspace.description || summary.workspace.topic || "尚未填写课题描述"}</Typography.Paragraph><Space wrap><Tag>{summary.counts ? `文献 ${summary.counts.papers} 篇` : "文献：暂不可用"}</Tag><Tag>{summary.counts ? `待审核知识 ${summary.counts.pending_knowledge}` : "知识：暂不可用"}</Tag><Tag color={(summary.counts?.pending_opportunities ?? summary.pendingOpportunityCount) ? "orange" : "default"}>{summary.counts ? `待处理机会 ${summary.counts.pending_opportunities}` : summary.pendingOpportunityCount === null ? "机会：暂不可用" : `待处理机会 ${summary.pendingOpportunityCount}`}</Tag></Space><div style={{ marginTop: 16 }}><Link to={`/workspaces/${summary.workspace.id}/overview`}>继续课题 <RightOutlined /></Link></div></Card></Col>)}

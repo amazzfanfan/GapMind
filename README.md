@@ -39,7 +39,7 @@ GapMind/
 
 ```bash
 cd infra
-docker compose up -d
+docker compose --env-file ../.env up -d   # or plain `up -d` to use built-in defaults
 ```
 
 This starts PostgreSQL (5432), Redis (6379), and Milvus (19530).
@@ -53,7 +53,7 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Linux/Mac
 pip install -r requirements.txt
-copy ..\infra\.env.example .env  # then edit .env with your keys
+# from the repo root: copy .env.example .env  (then edit .env with your keys)
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -91,7 +91,7 @@ Frontend: http://localhost:5173
 
 The workspace AI assistant supports evidence-grounded Q&A, research-plan generation, and code-project generation. Agent runs are processed by the Celery worker, so Redis and the worker must be running. After pulling migrations that add Agent support, run `alembic upgrade head` and restart both FastAPI and Celery.
 
-Generated code is previewed and downloaded by default; it is never executed automatically. Optional Python syntax validation runs in a network-disabled, resource-limited Docker container and must be enabled explicitly with `AGENT_CODE_EXECUTION_ENABLED=true`. Pull the configured image once (`docker pull python:3.11-slim`) before validation; the validator itself uses `--pull never`.
+Generated code is previewed and downloaded by default; it is never executed automatically. Quality signals come from the pipeline itself: a pure-Python static review (syntax gate, dependency consistency, scaffolding) and a plan-coverage rubric that reports covered/partial/missing items and known gaps honestly.
 
 ### Fine-tuned Research Gap Board
 
@@ -99,9 +99,12 @@ GapMind can call the fine-tuned Qwen3 Schema 3.0 extractor through Ollama, build
 
 ## Environment Variables
 
-Copy `infra/.env.example` to `backend/.env` and fill in:
+A single `.env` at the repo root is shared by all three runtimes — copy `.env.example` (repo root) to `.env` and fill in:
 
 - `DEEPSEEK_API_KEY` - Deepseek API key
 - `SILICONFLOW_API_KEY` - SiliconFlow API key (for BGE-m3 embedding)
 - `SEMANTIC_SCHOLAR_API_KEY` - (optional) for higher rate limits
-- `POSTGRES_*`, `REDIS_*`, `MILVUS_*` - infra connection settings
+- `DEEPSEEK_BACKUP_*` - (optional) backup OpenAI-compatible endpoint; automatic failover when the primary LLM fails (all three fields must be set)
+- `GAP_EXTRACTOR_*` - fine-tuned gap-board model via Ollama (defaults usually suffice)
+- `VITE_API_BASE_URL` - frontend API base (vite reads `VITE_*` from the same file)
+- `POSTGRES_*`, `REDIS_*`, `MILVUS_*` - infra connection settings (also used by `docker compose --env-file ../.env` from `infra/`)

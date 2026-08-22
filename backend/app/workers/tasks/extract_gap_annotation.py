@@ -21,7 +21,7 @@ from app.domains.paper.models import Paper
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
-from app.gateway.gap_extractor import OllamaGapExtractor
+from app.gateway.gap_extractor import GapExtractorUnavailableError, OllamaGapExtractor
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -122,7 +122,24 @@ def _run_gap_extraction(
 
     model = extractor or OllamaGapExtractor()
     row.model_parameters = model.model_parameters
-    result = model.extract(markdown)
+    try:
+        result = model.extract(markdown)
+    except GapExtractorUnavailableError as exc:
+        message = str(exc)
+        row.status = "invalid"
+        row.validation_errors = [message]
+        row.output = None
+        db.commit()
+        return _fail(
+            tasks,
+            task_id,
+            message,
+            result={
+                "annotation_id": row.id,
+                "status": "unavailable",
+                "retryable": True,
+            },
+        )
     row.attempts = result.attempts
     row.raw_responses = result.raw_responses
     row.validation_errors = result.validation_errors

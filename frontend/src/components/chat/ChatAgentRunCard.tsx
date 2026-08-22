@@ -62,6 +62,7 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
   const isCode = run.agent_type === "code_generation";
   const active = ["queued", "running"].includes(run.status);
   const result = run.result ?? {};
+  const independent = result.independent === true;
   const meta = AGENT_META[run.agent_type] ?? { label: "Agent", icon: <ExperimentOutlined /> };
   const codeArtifacts = run.artifacts.filter((item) => item.artifact_type === "code");
   const lifecycleArtifacts = run.artifacts.filter((item) => ["analysis", "paper_draft", "rebuttal"].includes(item.artifact_type));
@@ -81,6 +82,7 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
     <Progress percent={Math.round(run.progress * 100)} status={run.status === "failed" ? "exception" : run.status === "succeeded" ? "success" : "active"} />
     {run.steps.length > 0 && <Steps size="small" responsive={false} items={run.steps.map((step) => ({ title: stageLabel[step.stage] ?? step.stage, description: step.summary, status: step.status === "completed" ? "finish" : step.status === "failed" ? "error" : "process" }))} />}
     {run.error && <Paragraph type="danger">{run.error}</Paragraph>}
+    {independent && <Alert type="info" showIcon style={{ marginBottom: 8 }} message="独立模式产物" description="本次仅使用你提供的材料，未检索课题空间论文或知识库。" />}
     {isPlan && Boolean(result.research_question) && <Descriptions size="small" column={1} bordered className="gm-agent-result"><Descriptions.Item label="研究问题">{String(result.research_question)}</Descriptions.Item><Descriptions.Item label="核心假设">{String(result.hypothesis ?? "")}</Descriptions.Item><Descriptions.Item label="验证步骤">{Array.isArray(result.validation_steps) ? result.validation_steps.join("；") : "—"}</Descriptions.Item><Descriptions.Item label="证伪条件">{String(result.falsification_criteria ?? "—")}</Descriptions.Item></Descriptions>}
     {run.agent_type === "analyze" && Boolean(result.verdict) && <Descriptions size="small" column={1} bordered className="gm-agent-result"><Descriptions.Item label="分析结论"><Text strong>{String(result.verdict)}</Text></Descriptions.Item><Descriptions.Item label="分析">{String(result.conclusion ?? "")}</Descriptions.Item></Descriptions>}
     {isCode && blueprintFiles.length > 0 && <Collapse size="small" items={[{ key: "blueprint", label: `项目蓝图：${blueprintModules.length} 个模块 / ${blueprintFiles.length} 个文件`, children: <Space direction="vertical" size={4}>{blueprintModules.length > 0 && <Space wrap size={4}>{blueprintModules.map((name) => <Tag key={name}>{name}</Tag>)}</Space>}<Text type="secondary">{blueprintFiles.join(" · ")}</Text></Space> }]} />}

@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.domains.artifact.models import Artifact
+from app.domains.artifact.service import ArtifactService
 from app.domains.gap.markdown import compact_markdown
 from app.domains.gap.models import PaperGapAnnotation
 from app.domains.gap.normalization import canonical_axis_label
@@ -14,8 +17,10 @@ from app.domains.gap.schemas import GapCandidateDiscoverRequest
 from app.domains.gap.service import GapService
 from app.domains.gap.validation import validate_annotation
 from app.domains.paper.models import Paper
+from app.domains.task.schemas import TaskCreate
+from app.domains.task.service import TaskService
 from app.domains.workspace.models import Workspace
-from app.gateway.gap_extractor import OllamaGapExtractor
+from app.gateway.gap_extractor import GapExtractorUnavailableError, OllamaGapExtractor
 
 
 def _output(
@@ -154,6 +159,18 @@ class _Client:
         return _Response({"message": {"content": self.contents.pop(0)}})
 
 
+class _UnavailableClient:
+    def post(self, url: str, *, json: dict) -> _Response:
+        raise httpx.ConnectError("connection refused", request=httpx.Request("POST", url))
+
+
+class _UnavailableExtractor:
+    model_parameters = {"model": "unavailable"}
+
+    def extract(self, markdown: str):
+        raise GapExtractorUnavailableError("研究空白模型响应超时，请检查 SSH 隧道和服务器模型负载后重试。")
+
+
 def test_ollama_extractor_repairs_invalid_enum() -> None:
     invalid = _output()
     invalid["entities"][1]["type"] = "DATASET"
@@ -168,6 +185,90 @@ def test_ollama_extractor_repairs_invalid_enum() -> None:
     assert result.attempts == 2
     assert len(client.calls) == 2
     assert "DATASET" in client.calls[1]["json"]["messages"][-1]["content"]
+
+
+def test_ollama_extractor_reports_tunnel_failure_without_raw_transport_error() -> None:
+    extractor = OllamaGapExtractor(
+        base_url="http://ollama.test:11434",
+        model="test-model",
+        client=_UnavailableClient(),
+    )
+
+    with pytest.raises(GapExtractorUnavailableError) as exc_info:
+        extractor.extract("# Introduction\nPaper")
+
+    message = str(exc_info.value)
+    assert "SSH 隧道" in message
+    assert "connection refused" not in message
+
+
+def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks.extract_gap_annotation import _run_gap_extraction
+
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Gap unavailable",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    artifact = Artifact(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        kind="parsed_markdown",
+        file_path="unavailable.md",
+        size_bytes=10,
+        is_deleted=False,
+    )
+    paper = Paper(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        title="Unavailable model paper",
+        authors=[],
+        source="manual",
+        parse_status="parsed",
+        parsed_markdown_artifact_id=artifact.id,
+        chunk_count=0,
+        extract_status="not_applicable",
+        is_deleted=False,
+    )
+    db_session.add_all([workspace, artifact, paper])
+    db_session.commit()
+    markdown_path = tmp_path / "unavailable.md"
+    markdown_path.write_text("# Introduction\nPaper body", encoding="utf-8")
+    monkeypatch.setattr(
+        ArtifactService,
+        "resolve_abs_path",
+        lambda self, item: markdown_path,
+    )
+    task = TaskService(db_session).create(
+        TaskCreate(
+            workspace_id=workspace.id,
+            task_type="extract_gap_annotation",
+            payload={"paper_id": paper.id, "force": False},
+        )
+    )
+
+    result = _run_gap_extraction(
+        db_session,
+        task.id,
+        extractor=_UnavailableExtractor(),
+    )
+
+    annotation = db_session.get(PaperGapAnnotation, result["annotation_id"])
+    task_after = TaskService(db_session).get(task.id)
+    # The worker payload keeps the annotation outcome; the authoritative Task
+    # row records the failed state shown in the processing center.
+    assert result["status"] == "unavailable"
+    assert result["retryable"] is True
+    assert annotation is not None and annotation.status == "invalid"
+    assert annotation.validation_errors == [
+        "研究空白模型响应超时，请检查 SSH 隧道和服务器模型负载后重试。"
+    ]
+    assert task_after.status == "failed"
 
 
 def _annotation(

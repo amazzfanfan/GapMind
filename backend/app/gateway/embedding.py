@@ -52,7 +52,7 @@ class EmbeddingGateway:
         if self._client is None:
             if not self.api_key:
                 raise RuntimeError(
-                    "SILICONFLOW_API_KEY is not set. Configure backend/.env."
+                    "SILICONFLOW_API_KEY is not set. Configure the repo-root .env."
                 )
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client

@@ -22,6 +22,10 @@ class GapExtractionResult:
     validation_errors: list[str] = field(default_factory=list)
 
 
+class GapExtractorUnavailableError(RuntimeError):
+    """A safe, actionable failure when the tunneled Ollama service is unavailable."""
+
+
 class OllamaGapExtractor:
     def __init__(
         self,
@@ -46,16 +50,31 @@ class OllamaGapExtractor:
         }
 
     def _call(self, messages: list[dict[str, str]]) -> tuple[str, dict[str, Any]]:
-        response = self.client.post(
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.model,
-                "stream": False,
-                "messages": messages,
-                "options": self.model_parameters,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "stream": False,
+                    "messages": messages,
+                    "options": self.model_parameters,
+                },
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise GapExtractorUnavailableError(
+                "研究空白模型响应超时，请检查 SSH 隧道和服务器模型负载后重试。"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                message = "研究空白模型未就绪，请检查 SSH 隧道指向的 Ollama 服务及模型名称。"
+            else:
+                message = "研究空白模型服务返回异常，请检查 SSH 隧道和服务器 Ollama 服务后重试。"
+            raise GapExtractorUnavailableError(message) from exc
+        except httpx.RequestError as exc:
+            raise GapExtractorUnavailableError(
+                "无法连接研究空白模型，请确认 SSH 隧道已连接，并确保本机未启动 Ollama 占用 127.0.0.1:11434。"
+            ) from exc
         payload = response.json()
         content = str((payload.get("message") or {}).get("content") or "")
         if not content.strip():

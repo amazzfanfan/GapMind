@@ -17,6 +17,7 @@ import { useWorkspaceLayout } from "../components/layout/WorkspaceLayout";
 import PageHeader from "../components/common/PageHeader";
 import StatusBadge from "../components/common/StatusBadge";
 import ResearchRecommendations from "../components/ResearchRecommendations";
+import { isTaskNeedingAttention } from "../state/taskAttention";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -60,7 +61,7 @@ export default function WorkspaceOverviewPage() {
   useEffect(() => { void load(); }, [load]);
 
   const activeTasks = tasks?.filter((task) => ["queued", "running", "waiting_for_user"].includes(task.status)) ?? [];
-  const failedTasks = tasks?.filter((task) => task.status === "failed") ?? [];
+  const failedTasks = tasks?.filter((task) => task.status === "failed" && isTaskNeedingAttention(task)) ?? [];
   const reviewItems = knowledge?.filter((item) => ["candidate", "needs_review", "proposed"].includes(item.status)) ?? [];
   const waitingRuns = runs?.filter((run) => ["waiting_for_user", "waiting_for_fulltext"].includes(run.status)) ?? [];
   const reviewOpportunities = opportunities ?? [];
@@ -108,7 +109,7 @@ export default function WorkspaceOverviewPage() {
 
       <ResearchRecommendations workspaceId={workspace.id} onImported={() => void load()} />
 
-      {failedTasks.length > 0 && <Alert type="error" showIcon message={`${failedTasks.length} 个后台任务处理失败`} description={<Link to={`/workspaces/${workspace.id}/activity`}>打开处理中心查看原因并重试</Link>} style={{ marginBottom: 20 }} />}
+      {failedTasks.length > 0 && <Alert type="error" showIcon message={`${failedTasks.length} 个近期后台任务处理失败`} description={<Link to={`/workspaces/${workspace.id}/activity`}>打开处理中心查看原因并重试；历史失败记录仍保留在处理中心。</Link>} style={{ marginBottom: 20 }} />}
 
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}><Card className="gm-section-card"><Statistic title="课题文献" value={counts?.papers ?? papers?.length ?? "—"} suffix={counts || papers ? "篇" : undefined} /><Typography.Text type="secondary">{counts ? `${counts.papers_with_pdf} 篇已有 PDF` : papers ? `${papers.filter((paper) => Boolean(paper.primary_artifact_id)).length} 篇已有 PDF` : "数据暂不可用"}</Typography.Text></Card></Col>

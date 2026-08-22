@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { ChatConversation, ChatMessage } from "../api/chat";
+import { requestErrorMessage } from "./requestFeedback";
 
 export function truncateChatTitle(title: string, maxLength = 38): string {
   const normalized = title.replace(/\s+/g, " ").trim();
@@ -10,8 +11,11 @@ export function sortChatMessages(messages: ChatMessage[]): ChatMessage[] {
   return [...messages].sort((a, b) => a.sequence - b.sequence);
 }
 
-export function chatConversationPath(conversation: ChatConversation): string {
-  return conversation.workspace_id
+export function chatConversationPath(
+  conversation: ChatConversation,
+  independentWorkspaceIds: ReadonlySet<string> = new Set(),
+): string {
+  return conversation.workspace_id && !independentWorkspaceIds.has(conversation.workspace_id)
     ? `/workspaces/${conversation.workspace_id}/assistant/${conversation.id}`
     : `/chat/${conversation.id}`;
 }
@@ -51,5 +55,24 @@ export function chatErrorMessage(error: unknown): string {
     if (error.response?.status === 503) return "AI 服务尚未配置，请联系管理员。";
     if (error.response?.status === 502) return "AI 服务暂时不可用，请稍后重试。";
   }
-  return "操作失败，请稍后重试。";
+  return requestErrorMessage(error);
+}
+
+/**
+ * Failed messages are persisted so a reload must keep their remediation copy,
+ * without leaking raw upstream errors into the research workspace UI.
+ */
+export function chatFailureMessage(
+  message: Pick<ChatMessage, "grounding_status" | "error_message">,
+): string {
+  if (message.grounding_status === "retrieval_failed") {
+    return "工作区论文检索暂不可用，请检查向量化服务与 Milvus 后重试。";
+  }
+  if (message.error_message?.includes("流式响应中断")) {
+    return "生成过程意外中断，请重新尝试。";
+  }
+  if (message.error_message?.includes("API key is not configured")) {
+    return "AI 服务尚未配置，请联系管理员。";
+  }
+  return "回答失败，请重试。";
 }

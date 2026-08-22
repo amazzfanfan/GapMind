@@ -34,6 +34,12 @@ class LLMGateway:
 
     Uses the `openai` SDK with a custom base_url. Phase 0 only implements the
     basic chat completion; structured extraction and cost tracking come later.
+
+    Demo-day fuse (0820): when a backup OpenAI-compatible endpoint is fully
+    configured (key + base_url + model), any primary failure falls over to it
+    once — first with identical kwargs, then, if rejected, without the
+    Deepseek-specific ``thinking`` extra_body. If the backup also fails, the
+    original primary error is raised.
     """
 
     def __init__(
@@ -41,21 +47,86 @@ class LLMGateway:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
+        backup_api_key: str | None = None,
+        backup_base_url: str | None = None,
+        backup_model: str | None = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else settings.deepseek_api_key
         self.base_url = base_url if base_url is not None else settings.deepseek_base_url
         self.model = model if model is not None else settings.deepseek_model
+        self.backup_api_key = (
+            backup_api_key if backup_api_key is not None else settings.deepseek_backup_api_key
+        )
+        self.backup_base_url = (
+            backup_base_url
+            if backup_base_url is not None
+            else settings.deepseek_backup_base_url
+        )
+        self.backup_model = (
+            backup_model if backup_model is not None else settings.deepseek_backup_model
+        )
         self._client: OpenAI | None = None
+        self._backup_client: OpenAI | None = None
 
     @property
     def client(self) -> OpenAI:
         if self._client is None:
             if not self.api_key:
                 raise RuntimeError(
-                    "DEEPSEEK_API_KEY is not set. Configure backend/.env."
+                    "DEEPSEEK_API_KEY is not set. Configure the repo-root .env."
                 )
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client
+
+    @property
+    def backup_enabled(self) -> bool:
+        return bool(self.backup_api_key and self.backup_base_url and self.backup_model)
+
+    @property
+    def backup_client(self) -> OpenAI:
+        if self._backup_client is None:
+            self._backup_client = OpenAI(
+                api_key=self.backup_api_key, base_url=self.backup_base_url
+            )
+        return self._backup_client
+
+    def _create_with_fallback(
+        self, kwargs: dict[str, Any], *, stream: bool = False
+    ) -> Any:
+        """Call the primary endpoint, fall over to the backup on failure.
+
+        Streaming can only fail over before the first chunk is yielded; once
+        the stream has started, errors propagate to the caller.
+        """
+        try:
+            return self.client.chat.completions.create(**kwargs, stream=stream)
+        except Exception as primary_error:
+            backup_attempts: list[dict[str, Any]] = []
+            if self.backup_enabled:
+                backup_attempts.append({**kwargs, "model": self.backup_model})
+                if "extra_body" in kwargs:
+                    # some strict OpenAI-compatible servers reject the
+                    # Deepseek-only `thinking` field; retry once without it
+                    stripped = {k: v for k, v in kwargs.items() if k != "extra_body"}
+                    backup_attempts.append({**stripped, "model": self.backup_model})
+            if not backup_attempts:
+                raise
+            logger.warning(
+                "llm.chat.fallback",
+                primary_model=self.model,
+                backup_model=self.backup_model,
+                error=str(primary_error)[:300],
+            )
+            for attempt_kwargs in backup_attempts:
+                try:
+                    return self.backup_client.chat.completions.create(
+                        **attempt_kwargs, stream=stream
+                    )
+                except Exception as backup_error:
+                    logger.warning(
+                        "llm.chat.fallback.failed", error=str(backup_error)[:300]
+                    )
+            raise primary_error
 
     def chat_completion(
         self,
@@ -92,7 +163,7 @@ class LLMGateway:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         logger.info("llm.chat.start", model=self.model, messages=len(messages))
-        resp = self.client.chat.completions.create(**kwargs)
+        resp = self._create_with_fallback(kwargs)
         choice = resp.choices[0]
         usage = resp.usage
         return LLMResponse(
@@ -128,7 +199,7 @@ class LLMGateway:
             kwargs["max_tokens"] = max_tokens
         if disable_thinking:
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        stream = self.client.chat.completions.create(**kwargs, stream=True)
+        stream = self._create_with_fallback(kwargs, stream=True)
         for chunk in stream:
             if not chunk.choices:
                 continue

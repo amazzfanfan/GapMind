@@ -51,6 +51,7 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
   const [rejectionPage, setRejectionPage] = useState(1);
   const [rejectionsLoading, setRejectionsLoading] = useState(false);
   const [rejectionsError, setRejectionsError] = useState<string | null>(null);
+  const [actionTaskId, setActionTaskId] = useState<string | null>(null);
 
   const loadRejections = async (task: Task, page = 1) => {
     const runId = extractionRunId(task);
@@ -80,23 +81,31 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
   };
 
   const handleCancel = async (taskId: string) => {
+    setActionTaskId(taskId);
     try {
       await taskApi.cancel(taskId);
+      message.success("任务已取消");
       onChanged();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: { message?: string } } } }).response?.data?.detail;
       message.error(detail?.message || (err as Error).message);
-    }
+    } finally { setActionTaskId(null); }
   };
 
   const handleRetry = async (taskId: string) => {
+    setActionTaskId(taskId);
     try {
-      await taskApi.retry(taskId);
+      const task = await taskApi.retry(taskId);
+      if (task.status === "failed") {
+        message.error(task.error || "任务未能重新提交，请检查本地 Worker 与 Redis。");
+      } else {
+        message.success("任务已重新提交");
+      }
       onChanged();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: { message?: string } } } }).response?.data?.detail;
       message.error(detail?.message || (err as Error).message);
-    }
+    } finally { setActionTaskId(null); }
   };
 
   return (
@@ -189,14 +198,14 @@ export default function TasksSection({ tasks, loading, onChanged }: Props) {
               render: (_: unknown, t) => {
                 if (t.status === "queued" || t.status === "running" || t.status === "waiting_for_user") {
                   return (
-                    <Button size="small" onClick={() => handleCancel(t.id)}>
+                    <Button size="small" loading={actionTaskId === t.id} onClick={() => void handleCancel(t.id)}>
                       取消处理
                     </Button>
                   );
                 }
                 if (t.status === "failed") {
                   return (
-                    <Button size="small" onClick={() => handleRetry(t.id)}>
+                    <Button size="small" loading={actionTaskId === t.id} onClick={() => void handleRetry(t.id)}>
                       重试
                     </Button>
                   );
