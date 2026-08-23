@@ -133,6 +133,7 @@ function ChatMessageItem({ conversationId, message, onRetry, retrying }: { conve
       {!isUser && message.status === "completed" && retrievalDiagnostic && <Alert type="warning" showIcon message={retrievalDiagnostic.title} description={retrievalDiagnostic.recovery} />}
       {!isUser && message.status === "completed" && message.citation_check && !message.citation_check.ok && <Typography.Text type="danger">检测到失效引用：[E{message.citation_check.broken.join("]、[E")}] 未找到对应证据，请核对来源。</Typography.Text>}
       {!isUser && message.status === "completed" && message.citation_check?.grounded_without_citations && <Typography.Text type="warning">已使用工作区证据，但回答未标注 [E] 引用，关键结论可能缺少直接支撑。</Typography.Text>}
+      {!isUser && message.status === "completed" && message.citation_quality?.status === "rejected" && <Alert type="warning" showIcon message="回答未通过引用质量校验" description="当前回答已降级为证据不足提示，未将未验证结论展示为论文事实。" />}
       {!isUser && message.status === "completed" && message.source_check && !message.source_check.ok && <Typography.Text type="danger">检测到失效上下文来源标记：{message.source_check.broken.join("、")}，请核对来源。</Typography.Text>}
       {!isUser && conversationId && (message.citations?.length ?? 0) > 0 && <ChatCitations conversationId={conversationId} messageId={message.id} citations={message.citations ?? []} />}
       {!isUser && message.status === "completed" && <ChatSources sources={message.sources ?? []} />}

@@ -60,7 +60,7 @@ D1 已由提交 `3d7a504` 固化，D2 已由提交 `6b0f9c1` 固化，D3 已由�
 | 编号 | 工作项 | 完成标准 | 状态 |
 |---|---|---|---|
 | Q1 | 外部服务失败测试 | 为 embedding、Semantic Scholar、LLM 主备切换、流式错误和缓存 stale 增加不依赖外部服务的测试 | ☐ |
-| Q2 | 完整回归基线 | 2026-08-23 已通过后端 `431 passed`、前端 `56 passed`、类型检查和生产构建；D5 已通过生成脚本更新 OpenAPI 类型 | ◐ |
+| Q2 | 完整回归基线 | 2026-08-24 已通过后端 `449 passed`、前端 `56 passed`、类型检查、生产构建；`npm run lint` 为 0 errors / 14 warnings；D5 与 Chat 引用质量门均已通过 OpenAPI 生成脚本更新类型 | ◐ |
 | Q3 | lint 工具修复 | 已补齐 ESLint 9 flat config；`npm run lint` 可执行，当前 0 errors / 14 warnings，warning 已记录 | ✅ 2026-08-23 |
 | Q4 | 文档引用整理 | 处理 `docs/0811_demo_script.md` 对缺失历史文档的引用；补充本轮收尾记录、已知风险和演示注意事项 | ☐ |
 | Q5 | 数据与迁移检查 | 确认 Alembic head、软删除过滤、workspace 隔离、关键索引和幂等任务行为；不得通过改固定 Gold Set 绕过评测 | ☐ |

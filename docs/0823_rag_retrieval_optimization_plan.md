@@ -1,7 +1,7 @@
 # RAG 检索与生成优化方案
 
 > 日期：2026-08-23<br>
-> 状态：阶段 A 已完成；阶段 B-D 等待评测基线后分批执行<br>
+> 状态：阶段 A 已完成；阶段 B 已完成首批有界引用质量门，分面检索/阈值校准及阶段 C-D 仍按评测推进<br>
 > 范围：本地封版前的 Workspace Chat RAG；不部署、不引入重型 Agent 框架、不改变 HITL 边界。
 
 ## 1. 现状与结论
@@ -165,3 +165,11 @@ Dense BGE-M3 recall + lexical/BM25 recall
 - 评分直接复用 Chat 域的 `[En]` 与 `[Pn]/[Dn]/[Cn]` 一致性规则，报告论文引用有效率、必需论文覆盖、非论文来源标记有效率和人工结论准确率；不在样本不足时写死质量阈值。
 - 首个 GNN 解释样本集明确标为 `draft`，其中包含双论文比较题和“证据不足”题；待在演示 workspace 中完成匿名化观测与人工复核后才能冻结为 `gold`。
 - 验证：新增 Chat QA 定向测试 `53 passed`，完整后端测试 `446 passed`；该阶段没有前端或 OpenAPI 接口改动，前端阶段 A 的完整检查结果继续有效。
+
+## 10. 2026-08-24 阶段 B 首批实施记录：有界引用质量门
+
+- 已从演示 workspace 的已持久化 Chat 消息只读生成匿名化观测快照；PowerShell UTF-8 BOM/中文编码问题已在评测输入读取和快照整理流程中处理，不修改 workspace 数据。
+- GNN draft 两条人工复核结论由用户确认并写入观测快照：双论文问题为 `supported`，过强的全称比较问题为 `insufficient_evidence`。当前离线报告为 `2/2` 观测覆盖、论文引用有效率 `1.0`、必需论文覆盖 `1.0`、来源标记有效率 `1.0`、人工复核覆盖率 `1.0`、人工结论准确率 `1.0`；该报告仍是产品相关 draft 评测，不将 draft Gold 自动升级为固定 Gold。
+- Chat 同步和流式回答现在共享一次性质量门：发现失效 `[En]`、工作区论文已召回但回答无论文引用，或 `[P]/[D]/[C]` 来源标记失效时，最多追加一次 `disable_thinking=True` 的边界修复调用；修复仍失败则持久化明确的证据不足提示，并记录 `citation_quality` 审计快照，不伪造引用、不新增检索结果。
+- `chat_messages.citation_quality` 通过 Alembic `0022_chat_citation_quality` 持久化；只随消息读取，不参与检索、过滤或自动事实判断。前端仅展示拒绝后的证据不足警告，OpenAPI 类型由脚本自动生成。
+- 验证：Chat API 定向测试 `22 passed`；完整后端测试 `449 passed`；前端测试 `56 passed`、TypeScript 类型检查、生产构建均通过；`npm run lint` 为 `0 errors`、`14 warnings`。阶段 C 的混合检索与阶段 D 的 GraphRAG-lite 仍未实现，等待更多人工复核样本和评测依据。

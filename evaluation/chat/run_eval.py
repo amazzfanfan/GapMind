@@ -26,7 +26,10 @@ from evaluation.chat.metrics import build_report  # noqa: E402
 
 
 def _load_json(path: Path) -> object:
-    return json.loads(path.read_text(encoding="utf-8"))
+    # Windows PowerShell's ``Set-Content -Encoding UTF8`` writes a BOM.
+    # Accept it for locally exported observations while still decoding all
+    # content as UTF-8.
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def main(argv: list[str] | None = None) -> int:

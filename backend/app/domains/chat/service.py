@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Generator
 
@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.domains.agent.models import AgentArtifact, AgentRun
 from app.domains.artifact.models import Artifact
 from app.domains.artifact.service import ArtifactService
+from app.domains.chat.consistency import message_citation_check, source_marker_check
 from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
 from app.domains.discover.models import ResearchOpportunity, ResearchPlan
 from app.domains.paper.models import Paper
@@ -25,7 +26,7 @@ from app.domains.retrieval.service import (
 )
 from app.domains.workspace.models import Workspace
 from app.domains.workspace.service import WorkspaceService
-from app.gateway.llm import LLMGateway, get_llm_gateway
+from app.gateway.llm import LLMGateway, LLMResponse, get_llm_gateway
 
 # A chat stream whose client disconnected mid-flight is marked failed by the
 # finally-guard in _stream_complete; rows older than this threshold that are
@@ -34,6 +35,11 @@ STALE_GENERATING_SECONDS = 15 * 60
 PLAN_REFERENCE_PATTERN = re.compile(r"(?:此|这|该)(?:个)?研究计划|当前研究计划|这个计划")
 CONFIRMED_OPPORTUNITY_STATUSES = {"confirmed", "edited_confirmed"}
 CONFIRMED_PLAN_STATUSES = {"confirmed", "approved"}
+CITATION_REPAIR_MAX_TOKENS = 2000
+CITATION_REPAIR_FALLBACK = (
+    "当前回答未能通过工作区论文引用校验，因此不能把原回答中的结论视为有论文依据。"
+    "请基于已列出的证据重新提问，或补充相关论文后重试。"
+)
 
 
 @dataclass
@@ -49,6 +55,12 @@ class WorkspaceContext:
 class ContextSelection:
     plan: ResearchPlan | None
     artifacts: list[AgentArtifact]
+
+
+@dataclass
+class CitationQualityResult:
+    response: LLMResponse
+    audit: dict[str, Any]
 
 
 class ChatNotFoundError(LookupError):
@@ -448,6 +460,15 @@ class ChatService:
                 temperature=0.2,
                 disable_thinking=True,
             )
+            quality = self._apply_citation_quality_gate(
+                gateway,
+                context,
+                response,
+                evidence,
+                sources,
+            )
+            response = quality.response
+            assistant.citation_quality = quality.audit
         except ChatConfigurationError as exc:
             self._mark_failed(assistant, str(exc))
             raise ChatConfigurationError(
@@ -648,6 +669,21 @@ class ChatService:
                 return
 
             content = "".join(chunks)
+            quality = self._apply_citation_quality_gate(
+                gateway,
+                context,
+                LLMResponse(
+                    content=content,
+                    model=getattr(gateway, "model", "stream"),
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                ),
+                evidence,
+                sources,
+            )
+            content = quality.response.content
+            assistant.citation_quality = quality.audit
             assistant.status = "completed"
             assistant.content = content
             assistant.error_message = None
@@ -670,6 +706,147 @@ class ChatService:
                     self._mark_failed(assistant, "流式响应中断：客户端提前断开")
                 except Exception:
                     self.db.rollback()
+
+    def _apply_citation_quality_gate(
+        self,
+        gateway: Any,
+        context: list[dict[str, str]],
+        response: LLMResponse,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+    ) -> CitationQualityResult:
+        """Validate one answer and allow at most one bounded marker repair.
+
+        This gate only repairs citation/source boundaries. It never retrieves
+        new material and never invents a citation. If the repaired answer is
+        still mechanically invalid, return a deterministic evidence-insufficiency
+        message instead of persisting an answer with a broken provenance chain.
+        """
+
+        grounded = bool(evidence)
+        citation_check, source_check = self._quality_checks(response.content, evidence, sources, grounded)
+        audit: dict[str, Any] = {
+            "status": "not_needed" if not evidence and not sources else "passed",
+            "attempts": 0,
+            "initial_broken_citations": citation_check.broken,
+            "initial_grounded_without_citations": citation_check.grounded_without_citations,
+            "initial_broken_sources": source_check.broken,
+            "final_broken_citations": citation_check.broken,
+            "final_grounded_without_citations": citation_check.grounded_without_citations,
+            "final_broken_sources": source_check.broken,
+            "fallback": False,
+        }
+        if citation_check.ok and not citation_check.grounded_without_citations and source_check.ok:
+            return CitationQualityResult(response=response, audit=audit)
+
+        audit["attempts"] = 1
+        repair_response: LLMResponse | None = None
+        try:
+            repair_response = gateway.chat_completion(
+                self._citation_repair_context(
+                    context,
+                    response.content,
+                    evidence,
+                    sources,
+                    citation_check,
+                    source_check,
+                ),
+                temperature=0.0,
+                max_tokens=CITATION_REPAIR_MAX_TOKENS,
+                disable_thinking=True,
+            )
+        except Exception:
+            repair_response = None
+
+        final_content = repair_response.content if repair_response is not None else ""
+        final_citation_check, final_source_check = self._quality_checks(
+            final_content, evidence, sources, grounded
+        )
+        audit["final_broken_citations"] = final_citation_check.broken
+        audit["final_grounded_without_citations"] = (
+            final_citation_check.grounded_without_citations
+        )
+        audit["final_broken_sources"] = final_source_check.broken
+        if (
+            repair_response is not None
+            and final_citation_check.ok
+            and not final_citation_check.grounded_without_citations
+            and final_source_check.ok
+        ):
+            audit["status"] = "repaired"
+            return CitationQualityResult(
+                response=replace(
+                    response,
+                    content=final_content,
+                    prompt_tokens=response.prompt_tokens + repair_response.prompt_tokens,
+                    completion_tokens=response.completion_tokens + repair_response.completion_tokens,
+                    total_tokens=response.total_tokens + repair_response.total_tokens,
+                ),
+                audit=audit,
+            )
+
+        audit["status"] = "rejected"
+        audit["fallback"] = True
+        return CitationQualityResult(
+            response=replace(response, content=CITATION_REPAIR_FALLBACK),
+            audit=audit,
+        )
+
+    @staticmethod
+    def _quality_checks(
+        content: str,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+        grounded: bool,
+    ) -> tuple[Any, Any]:
+        citation_check = message_citation_check(
+            content,
+            [item.rank for item in evidence],
+            grounded=grounded,
+        )
+        source_check = source_marker_check(
+            content,
+            {
+                f"[{source.get('marker')}]"
+                for source in sources
+                if source.get("marker")
+            },
+        )
+        return citation_check, source_check
+
+    @staticmethod
+    def _citation_repair_context(
+        context: list[dict[str, str]],
+        content: str,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+        citation_check: Any,
+        source_check: Any,
+    ) -> list[dict[str, str]]:
+        allowed_papers = ", ".join(f"[E{item.rank}]" for item in evidence) or "无"
+        allowed_sources = ", ".join(
+            f"[{source['marker']}]"
+            for source in sources
+            if source.get("marker") and source.get("source_type") != "paper"
+        ) or "无"
+        instruction = (
+            "你是工作区问答的引用质量修复器。只修复回答中的引用边界，不增加事实、"
+            "不改写成新的研究结论。论文引用只能使用已存在的标记："
+            f"{allowed_papers}。计划/报告/代码来源只能使用：{allowed_sources}。"
+            "不要伪造标记；如果现有证据不能支持某个结论，明确写出证据不足。"
+            "请输出完整的修复后回答，不要解释修复过程。"
+        )
+        diagnostics = (
+            f"原回答的失效论文引用：{citation_check.broken or '无'}；"
+            f"有工作区论文但未标注引用：{citation_check.grounded_without_citations}；"
+            f"原回答的失效来源标记：{source_check.broken or '无'}。"
+        )
+        return [
+            {"role": "system", "content": instruction},
+            *context,
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": f"{diagnostics}\n请输出修复后的完整回答。"},
+        ]
 
     def _workspace_context(
         self,

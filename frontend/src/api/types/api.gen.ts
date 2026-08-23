@@ -2010,6 +2010,7 @@ export interface components {
             grounding_status: string;
             /** Retrieval Diagnostic Code */
             retrieval_diagnostic_code?: string | null;
+            citation_quality?: components["schemas"]["CitationQualityRead"];
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             citation_check?: components["schemas"]["CitationCheckRead"] | null;
@@ -2075,6 +2076,46 @@ export interface components {
              * @default false
              */
             grounded_without_citations: boolean;
+        };
+        /**
+         * CitationQualityRead
+         * @description Persisted audit of the bounded citation/source quality gate.
+         */
+        CitationQualityRead: {
+            /**
+             * Status
+             * @default not_needed
+             * @enum {string}
+             */
+            status: "not_needed" | "passed" | "repaired" | "rejected";
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /** Initial Broken Citations */
+            initial_broken_citations?: number[];
+            /**
+             * Initial Grounded Without Citations
+             * @default false
+             */
+            initial_grounded_without_citations: boolean;
+            /** Initial Broken Sources */
+            initial_broken_sources?: string[];
+            /** Final Broken Citations */
+            final_broken_citations?: number[];
+            /**
+             * Final Grounded Without Citations
+             * @default false
+             */
+            final_grounded_without_citations: boolean;
+            /** Final Broken Sources */
+            final_broken_sources?: string[];
+            /**
+             * Fallback
+             * @default false
+             */
+            fallback: boolean;
         };
         /** ConfirmRequest */
         ConfirmRequest: {
