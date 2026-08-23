@@ -26,15 +26,21 @@ class FakeGateway:
     def __init__(self, content: str = "这是 AI 的回答") -> None:
         self.content = content
         self.calls: list[list[dict[str, str]]] = []
+        self.call_kwargs: list[dict] = []
+        self.stream_calls: list[list[dict[str, str]]] = []
+        self.stream_call_kwargs: list[dict] = []
         self.fail = False
 
     def chat_completion(self, messages, **kwargs):
         self.calls.append(messages)
+        self.call_kwargs.append(kwargs)
         if self.fail:
             raise RuntimeError("upstream unavailable")
         return FakeResponse(self.content)
 
     def stream_chat_completion(self, messages, **kwargs):
+        self.stream_calls.append(messages)
+        self.stream_call_kwargs.append(kwargs)
         for delta in getattr(self, "stream_deltas", ["流式"]):
             yield delta
 
@@ -93,6 +99,7 @@ def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
     assert body["assistant_message"]["model"] == "fake-deepseek"
     assert body["assistant_message"]["total_tokens"] == 15
     assert len(fake_gateway.calls) == 1
+    assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
 
     detail = client.get(f"/api/v1/chat/conversations/{body['conversation']['id']}").json()
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
@@ -111,6 +118,46 @@ def test_existing_send_includes_completed_history(client, fake_gateway):
         {"role": "assistant", "content": "这是 AI 的回答"},
         {"role": "user", "content": "再解释消息传递"},
     ]
+
+
+def test_chat_history_budget_prefers_newest_completed_messages(db_session, monkeypatch):
+    from app.core.config import settings
+    from app.domains.chat.service import ChatService
+
+    monkeypatch.setattr(settings, "chat_history_char_limit", 6)
+    messages = [
+        SimpleNamespace(role="user", status="completed", content="older!"),
+        SimpleNamespace(role="assistant", status="completed", content="newest"),
+    ]
+
+    context = ChatService(db_session)._build_context(messages, "current question")
+
+    assert context == [
+        {"role": "assistant", "content": "newest"},
+        {"role": "user", "content": "current question"},
+    ]
+
+
+def test_prompt_budget_keeps_current_question_and_newest_history(db_session, monkeypatch):
+    from app.core.config import settings
+    from app.domains.chat.service import ChatService
+
+    monkeypatch.setattr(settings, "chat_prompt_max_context_chars", 44)
+    system = {"role": "system", "content": "system context"}
+    context = [
+        {"role": "user", "content": "older history that does not fit"},
+        {"role": "assistant", "content": "newest history"},
+        {"role": "user", "content": "current question"},
+    ]
+
+    messages = ChatService(db_session)._budget_prompt_messages(system, context)
+
+    assert messages == [
+        system,
+        {"role": "assistant", "content": "newest history"},
+        {"role": "user", "content": "current question"},
+    ]
+    assert sum(len(message["content"]) for message in messages) <= 44
 
 
 def test_conversation_search_rename_and_soft_delete(client, fake_gateway):
@@ -247,6 +294,7 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
     def fake_search(**kwargs):
         assert kwargs["workspace_id"] == workspace["id"]
         assert kwargs["use_reranker"] is True
+        assert kwargs["diversify_by_paper"] is True
         return RetrievalResponse(
             workspace_id=workspace["id"],
             query=kwargs["query"],
@@ -543,6 +591,7 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["content"] == "第一段内容"
     assert assistant["status"] == "completed"
+    assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
 
 
 def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(

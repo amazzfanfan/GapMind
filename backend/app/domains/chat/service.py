@@ -382,15 +382,21 @@ class ChatService:
         )[::-1]
 
     def _build_context(self, messages: Iterable[ChatMessage], content: str) -> list[dict[str, str]]:
-        context: list[dict[str, str]] = []
+        context_reversed: list[dict[str, str]] = []
         total_chars = 0
-        for message in messages:
+        # ``_completed_messages`` already returns the latest N rows in
+        # chronological order. Fill the history budget from the newest turn
+        # backwards, then restore chronology for the LLM. The old forward pass
+        # could spend the whole budget on stale turns and omit the user's most
+        # recent intent.
+        for message in reversed(list(messages)):
             if message.role not in {"user", "assistant"} or message.status != "completed":
                 continue
             if total_chars + len(message.content) > settings.chat_history_char_limit:
-                break
-            context.append({"role": message.role, "content": message.content})
+                continue
+            context_reversed.append({"role": message.role, "content": message.content})
             total_chars += len(message.content)
+        context = list(reversed(context_reversed))
         context.append({"role": "user", "content": content})
         return context
 
@@ -437,7 +443,11 @@ class ChatService:
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
-            response = gateway.chat_completion(context, temperature=0.2)
+            response = gateway.chat_completion(
+                context,
+                temperature=0.2,
+                disable_thinking=True,
+            )
         except ChatConfigurationError as exc:
             self._mark_failed(assistant, str(exc))
             raise ChatConfigurationError(
@@ -624,7 +634,11 @@ class ChatService:
                 }
             chunks: list[str] = []
             try:
-                for delta in gateway.stream_chat_completion(context, temperature=0.2):
+                for delta in gateway.stream_chat_completion(
+                    context,
+                    temperature=0.2,
+                    disable_thinking=True,
+                ):
                     chunks.append(delta)
                     yield {"type": "token", "content": delta}
             except Exception as exc:
@@ -679,6 +693,7 @@ class ChatService:
             query=question,
             top_k=settings.chat_rag_top_k,
             use_reranker=True,
+            diversify_by_paper=True,
         )
         if result.status == "failed":
             diagnostic_code = result.diagnostic_code or "unknown"
@@ -706,8 +721,14 @@ class ChatService:
             result.items,
         )
         sources = self._source_manifest(selection.plan, evidence, selection.artifacts)
-        profile = self._workspace_profile(workspace)
-        plan_text = self._plan_prompt(selection.plan) if selection.plan else "未选择研究计划。"
+        profile = self._clip_context_text(
+            self._workspace_profile(workspace),
+            settings.chat_workspace_profile_max_context_chars,
+        )
+        plan_text = self._clip_context_text(
+            self._plan_prompt(selection.plan) if selection.plan else "未选择研究计划。",
+            settings.chat_plan_max_context_chars,
+        )
         artifact_text = self._artifact_prompt(selection.artifacts)
         evidence_text = self._evidence_prompt(evidence) if evidence else "本次没有检索到可用的工作区论文证据。"
         system_message = {
@@ -725,7 +746,7 @@ class ChatService:
             ),
         }
         return WorkspaceContext(
-            [system_message, *context],
+            self._budget_prompt_messages(system_message, context),
             evidence,
             sources,
             selection.plan,
@@ -968,7 +989,7 @@ class ChatService:
         report_index = 1
         code_index = 1
         total_chars = 0
-        budget = max(settings.chat_rag_max_context_chars // 2, 4000)
+        budget = settings.chat_artifact_max_context_chars
         for artifact in artifacts:
             if artifact.artifact_type == "deep_research_report":
                 marker = f"[D{report_index}] 已确认报告"
@@ -1072,6 +1093,47 @@ class ChatService:
             blocks.append(block[:remaining])
             total_chars += min(len(block), remaining)
         return "\n\n".join(blocks)
+
+    @staticmethod
+    def _clip_context_text(text: str, max_chars: int) -> str:
+        """Bound a named context source without dropping its provenance header."""
+
+        if max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        suffix = "\n[该来源已按上下文预算截断]"
+        return text[: max(0, max_chars - len(suffix))] + suffix
+
+    @staticmethod
+    def _budget_prompt_messages(
+        system_message: dict[str, str],
+        context: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Apply one total prompt budget while preserving the current question.
+
+        Source blocks are independently capped before this function. The
+        remaining budget belongs to dialogue history and is filled from newest
+        to oldest, preserving chronological order in the final prompt.
+        """
+
+        if not context:
+            return [system_message]
+        current_message = context[-1]
+        history = context[:-1]
+        remaining = max(
+            0,
+            settings.chat_prompt_max_context_chars
+            - len(system_message["content"])
+            - len(current_message["content"]),
+        )
+        selected_reversed: list[dict[str, str]] = []
+        for message in reversed(history):
+            if len(message["content"]) > remaining:
+                continue
+            selected_reversed.append(message)
+            remaining -= len(message["content"])
+        return [system_message, *reversed(selected_reversed), current_message]
 
     def _complete_without_evidence(
         self,
