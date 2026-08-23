@@ -18,6 +18,14 @@ from evaluation.retrieval.gold_set import Freeze
 
 ExpectedVerdict = Literal["supported", "insufficient_evidence"]
 HumanVerdict = Literal["supported", "insufficient_evidence", "unsupported"]
+RetrievalAuditStatus = Literal["succeeded", "degraded", "failed", "unknown"]
+RerankerAuditStatus = Literal[
+    "applied",
+    "enabled_no_rerank",
+    "degraded",
+    "disabled",
+    "unknown",
+]
 
 
 class ChatContext(BaseModel):
@@ -93,6 +101,23 @@ class SourceSnapshot(BaseModel):
     title: str = Field(min_length=1)
 
 
+class RetrievalAuditSnapshot(BaseModel):
+    """An anonymized, non-authoritative snapshot of one retrieval run.
+
+    Request ids are deliberately omitted: the QA snapshot is for measuring
+    retrieval coverage and latency, not for tracing a local database row.
+    These fields never decide whether an answer is factually supported.
+    """
+
+    status: RetrievalAuditStatus = "unknown"
+    diagnostic_code: str | None = None
+    recall_count: int | None = Field(default=None, ge=0)
+    returned_chunk_count: int = Field(default=0, ge=0)
+    final_paper_count: int = Field(default=0, ge=0)
+    latency_ms: float = Field(default=0.0, ge=0)
+    reranker_status: RerankerAuditStatus = "unknown"
+
+
 class ChatQAObservation(BaseModel):
     """One saved Chat answer exported for an offline QA evaluation."""
 
@@ -102,6 +127,7 @@ class ChatQAObservation(BaseModel):
     grounding_status: str = Field(min_length=1)
     evidence: list[EvidenceSnapshot] = Field(default_factory=list, max_length=20)
     sources: list[SourceSnapshot] = Field(default_factory=list, max_length=10)
+    retrieval_audit: RetrievalAuditSnapshot | None = None
     human_verdict: HumanVerdict | None = None
 
     @model_validator(mode="after")
@@ -137,5 +163,8 @@ __all__ = [
     "ChatQAQuestion",
     "EvidenceSnapshot",
     "HumanVerdict",
+    "RetrievalAuditSnapshot",
+    "RetrievalAuditStatus",
+    "RerankerAuditStatus",
     "SourceSnapshot",
 ]

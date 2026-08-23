@@ -26,6 +26,7 @@ from evaluation.chat.gold_set import (
     ChatQAObservation,
     ChatQAObservationSet,
     EvidenceSnapshot,
+    RetrievalAuditSnapshot,
     SourceSnapshot,
 )
 
@@ -46,6 +47,24 @@ def _parse_selection(values: list[str]) -> list[tuple[str, str]]:
     if not selections:
         raise ValueError("at least one query_id=message_id selection is required")
     return selections
+
+
+def _audit_snapshot(value: dict | None) -> RetrievalAuditSnapshot | None:
+    """Copy only stable, non-sensitive retrieval audit fields."""
+
+    if not value or not value.get("status"):
+        return None
+    return RetrievalAuditSnapshot.model_validate(
+        {
+            "status": value.get("status", "unknown"),
+            "diagnostic_code": value.get("diagnostic_code"),
+            "recall_count": value.get("recall_count"),
+            "returned_chunk_count": value.get("returned_chunk_count", 0),
+            "final_paper_count": value.get("final_paper_count", 0),
+            "latency_ms": value.get("latency_ms", 0.0),
+            "reranker_status": value.get("reranker_status", "unknown"),
+        }
+    )
 
 
 def export_observations(
@@ -113,6 +132,7 @@ def export_observations(
                     grounding_status=message.grounding_status,
                     evidence=evidence,
                     sources=sources,
+                    retrieval_audit=_audit_snapshot(message.retrieval_audit),
                     human_verdict=None,
                 )
             )

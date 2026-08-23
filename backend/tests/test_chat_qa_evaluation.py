@@ -110,6 +110,41 @@ def test_assess_answer_requires_grounded_status_for_supported_question() -> None
     assert result["mechanical_passed"] is False
 
 
+def test_retrieval_audit_is_reported_without_becoming_a_quality_verdict() -> None:
+    observation = _observation(
+        retrieval_audit={
+            "request_id": "local-only-request-id",
+            "status": "succeeded",
+            "diagnostic_code": None,
+            "recall_count": 18,
+            "returned_chunk_count": 4,
+            "final_paper_count": 4,
+            "latency_ms": 986.83,
+            "reranker_status": "applied",
+        }
+    )
+    result = assess_answer(_question(), observation)
+
+    assert result["retrieval_audit"]["status"] == "succeeded"
+    assert result["retrieval_audit"]["recall_count"] == 18
+    assert result["mechanical_passed"] is True
+
+    gold = _gold(_question())
+    report = build_report(
+        gold,
+        ChatQAObservationSet(gold_case_id=gold.case_id, observations=[observation]),
+    )
+    assert report["summary"]["retrieval_audit_coverage"] == 1.0
+    assert report["summary"]["retrieval_status_counts"] == {"succeeded": 1}
+    assert report["summary"]["reranker_status_counts"] == {"applied": 1}
+    assert report["summary"]["retrieval_latency_ms"] == {
+        "count": 1,
+        "p50": 986.83,
+        "p95": 986.83,
+        "max": 986.83,
+    }
+
+
 def test_assess_answer_requires_a_real_plan_marker_when_plan_context_is_selected() -> None:
     question = _question(
         context={

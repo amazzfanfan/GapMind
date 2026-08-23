@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from math import ceil
 from typing import Any
 
 from app.domains.chat.consistency import message_citation_check, source_marker_check
 from evaluation.chat.gold_set import ChatQAObservation, ChatQAQuestion
+
+
+def _nearest_rank(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, ceil(len(ordered) * percentile) - 1))
+    return ordered[index]
 
 
 def _normalized_refs(refs: list[str]) -> set[str]:
@@ -77,6 +87,11 @@ def assess_answer(question: ChatQAQuestion, observation: ChatQAObservation) -> d
         "required_paper_refs": question.required_paper_refs,
         "cited_paper_refs": cited_paper_refs,
         "paper_coverage": paper_coverage,
+        "retrieval_audit": (
+            observation.retrieval_audit.model_dump(mode="json")
+            if observation.retrieval_audit is not None
+            else None
+        ),
         "plan_context_required": requires_confirmed_plan,
         "plan_context_ok": plan_context_ok,
         "mechanical_passed": mechanical_passed,
@@ -135,6 +150,17 @@ def build_report(gold, observations) -> dict[str, Any]:
     plan_context_entries = [
         entry for entry in observed_entries if entry["plan_context_required"]
     ]
+    observed_observations = [
+        observation_by_query[question.query_id]
+        for question in gold.questions
+        if question.query_id in observation_by_query
+    ]
+    audit_snapshots = [
+        observation.retrieval_audit
+        for observation in observed_observations
+        if observation.retrieval_audit is not None
+    ]
+    audit_latencies = [snapshot.latency_ms for snapshot in audit_snapshots]
     mechanical_passed = not unknown_query_ids and len(observed_entries) == len(entries) and all(
         entry["mechanical_passed"] for entry in observed_entries
     )
@@ -172,6 +198,21 @@ def build_report(gold, observations) -> dict[str, Any]:
             "human_verdict_accuracy": (
                 sum(human_matches) / len(human_matches) if human_matches else None
             ),
+            "retrieval_audit_coverage": (
+                len(audit_snapshots) / len(observed_entries) if observed_entries else None
+            ),
+            "retrieval_status_counts": dict(
+                sorted(Counter(snapshot.status for snapshot in audit_snapshots).items())
+            ),
+            "reranker_status_counts": dict(
+                sorted(Counter(snapshot.reranker_status for snapshot in audit_snapshots).items())
+            ),
+            "retrieval_latency_ms": {
+                "count": len(audit_latencies),
+                "p50": _nearest_rank(audit_latencies, 0.50),
+                "p95": _nearest_rank(audit_latencies, 0.95),
+                "max": max(audit_latencies) if audit_latencies else None,
+            },
             "mechanical_passed": mechanical_passed,
         },
         "items": entries,

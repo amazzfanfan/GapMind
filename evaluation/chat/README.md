@@ -34,6 +34,8 @@ evaluation/chat/
 
 从 Chat API 的 assistant message 复制最小字段：`content` → `answer_text`、`grounding_status`、`citations[]` → `evidence[]`（只保留 `rank`/论文标题）、`sources[]` 中的计划/报告/代码来源 → `sources[]`。若进行了人工事实核验，再填 `human_verdict`。
 
+如果消息已经由 `0023_chat_retrieval_audit` 写入审计，也可以复制非敏感的 `retrieval_audit`：状态、召回数、返回 chunk 数、最终论文数、reranker 状态和延迟。匿名导出器会丢弃 `request_id`，旧消息的空审计保持为 `null`。这些字段只用于观察检索覆盖与延迟，不参与事实正确性、Gold 生成或自动阈值判断。
+
 也可以使用只读导出器从本地 PostgreSQL 复制真实持久化消息。默认不写入本地 `message_id`，且始终将 `human_verdict` 留空：
 
 ```powershell

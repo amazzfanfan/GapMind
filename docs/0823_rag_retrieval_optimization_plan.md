@@ -186,3 +186,9 @@ Dense BGE-M3 recall + lexical/BM25 recall
 - `semantic_search` 只补充审计字段，不改变召回、重排、按论文去重或 workspace 过滤逻辑；旧消息以空审计对象兼容，失败路径也保留稳定诊断信息，不保存原始 provider 异常。
 - 验证：Chat API 定向测试 `22 passed`；完整后端测试 `449 passed`；前端 OpenAPI 类型已自动重新生成，前端测试 `56 passed`、类型检查和生产构建通过，lint 仍为 `0 errors`、`14 warnings`。
 - 用户在本地演示 workspace 重新发送 GIB 优化目标问题后，通过 Chat API 只读核验到真实持久化审计：`succeeded`、召回 `18` 个候选、返回 `4` 个 chunk、最终 `4` 篇论文、reranker 为 `applied`、检索耗时 `986.83 ms`；该消息的论文引用一致性检查通过。未将 request id 或本地消息 id 写入评测 Gold。
+
+## 13. 2026-08-24 阶段 B 观测快照关联
+
+- `evaluation/chat` 的匿名观测 schema 新增可选 `retrieval_audit`，导出器只复制状态、诊断码、召回数、返回 chunk 数、最终论文数、reranker 状态和延迟，不复制 request id；旧消息继续以 `null` 表示没有审计。
+- 离线报告新增审计覆盖率、检索状态分布、reranker 状态分布和 P50/P95/最大延迟指标。这些指标只用于后续样本分析，不改变 `mechanical_passed`，也不从审计字段推断 `human_verdict`。
+- 当前不启用确定性分面检索、混合检索或 GraphRAG；先用带审计的真实样本比较召回与回答证据，再决定是否扩大检索能力。
