@@ -101,6 +101,7 @@ class GapAnnotationOutput(BaseModel):
 class GapExtractionRequest(BaseModel):
     paper_ids: list[str] = Field(min_length=1, max_length=200)
     force: bool = False
+    allow_remote_fallback: bool = False
 
 
 class GapExtractionTask(BaseModel):
@@ -133,6 +134,7 @@ class GapAnnotationRead(BaseModel):
     attempts: int
     output: dict[str, Any] | None = None
     validation_errors: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 

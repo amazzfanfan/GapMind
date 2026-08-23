@@ -2663,6 +2663,8 @@ export interface components {
             output?: Record<string, never> | null;
             /** Validation Errors */
             validation_errors?: string[];
+            /** Fallback Reason */
+            fallback_reason?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2803,6 +2805,11 @@ export interface components {
              * @default false
              */
             force: boolean;
+            /**
+             * Allow Remote Fallback
+             * @default false
+             */
+            allow_remote_fallback: boolean;
         };
         /** GapExtractionResponse */
         GapExtractionResponse: {

@@ -163,6 +163,14 @@
 - 远程备份不会绕过 Schema、workspace 隔离或来源记录。
 - 用户可分辨“隧道故障”“模型输出不合格”“论文不适用”。
 
+### D5 实施记录（2026-08-23）
+
+- 新增 `GapExtractor` Protocol；本地 zf Ollama 保持主路径，远程 OpenAI-compatible 结构化输出适配器由 `GAP_EXTRACTOR_REMOTE_ENABLED`、端点、Key 和模型配置共同控制，默认关闭。两条路径都使用同一 `parse_model_json` / `validate_annotation`，远程结构化调用固定 `disable_thinking=True`，不传 `reasoning_effort`。
+- `validation_errors` 现在可归类为 JSON、Schema、关系方向、标签一致性或其他；失败进一步区分本地模型不可用、输出不合格、内容不足和明显不适用。内容不足/不适用不触发远程发送，也不无限重试。
+- Gap 抽取请求新增 `allow_remote_fallback`，前端默认关闭并展示“外发 Markdown”的明确说明。只有本地不可用或完成既有修复后仍输出不合格，且服务端 feature flag、凭据和请求同意同时满足时，才发送 Markdown 到远程；未同意或未配置时保留本地失败并可重试。
+- 远程成功结果单独保存为 `model_provider=remote` 的标注候选，并持久化 provider、model、attempts、validation errors、`fallback_reason` 和结构化参数；棋盘页面显示“远程降级候选”，不把它伪装成本地模型或论文事实。新增 Alembic `0021_gap_remote_fallback`。
+- 验收覆盖本地主路径、显式同意/拒绝、远程 provenance、结构化 Schema、`disable_thinking`、失败分类和内容不足边界；当前验证：后端 `431 passed`，前端 `56 passed`，TypeScript 类型检查和生产构建通过，`0021` 已升级到本地数据库。`alembic check` 仍受既有索引/唯一约束漂移影响，未在 D5 中扩大修复范围。
+
 ## 与下一次预演的关系
 
 完成 D1 至 D3 后再执行不间断全流程预演；D4、D5 可在真实上游受限时分别验证其降级路径。预演话术需明确：工作区论文、已确认计划、AI 草案是三类不同来源，且代码只提供候选，不自动执行。
