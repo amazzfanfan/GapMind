@@ -103,6 +103,35 @@ class SourceCheckRead(BaseModel):
     ok: bool = True
 
 
+class CitationQualityRead(BaseModel):
+    """Persisted audit of the bounded citation/source quality gate."""
+
+    status: Literal["not_needed", "passed", "repaired", "rejected"] = "not_needed"
+    attempts: int = Field(default=0, ge=0, le=1)
+    initial_broken_citations: list[int] = Field(default_factory=list)
+    initial_grounded_without_citations: bool = False
+    initial_broken_sources: list[str] = Field(default_factory=list)
+    final_broken_citations: list[int] = Field(default_factory=list)
+    final_grounded_without_citations: bool = False
+    final_broken_sources: list[str] = Field(default_factory=list)
+    fallback: bool = False
+
+
+class RetrievalAuditRead(BaseModel):
+    """Persisted, non-sensitive retrieval observability for one answer."""
+
+    request_id: str = ""
+    status: str = "unknown"
+    diagnostic_code: str | None = None
+    recall_count: int | None = Field(default=None, ge=0)
+    returned_chunk_count: int = Field(default=0, ge=0)
+    final_paper_count: int = Field(default=0, ge=0)
+    latency_ms: float = Field(default=0.0, ge=0)
+    reranker_status: Literal[
+        "applied", "enabled_no_rerank", "degraded", "disabled", "unknown"
+    ] = "unknown"
+
+
 class ChatMessageSourceRead(BaseModel):
     """One explicitly labelled context source used for an answer."""
 
@@ -152,6 +181,8 @@ class ChatMessageRead(BaseModel):
     total_tokens: int | None = None
     grounding_status: str = "not_requested"
     retrieval_diagnostic_code: str | None = None
+    citation_quality: CitationQualityRead = Field(default_factory=CitationQualityRead)
+    retrieval_audit: RetrievalAuditRead = Field(default_factory=RetrievalAuditRead)
     citations: list[ChatMessageEvidenceRead] = Field(default_factory=list)
     citation_check: CitationCheckRead | None = None
     sources: list[ChatMessageSourceRead] = Field(default_factory=list)

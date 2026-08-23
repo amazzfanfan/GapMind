@@ -25,16 +25,24 @@ class FakeGateway:
 
     def __init__(self, content: str = "这是 AI 的回答") -> None:
         self.content = content
+        self.chat_contents: list[str] = []
         self.calls: list[list[dict[str, str]]] = []
+        self.call_kwargs: list[dict] = []
+        self.stream_calls: list[list[dict[str, str]]] = []
+        self.stream_call_kwargs: list[dict] = []
         self.fail = False
 
     def chat_completion(self, messages, **kwargs):
         self.calls.append(messages)
+        self.call_kwargs.append(kwargs)
         if self.fail:
             raise RuntimeError("upstream unavailable")
-        return FakeResponse(self.content)
+        content = self.chat_contents.pop(0) if self.chat_contents else self.content
+        return FakeResponse(content)
 
     def stream_chat_completion(self, messages, **kwargs):
+        self.stream_calls.append(messages)
+        self.stream_call_kwargs.append(kwargs)
         for delta in getattr(self, "stream_deltas", ["流式"]):
             yield delta
 
@@ -93,6 +101,7 @@ def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
     assert body["assistant_message"]["model"] == "fake-deepseek"
     assert body["assistant_message"]["total_tokens"] == 15
     assert len(fake_gateway.calls) == 1
+    assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
 
     detail = client.get(f"/api/v1/chat/conversations/{body['conversation']['id']}").json()
     assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
@@ -111,6 +120,46 @@ def test_existing_send_includes_completed_history(client, fake_gateway):
         {"role": "assistant", "content": "这是 AI 的回答"},
         {"role": "user", "content": "再解释消息传递"},
     ]
+
+
+def test_chat_history_budget_prefers_newest_completed_messages(db_session, monkeypatch):
+    from app.core.config import settings
+    from app.domains.chat.service import ChatService
+
+    monkeypatch.setattr(settings, "chat_history_char_limit", 6)
+    messages = [
+        SimpleNamespace(role="user", status="completed", content="older!"),
+        SimpleNamespace(role="assistant", status="completed", content="newest"),
+    ]
+
+    context = ChatService(db_session)._build_context(messages, "current question")
+
+    assert context == [
+        {"role": "assistant", "content": "newest"},
+        {"role": "user", "content": "current question"},
+    ]
+
+
+def test_prompt_budget_keeps_current_question_and_newest_history(db_session, monkeypatch):
+    from app.core.config import settings
+    from app.domains.chat.service import ChatService
+
+    monkeypatch.setattr(settings, "chat_prompt_max_context_chars", 44)
+    system = {"role": "system", "content": "system context"}
+    context = [
+        {"role": "user", "content": "older history that does not fit"},
+        {"role": "assistant", "content": "newest history"},
+        {"role": "user", "content": "current question"},
+    ]
+
+    messages = ChatService(db_session)._budget_prompt_messages(system, context)
+
+    assert messages == [
+        system,
+        {"role": "assistant", "content": "newest history"},
+        {"role": "user", "content": "current question"},
+    ]
+    assert sum(len(message["content"]) for message in messages) <= 44
 
 
 def test_conversation_search_rename_and_soft_delete(client, fake_gateway):
@@ -247,6 +296,7 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
     def fake_search(**kwargs):
         assert kwargs["workspace_id"] == workspace["id"]
         assert kwargs["use_reranker"] is True
+        assert kwargs["diversify_by_paper"] is True
         return RetrievalResponse(
             workspace_id=workspace["id"],
             query=kwargs["query"],
@@ -262,6 +312,13 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
                 )
             ],
             total=1,
+            request_id="retrieval-test-001",
+            latency_ms=12.5,
+            filters_applied={
+                "recall_count": 3,
+                "reranker_enabled": True,
+                "reranker_applied": True,
+            },
         )
 
     monkeypatch.setattr("app.domains.chat.service.semantic_search", fake_search)
@@ -285,6 +342,16 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
     assert body["conversation"]["workspace_id"] == workspace["id"]
     assistant = body["assistant_message"]
     assert assistant["grounding_status"] == "grounded"
+    assert assistant["retrieval_audit"] == {
+        "request_id": "retrieval-test-001",
+        "status": "succeeded",
+        "diagnostic_code": None,
+        "recall_count": 3,
+        "returned_chunk_count": 1,
+        "final_paper_count": 1,
+        "latency_ms": 12.5,
+        "reranker_status": "applied",
+    }
     assert len(assistant["citations"]) == 1
     citation = assistant["citations"][0]
     assert citation["paper_title"] == "Interpretable Graph Models"
@@ -325,6 +392,143 @@ def test_workspace_chat_without_hits_does_not_ask_llm(client, fake_gateway, monk
     assert assistant["citations"] == []
     assert "没有检索到" in assistant["content"]
     assert fake_gateway.calls == []
+
+
+def test_workspace_chat_repairs_invalid_citation_once_and_persists_audit(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"name": "引用门禁", "topic": "图神经网络解释"},
+    ).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "ProtGNN", "authors": [], "year": 2024},
+    ).json()
+
+    from app.domains.artifact.service import ArtifactService
+
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content="ProtGNN uses a prototype objective.".encode("utf-8"),
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-quality",
+                    section="Method",
+                    text="ProtGNN uses a prototype objective.",
+                    score=0.9,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(
+            source_artifact_id=artifact.id,
+            start_char=0,
+            end_char=35,
+        ),
+    )
+    fake_gateway.chat_contents = ["原回答引用不存在。[E9]", "修复后只引用现有证据。[E1]"]
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "ProtGNN 使用了什么原型思路？", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 200
+    assistant = response.json()["assistant_message"]
+    assert assistant["content"] == "修复后只引用现有证据。[E1]"
+    assert assistant["citation_quality"] == {
+        "status": "repaired",
+        "attempts": 1,
+        "initial_broken_citations": [9],
+        "initial_grounded_without_citations": False,
+        "initial_broken_sources": [],
+        "final_broken_citations": [],
+        "final_grounded_without_citations": False,
+        "final_broken_sources": [],
+        "fallback": False,
+    }
+    assert len(fake_gateway.calls) == 2
+    assert all(call["disable_thinking"] is True for call in fake_gateway.call_kwargs)
+    assert fake_gateway.call_kwargs[1]["max_tokens"] == 2000
+
+
+def test_workspace_chat_rejects_answer_when_citation_repair_still_invalid(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "拒绝回答"}).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "Evidence Paper", "authors": [], "year": 2024},
+    ).json()
+    from app.domains.artifact.service import ArtifactService
+
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content=b"Evidence text.",
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-reject",
+                    section="Results",
+                    text="Evidence text.",
+                    score=0.8,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(source_artifact_id=artifact.id, start_char=0, end_char=14),
+    )
+    fake_gateway.chat_contents = ["初始回答 [E9]", "修复仍然错误 [E8]"]
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "证据支持什么？", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 200
+    assistant = response.json()["assistant_message"]
+    assert "未能通过工作区论文引用校验" in assistant["content"]
+    assert "[E8]" not in assistant["content"]
+    assert assistant["citation_quality"]["status"] == "rejected"
+    assert assistant["citation_quality"]["fallback"] is True
+    assert assistant["citation_quality"]["final_broken_citations"] == [8]
+    assert len(fake_gateway.calls) == 2
 
 
 def test_workspace_chat_binds_plan_and_persists_separate_sources(
@@ -543,6 +747,71 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["content"] == "第一段内容"
     assert assistant["status"] == "completed"
+    assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
+
+
+def test_stream_message_repairs_invalid_citation_before_persisting(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "流式引用门禁"}).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "Stream Evidence", "authors": [], "year": 2024},
+    ).json()
+    from app.domains.artifact.service import ArtifactService
+
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content=b"Stream evidence.",
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-stream-quality",
+                    section="Method",
+                    text="Stream evidence.",
+                    score=0.9,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(source_artifact_id=artifact.id, start_char=0, end_char=16),
+    )
+    fake_gateway.stream_deltas = ["流式回答 [E9]"]
+    fake_gateway.chat_contents = ["流式修复回答 [E1]"]
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "stream quality", "workspace_id": workspace["id"]},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages/stream",
+        json={"content": "证据是什么？"},
+    )
+
+    assert response.status_code == 200
+    detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
+    assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+    assert assistant["content"] == "流式修复回答 [E1]"
+    assert assistant["citation_quality"]["status"] == "repaired"
+    assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
+    assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
 
 
 def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(

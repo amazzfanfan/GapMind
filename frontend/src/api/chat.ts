@@ -24,6 +24,8 @@ export interface ChatMessage {
   total_tokens: number | null;
   grounding_status?: "not_requested" | "grounded" | "plan_context" | "context_selection_required" | "no_evidence" | "retrieval_failed";
   retrieval_diagnostic_code?: "embedding_unavailable" | "milvus_unavailable" | "collection_unloaded" | "reranker_degraded" | "unknown" | null;
+  citation_quality?: CitationQuality;
+  retrieval_audit?: RetrievalAudit;
   citations?: ChatMessageEvidence[];
   citation_check?: CitationCheck | null;
   sources?: ChatMessageSource[];
@@ -37,6 +39,29 @@ export interface CitationCheck {
   broken: number[];
   ok: boolean;
   grounded_without_citations: boolean;
+}
+
+export interface CitationQuality {
+  status: "not_needed" | "passed" | "repaired" | "rejected";
+  attempts: number;
+  initial_broken_citations: number[];
+  initial_grounded_without_citations: boolean;
+  initial_broken_sources: string[];
+  final_broken_citations: number[];
+  final_grounded_without_citations: boolean;
+  final_broken_sources: string[];
+  fallback: boolean;
+}
+
+export interface RetrievalAudit {
+  request_id: string;
+  status: string;
+  diagnostic_code: string | null;
+  recall_count: number | null;
+  returned_chunk_count: number;
+  final_paper_count: number;
+  latency_ms: number;
+  reranker_status: "applied" | "enabled_no_rerank" | "degraded" | "disabled" | "unknown";
 }
 
 export interface SourceCheck {

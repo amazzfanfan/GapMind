@@ -295,12 +295,17 @@ def semantic_search(
     section: str | None = None,
     exclude_paper_ids: set[str] | None = None,
     use_reranker: bool = True,
+    diversify_by_paper: bool = False,
 ) -> RetrievalResponse:
     """General semantic search within a workspace.
 
-    Pipeline: vector recall → (optional) rerank → return.
+    Pipeline: vector recall → (optional) rerank → optional paper diversity → return.
     ``exclude_paper_ids`` is pushed into the Milvus filter (see
     ``milvus_client.search``) and surfaced on ``filters_applied``.
+    ``diversify_by_paper`` is intended for answer generation: it retains the
+    strongest chunk from each paper after reranking so one long paper cannot
+    consume every evidence slot. It is opt-in to preserve the public semantic
+    search API's chunk-level behaviour.
     """
     start_time = time.perf_counter()
     request_id = str(uuid4())
@@ -308,6 +313,14 @@ def semantic_search(
 
     try:
         gateway = get_embedding_gateway()
+        filters_applied = {
+            "section": section,
+            "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+            "diversify_by_paper": diversify_by_paper,
+            "recall_count": 0,
+            "reranker_enabled": use_reranker,
+            "reranker_applied": False,
+        }
         # Stage 1: Vector recall (over-fetch for reranker)
         recall_k = top_k * 3 if use_reranker else top_k
         query_vector = gateway.embed_one(query)
@@ -331,18 +344,26 @@ def semantic_search(
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
-                filters_applied={
-                    "section": section,
-                    "excluded_paper_ids": sorted(exclude_paper_ids or set()),
-                },
+                filters_applied=filters_applied,
             )
 
         # Stage 2: Rerank
         diagnostic_codes: list[str] = []
+        filters_applied["recall_count"] = len(hits)
+        filters_applied["reranker_applied"] = use_reranker and len(hits) > 1
         if use_reranker and len(hits) > 1:
-            items = _rerank_hits(query, hits, top_k, diagnostic_codes)
+            items = _rerank_hits(
+                query,
+                hits,
+                recall_k if diversify_by_paper else top_k,
+                diagnostic_codes,
+            )
         else:
-            items = [_hit_to_result_item(hit) for hit in hits[:top_k]]
+            items = [_hit_to_result_item(hit) for hit in hits]
+        if diversify_by_paper:
+            items = _paper_max_top_k(items, top_k)
+        else:
+            items = items[:top_k]
 
         latency = (time.perf_counter() - start_time) * 1000
         diagnostic_code = diagnostic_codes[0] if diagnostic_codes else None
@@ -355,10 +376,7 @@ def semantic_search(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
-            filters_applied={
-                "section": section,
-                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
-            },
+            filters_applied=filters_applied,
             error=_diagnostic_message(diagnostic_code) if diagnostic_code else None,
             diagnostic_code=diagnostic_code,
         )
@@ -379,6 +397,10 @@ def semantic_search(
             filters_applied={
                 "section": section,
                 "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+                "diversify_by_paper": diversify_by_paper,
+                "recall_count": 0,
+                "reranker_enabled": use_reranker,
+                "reranker_applied": False,
             },
         )
 

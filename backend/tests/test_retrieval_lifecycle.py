@@ -387,6 +387,47 @@ def test_reranker_failure_falls_back_to_score_only(
     assert all(item.retrieval_stage == "candidate_recall" for item in resp.items)
 
 
+def test_semantic_search_can_diversify_reranked_chunks_by_paper(
+    monkeypatch, fake_milvus, fake_embedding
+) -> None:
+    """Chat answer generation should not let one paper occupy every evidence slot."""
+
+    class _OrderedReranker:
+        def __init__(self):
+            self.top_n = None
+
+        def rerank(self, query, documents, *, top_n):
+            self.top_n = top_n
+            return type("Result", (), {
+                "hits": [
+                    type("Hit", (), {"index": index, "relevance_score": 1.0 - index * 0.01})()
+                    for index in range(len(documents))
+                ]
+            })()
+
+    reranker = _OrderedReranker()
+    fake_milvus.search.return_value = [
+        {"chunk_id": "a-1", "workspace_id": "ws-1", "paper_id": "paper-a", "section": "Method", "text": "a1", "score": 0.99, "source_artifact_id": "art-a", "chunk_index": 1},
+        {"chunk_id": "a-2", "workspace_id": "ws-1", "paper_id": "paper-a", "section": "Method", "text": "a2", "score": 0.98, "source_artifact_id": "art-a", "chunk_index": 2},
+        {"chunk_id": "a-3", "workspace_id": "ws-1", "paper_id": "paper-a", "section": "Result", "text": "a3", "score": 0.97, "source_artifact_id": "art-a", "chunk_index": 3},
+        {"chunk_id": "b-1", "workspace_id": "ws-1", "paper_id": "paper-b", "section": "Method", "text": "b1", "score": 0.96, "source_artifact_id": "art-b", "chunk_index": 1},
+        {"chunk_id": "c-1", "workspace_id": "ws-1", "paper_id": "paper-c", "section": "Method", "text": "c1", "score": 0.95, "source_artifact_id": "art-c", "chunk_index": 1},
+    ]
+    monkeypatch.setattr(retrieval_service, "get_reranker_gateway", lambda: reranker)
+
+    response = retrieval_service.semantic_search(
+        "ws-1",
+        "query",
+        top_k=3,
+        diversify_by_paper=True,
+    )
+
+    assert response.status == "succeeded"
+    assert [item.paper_id for item in response.items] == ["paper-a", "paper-b", "paper-c"]
+    assert response.filters_applied["diversify_by_paper"] is True
+    assert reranker.top_n == 9
+
+
 # ==================================================================
 # 6. Paper.chunk_count vs Milvus state — no false projection
 # ==================================================================

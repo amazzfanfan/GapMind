@@ -81,6 +81,10 @@ frontend/openapi.json
 evaluation/retrieval/reports/
 evaluation/retrieval/eval_report.json
 
+# ---- Workspace Chat QA evaluation outputs ----
+# Offline Chat QA reports may contain real paper excerpts and local message ids.
+evaluation/chat/reports/
+
 # ---- Stage 3 external novelty Gate outputs ----
 # Every run of `evaluation/external/verify_external_gate.py` writes a report here.
 evaluation/external/reports/

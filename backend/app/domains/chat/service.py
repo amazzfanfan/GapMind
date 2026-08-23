@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Generator
 
@@ -14,10 +14,11 @@ from app.core.config import settings
 from app.domains.agent.models import AgentArtifact, AgentRun
 from app.domains.artifact.models import Artifact
 from app.domains.artifact.service import ArtifactService
+from app.domains.chat.consistency import message_citation_check, source_marker_check
 from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
 from app.domains.discover.models import ResearchOpportunity, ResearchPlan
 from app.domains.paper.models import Paper
-from app.domains.retrieval.schemas import RetrievalResultItem
+from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 from app.domains.retrieval.service import (
     RETRIEVAL_DIAGNOSTIC_MESSAGES,
     find_chunk_record,
@@ -25,7 +26,7 @@ from app.domains.retrieval.service import (
 )
 from app.domains.workspace.models import Workspace
 from app.domains.workspace.service import WorkspaceService
-from app.gateway.llm import LLMGateway, get_llm_gateway
+from app.gateway.llm import LLMGateway, LLMResponse, get_llm_gateway
 
 # A chat stream whose client disconnected mid-flight is marked failed by the
 # finally-guard in _stream_complete; rows older than this threshold that are
@@ -34,6 +35,11 @@ STALE_GENERATING_SECONDS = 15 * 60
 PLAN_REFERENCE_PATTERN = re.compile(r"(?:此|这|该)(?:个)?研究计划|当前研究计划|这个计划")
 CONFIRMED_OPPORTUNITY_STATUSES = {"confirmed", "edited_confirmed"}
 CONFIRMED_PLAN_STATUSES = {"confirmed", "approved"}
+CITATION_REPAIR_MAX_TOKENS = 2000
+CITATION_REPAIR_FALLBACK = (
+    "当前回答未能通过工作区论文引用校验，因此不能把原回答中的结论视为有论文依据。"
+    "请基于已列出的证据重新提问，或补充相关论文后重试。"
+)
 
 
 @dataclass
@@ -43,12 +49,19 @@ class WorkspaceContext:
     sources: list[dict[str, Any]]
     plan: ResearchPlan | None = None
     retrieval_diagnostic_code: str | None = None
+    retrieval_audit: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ContextSelection:
     plan: ResearchPlan | None
     artifacts: list[AgentArtifact]
+
+
+@dataclass
+class CitationQualityResult:
+    response: LLMResponse
+    audit: dict[str, Any]
 
 
 class ChatNotFoundError(LookupError):
@@ -382,15 +395,21 @@ class ChatService:
         )[::-1]
 
     def _build_context(self, messages: Iterable[ChatMessage], content: str) -> list[dict[str, str]]:
-        context: list[dict[str, str]] = []
+        context_reversed: list[dict[str, str]] = []
         total_chars = 0
-        for message in messages:
+        # ``_completed_messages`` already returns the latest N rows in
+        # chronological order. Fill the history budget from the newest turn
+        # backwards, then restore chronology for the LLM. The old forward pass
+        # could spend the whole budget on stale turns and omit the user's most
+        # recent intent.
+        for message in reversed(list(messages)):
             if message.role not in {"user", "assistant"} or message.status != "completed":
                 continue
             if total_chars + len(message.content) > settings.chat_history_char_limit:
-                break
-            context.append({"role": message.role, "content": message.content})
+                continue
+            context_reversed.append({"role": message.role, "content": message.content})
             total_chars += len(message.content)
+        context = list(reversed(context_reversed))
         context.append({"role": "user", "content": content})
         return context
 
@@ -428,6 +447,7 @@ class ChatService:
                 )
                 assistant.source_manifest = sources
                 assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
+                assistant.retrieval_audit = workspace_context.retrieval_audit
                 if not evidence and not sources:
                     return self._complete_without_evidence(
                         conversation,
@@ -437,7 +457,20 @@ class ChatService:
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
-            response = gateway.chat_completion(context, temperature=0.2)
+            response = gateway.chat_completion(
+                context,
+                temperature=0.2,
+                disable_thinking=True,
+            )
+            quality = self._apply_citation_quality_gate(
+                gateway,
+                context,
+                response,
+                evidence,
+                sources,
+            )
+            response = quality.response
+            assistant.citation_quality = quality.audit
         except ChatConfigurationError as exc:
             self._mark_failed(assistant, str(exc))
             raise ChatConfigurationError(
@@ -575,6 +608,7 @@ class ChatService:
                 )
                 assistant.source_manifest = sources
                 assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
+                assistant.retrieval_audit = workspace_context.retrieval_audit
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
@@ -624,7 +658,11 @@ class ChatService:
                 }
             chunks: list[str] = []
             try:
-                for delta in gateway.stream_chat_completion(context, temperature=0.2):
+                for delta in gateway.stream_chat_completion(
+                    context,
+                    temperature=0.2,
+                    disable_thinking=True,
+                ):
                     chunks.append(delta)
                     yield {"type": "token", "content": delta}
             except Exception as exc:
@@ -634,6 +672,21 @@ class ChatService:
                 return
 
             content = "".join(chunks)
+            quality = self._apply_citation_quality_gate(
+                gateway,
+                context,
+                LLMResponse(
+                    content=content,
+                    model=getattr(gateway, "model", "stream"),
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                ),
+                evidence,
+                sources,
+            )
+            content = quality.response.content
+            assistant.citation_quality = quality.audit
             assistant.status = "completed"
             assistant.content = content
             assistant.error_message = None
@@ -657,6 +710,147 @@ class ChatService:
                 except Exception:
                     self.db.rollback()
 
+    def _apply_citation_quality_gate(
+        self,
+        gateway: Any,
+        context: list[dict[str, str]],
+        response: LLMResponse,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+    ) -> CitationQualityResult:
+        """Validate one answer and allow at most one bounded marker repair.
+
+        This gate only repairs citation/source boundaries. It never retrieves
+        new material and never invents a citation. If the repaired answer is
+        still mechanically invalid, return a deterministic evidence-insufficiency
+        message instead of persisting an answer with a broken provenance chain.
+        """
+
+        grounded = bool(evidence)
+        citation_check, source_check = self._quality_checks(response.content, evidence, sources, grounded)
+        audit: dict[str, Any] = {
+            "status": "not_needed" if not evidence and not sources else "passed",
+            "attempts": 0,
+            "initial_broken_citations": citation_check.broken,
+            "initial_grounded_without_citations": citation_check.grounded_without_citations,
+            "initial_broken_sources": source_check.broken,
+            "final_broken_citations": citation_check.broken,
+            "final_grounded_without_citations": citation_check.grounded_without_citations,
+            "final_broken_sources": source_check.broken,
+            "fallback": False,
+        }
+        if citation_check.ok and not citation_check.grounded_without_citations and source_check.ok:
+            return CitationQualityResult(response=response, audit=audit)
+
+        audit["attempts"] = 1
+        repair_response: LLMResponse | None = None
+        try:
+            repair_response = gateway.chat_completion(
+                self._citation_repair_context(
+                    context,
+                    response.content,
+                    evidence,
+                    sources,
+                    citation_check,
+                    source_check,
+                ),
+                temperature=0.0,
+                max_tokens=CITATION_REPAIR_MAX_TOKENS,
+                disable_thinking=True,
+            )
+        except Exception:
+            repair_response = None
+
+        final_content = repair_response.content if repair_response is not None else ""
+        final_citation_check, final_source_check = self._quality_checks(
+            final_content, evidence, sources, grounded
+        )
+        audit["final_broken_citations"] = final_citation_check.broken
+        audit["final_grounded_without_citations"] = (
+            final_citation_check.grounded_without_citations
+        )
+        audit["final_broken_sources"] = final_source_check.broken
+        if (
+            repair_response is not None
+            and final_citation_check.ok
+            and not final_citation_check.grounded_without_citations
+            and final_source_check.ok
+        ):
+            audit["status"] = "repaired"
+            return CitationQualityResult(
+                response=replace(
+                    response,
+                    content=final_content,
+                    prompt_tokens=response.prompt_tokens + repair_response.prompt_tokens,
+                    completion_tokens=response.completion_tokens + repair_response.completion_tokens,
+                    total_tokens=response.total_tokens + repair_response.total_tokens,
+                ),
+                audit=audit,
+            )
+
+        audit["status"] = "rejected"
+        audit["fallback"] = True
+        return CitationQualityResult(
+            response=replace(response, content=CITATION_REPAIR_FALLBACK),
+            audit=audit,
+        )
+
+    @staticmethod
+    def _quality_checks(
+        content: str,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+        grounded: bool,
+    ) -> tuple[Any, Any]:
+        citation_check = message_citation_check(
+            content,
+            [item.rank for item in evidence],
+            grounded=grounded,
+        )
+        source_check = source_marker_check(
+            content,
+            {
+                f"[{source.get('marker')}]"
+                for source in sources
+                if source.get("marker")
+            },
+        )
+        return citation_check, source_check
+
+    @staticmethod
+    def _citation_repair_context(
+        context: list[dict[str, str]],
+        content: str,
+        evidence: list[ChatMessageEvidence],
+        sources: list[dict[str, Any]],
+        citation_check: Any,
+        source_check: Any,
+    ) -> list[dict[str, str]]:
+        allowed_papers = ", ".join(f"[E{item.rank}]" for item in evidence) or "无"
+        allowed_sources = ", ".join(
+            f"[{source['marker']}]"
+            for source in sources
+            if source.get("marker") and source.get("source_type") != "paper"
+        ) or "无"
+        instruction = (
+            "你是工作区问答的引用质量修复器。只修复回答中的引用边界，不增加事实、"
+            "不改写成新的研究结论。论文引用只能使用已存在的标记："
+            f"{allowed_papers}。计划/报告/代码来源只能使用：{allowed_sources}。"
+            "不要伪造标记；如果现有证据不能支持某个结论，明确写出证据不足。"
+            "请输出完整的修复后回答，不要解释修复过程。"
+        )
+        diagnostics = (
+            f"原回答的失效论文引用：{citation_check.broken or '无'}；"
+            f"有工作区论文但未标注引用：{citation_check.grounded_without_citations}；"
+            f"原回答的失效来源标记：{source_check.broken or '无'}。"
+        )
+        return [
+            {"role": "system", "content": instruction},
+            *context,
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": f"{diagnostics}\n请输出修复后的完整回答。"},
+        ]
+
     def _workspace_context(
         self,
         conversation: ChatConversation,
@@ -679,6 +873,7 @@ class ChatService:
             query=question,
             top_k=settings.chat_rag_top_k,
             use_reranker=True,
+            diversify_by_paper=True,
         )
         if result.status == "failed":
             diagnostic_code = result.diagnostic_code or "unknown"
@@ -687,6 +882,7 @@ class ChatService:
                 RETRIEVAL_DIAGNOSTIC_MESSAGES["unknown"],
             )
             assistant = self.db.get(ChatMessage, assistant_id)
+            assistant.retrieval_audit = self._retrieval_audit(result, [])
             self._mark_failed(
                 assistant,
                 diagnostic_message,
@@ -706,8 +902,14 @@ class ChatService:
             result.items,
         )
         sources = self._source_manifest(selection.plan, evidence, selection.artifacts)
-        profile = self._workspace_profile(workspace)
-        plan_text = self._plan_prompt(selection.plan) if selection.plan else "未选择研究计划。"
+        profile = self._clip_context_text(
+            self._workspace_profile(workspace),
+            settings.chat_workspace_profile_max_context_chars,
+        )
+        plan_text = self._clip_context_text(
+            self._plan_prompt(selection.plan) if selection.plan else "未选择研究计划。",
+            settings.chat_plan_max_context_chars,
+        )
         artifact_text = self._artifact_prompt(selection.artifacts)
         evidence_text = self._evidence_prompt(evidence) if evidence else "本次没有检索到可用的工作区论文证据。"
         system_message = {
@@ -725,12 +927,38 @@ class ChatService:
             ),
         }
         return WorkspaceContext(
-            [system_message, *context],
+            self._budget_prompt_messages(system_message, context),
             evidence,
             sources,
             selection.plan,
             result.diagnostic_code,
+            self._retrieval_audit(result, evidence),
         )
+
+    @staticmethod
+    def _retrieval_audit(
+        result: RetrievalResponse,
+        evidence: list[ChatMessageEvidence],
+    ) -> dict[str, Any]:
+        filters = result.filters_applied or {}
+        if result.diagnostic_code == "reranker_degraded":
+            reranker_status = "degraded"
+        elif filters.get("reranker_applied"):
+            reranker_status = "applied"
+        elif filters.get("reranker_enabled"):
+            reranker_status = "enabled_no_rerank"
+        else:
+            reranker_status = "unknown"
+        return {
+            "request_id": result.request_id,
+            "status": result.status,
+            "diagnostic_code": result.diagnostic_code,
+            "recall_count": filters.get("recall_count"),
+            "returned_chunk_count": result.total,
+            "final_paper_count": len({item.paper_id for item in evidence if item.paper_id}),
+            "latency_ms": result.latency_ms,
+            "reranker_status": reranker_status,
+        }
 
     def context_options(self, workspace_id: str) -> dict[str, list[dict[str, str]]]:
         """List only current-workspace plan/report/code context candidates."""
@@ -968,7 +1196,7 @@ class ChatService:
         report_index = 1
         code_index = 1
         total_chars = 0
-        budget = max(settings.chat_rag_max_context_chars // 2, 4000)
+        budget = settings.chat_artifact_max_context_chars
         for artifact in artifacts:
             if artifact.artifact_type == "deep_research_report":
                 marker = f"[D{report_index}] 已确认报告"
@@ -1072,6 +1300,47 @@ class ChatService:
             blocks.append(block[:remaining])
             total_chars += min(len(block), remaining)
         return "\n\n".join(blocks)
+
+    @staticmethod
+    def _clip_context_text(text: str, max_chars: int) -> str:
+        """Bound a named context source without dropping its provenance header."""
+
+        if max_chars <= 0:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        suffix = "\n[该来源已按上下文预算截断]"
+        return text[: max(0, max_chars - len(suffix))] + suffix
+
+    @staticmethod
+    def _budget_prompt_messages(
+        system_message: dict[str, str],
+        context: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Apply one total prompt budget while preserving the current question.
+
+        Source blocks are independently capped before this function. The
+        remaining budget belongs to dialogue history and is filled from newest
+        to oldest, preserving chronological order in the final prompt.
+        """
+
+        if not context:
+            return [system_message]
+        current_message = context[-1]
+        history = context[:-1]
+        remaining = max(
+            0,
+            settings.chat_prompt_max_context_chars
+            - len(system_message["content"])
+            - len(current_message["content"]),
+        )
+        selected_reversed: list[dict[str, str]] = []
+        for message in reversed(history):
+            if len(message["content"]) > remaining:
+                continue
+            selected_reversed.append(message)
+            remaining -= len(message["content"])
+        return [system_message, *reversed(selected_reversed), current_message]
 
     def _complete_without_evidence(
         self,

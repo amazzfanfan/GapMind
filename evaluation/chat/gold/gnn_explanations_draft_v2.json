@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0.0",
+  "case_id": "chat-gnn-explanations-draft-v2",
+  "corpus_version": "gnn-explanation-9papers",
+  "annotation_status": "draft",
+  "freeze": {
+    "chunk_version": "v1",
+    "embedding_model": "BAAI/bge-m3",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "judge_model": "deepseek-v4-flash"
+  },
+  "questions": [
+    {
+      "query_id": "chat-gnn-03",
+      "question": "什么是自解释图神经网络？有哪些经典方法？",
+      "expected_verdict": "supported",
+      "required_paper_refs": [
+        "ProtGNN",
+        "Self-Interpretable Graph Learning with Sufficient and Necessary Explanations"
+      ],
+      "note": "工作区资料中的概念与代表性方法问题。"
+    },
+    {
+      "query_id": "chat-gnn-04",
+      "question": "GIB 的优化目标，分析一下它的公式",
+      "expected_verdict": "supported",
+      "required_paper_refs": ["VGIB"],
+      "note": "保留实际回答引用的工作区论文标题；不扩展为未观测论文。"
+    },
+    {
+      "query_id": "chat-gnn-05",
+      "question": "分析ProtGNN的sep损失和div损失，公式是如何设计的",
+      "expected_verdict": "supported",
+      "required_paper_refs": ["ProtGNN"],
+      "note": "ProtGNN 公式解释问题。"
+    },
+    {
+      "query_id": "chat-gnn-06",
+      "question": "PGIB最主要的公式是哪一个？",
+      "expected_verdict": "supported",
+      "required_paper_refs": [
+        "Interpretable Prototype-based Graph Information Bottleneck"
+      ],
+      "note": "PGIB 核心公式问题。"
+    },
+    {
+      "query_id": "chat-gnn-07",
+      "question": "分布偏移下GNN解释的稳定性如何？简要回答",
+      "expected_verdict": "insufficient_evidence",
+      "required_paper_refs": [],
+      "note": "回答明确指出现有工作区资料不足，不能把相关性能证据外推为解释稳定性结论。"
+    }
+  ]
+}
