@@ -34,6 +34,19 @@ evaluation/chat/
 
 从 Chat API 的 assistant message 复制最小字段：`content` → `answer_text`、`grounding_status`、`citations[]` → `evidence[]`（只保留 `rank`/论文标题）、`sources[]` 中的计划/报告/代码来源 → `sources[]`。若进行了人工事实核验，再填 `human_verdict`。
 
+也可以使用只读导出器从本地 PostgreSQL 复制真实持久化消息。默认不写入本地 `message_id`，且始终将 `human_verdict` 留空：
+
+```powershell
+backend\.venv\Scripts\python.exe evaluation\chat\export_observations.py `
+  --workspace-id <workspace-id> `
+  --case-id <draft-case-id> `
+  --select chat-gnn-03=<assistant-message-id> `
+  --select chat-gnn-04=<assistant-message-id> `
+  --output evaluation\chat\reports\candidate_observations_draft.json
+```
+
+导出器只接受当前 workspace 中已完成的 assistant 消息，不调用 LLM、Milvus、Task 或 Agent，也不会修改 workspace。导出后仍需人工决定题目的 `expected_verdict` 和观测的 `human_verdict`，不能直接将候选样本当成 Gold。
+
 ```bash
 cd D:\MyCode\Spark-competition\refactor\GapMind
 backend\.venv\Scripts\python.exe evaluation\chat\run_eval.py \

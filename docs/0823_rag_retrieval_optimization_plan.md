@@ -173,3 +173,9 @@ Dense BGE-M3 recall + lexical/BM25 recall
 - Chat 同步和流式回答现在共享一次性质量门：发现失效 `[En]`、工作区论文已召回但回答无论文引用，或 `[P]/[D]/[C]` 来源标记失效时，最多追加一次 `disable_thinking=True` 的边界修复调用；修复仍失败则持久化明确的证据不足提示，并记录 `citation_quality` 审计快照，不伪造引用、不新增检索结果。
 - `chat_messages.citation_quality` 通过 Alembic `0022_chat_citation_quality` 持久化；只随消息读取，不参与检索、过滤或自动事实判断。前端仅展示拒绝后的证据不足警告，OpenAPI 类型由脚本自动生成。
 - 验证：Chat API 定向测试 `22 passed`；完整后端测试 `449 passed`；前端测试 `56 passed`、TypeScript 类型检查、生产构建均通过；`npm run lint` 为 `0 errors`、`14 warnings`。阶段 C 的混合检索与阶段 D 的 GraphRAG-lite 仍未实现，等待更多人工复核样本和评测依据。
+
+## 11. 2026-08-24 阶段 B 第二批真实样本
+
+- 用户确认将 5 条已持久化的工作区 Chat 回答纳入下一批 draft；新增只读导出器 `evaluation/chat/export_observations.py`，默认移除本地 `message_id`，并强制保留空的人工字段，避免把本地标识或自动判断带入评测。
+- 新增 draft Gold `gnn_explanations_draft_v2.json`：`chat-gnn-03` 至 `chat-gnn-06` 的人工结论为 `supported`，`chat-gnn-07` 的人工结论为 `insufficient_evidence`。v1 draft 保持不变；v2 仍不是固定 Gold。
+- 验证：v2 观测 `5/5` 覆盖，论文引用有效率 `1.0`，必需论文覆盖 `1.0`，来源标记有效率 `1.0`，人工复核覆盖率 `1.0`，人工结论准确率 `1.0`，机械检查通过。对 q7 的结论只记录为人工复核结果，不将“资料不多”自动泛化为系统阈值。
