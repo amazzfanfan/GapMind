@@ -45,16 +45,25 @@ export function stageSummaryMessage(
     error?: unknown;
     successful_query_count?: unknown;
     failed_query_count?: unknown;
+    query_success_rate?: unknown;
+    notice_level?: unknown;
+    message?: unknown;
     query_failures?: unknown;
   };
   const status = typeof summary.status === "string" ? summary.status : null;
   if (status === "failed") {
     return typeof summary.error === "string" ? summary.error : "该阶段执行失败";
   }
+  if (status === "succeeded" && summary.notice_level === "informational" && Number(summary.failed_query_count ?? 0) > 0) {
+    return typeof summary.message === "string"
+      ? summary.message
+      : `外部检索成功 ${Number(summary.successful_query_count ?? 0)} 个查询，${Number(summary.failed_query_count ?? 0)} 个查询受限；已保留成功结果`;
+  }
   if (status === "succeeded_partial") {
     const failures = Array.isArray(summary.query_failures) ? summary.query_failures : [];
     const rateLimited = failures.filter((item) => item && typeof item === "object" && (item as { status_code?: unknown }).status_code === 429).length;
     const reason = rateLimited > 0 ? `；其中 ${rateLimited} 个因 Semantic Scholar 请求频率受限（HTTP 429）失败` : "";
+    if (typeof summary.message === "string") return summary.message + reason;
     return `部分成功：${Number(summary.successful_query_count ?? 0)} 个查询成功，${Number(summary.failed_query_count ?? 0)} 个失败，已保留成功结果${reason}`;
   }
   if (status === "succeeded_empty") return "检索已执行，但没有返回候选论文";
