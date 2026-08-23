@@ -312,6 +312,13 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
                 )
             ],
             total=1,
+            request_id="retrieval-test-001",
+            latency_ms=12.5,
+            filters_applied={
+                "recall_count": 3,
+                "reranker_enabled": True,
+                "reranker_applied": True,
+            },
         )
 
     monkeypatch.setattr("app.domains.chat.service.semantic_search", fake_search)
@@ -335,6 +342,16 @@ def test_workspace_chat_retrieves_persists_citations_and_opens_source(
     assert body["conversation"]["workspace_id"] == workspace["id"]
     assistant = body["assistant_message"]
     assert assistant["grounding_status"] == "grounded"
+    assert assistant["retrieval_audit"] == {
+        "request_id": "retrieval-test-001",
+        "status": "succeeded",
+        "diagnostic_code": None,
+        "recall_count": 3,
+        "returned_chunk_count": 1,
+        "final_paper_count": 1,
+        "latency_ms": 12.5,
+        "reranker_status": "applied",
+    }
     assert len(assistant["citations"]) == 1
     citation = assistant["citations"][0]
     assert citation["paper_title"] == "Interpretable Graph Models"

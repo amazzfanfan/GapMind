@@ -313,6 +313,14 @@ def semantic_search(
 
     try:
         gateway = get_embedding_gateway()
+        filters_applied = {
+            "section": section,
+            "excluded_paper_ids": sorted(exclude_paper_ids or set()),
+            "diversify_by_paper": diversify_by_paper,
+            "recall_count": 0,
+            "reranker_enabled": use_reranker,
+            "reranker_applied": False,
+        }
         # Stage 1: Vector recall (over-fetch for reranker)
         recall_k = top_k * 3 if use_reranker else top_k
         query_vector = gateway.embed_one(query)
@@ -336,15 +344,13 @@ def semantic_search(
                 items=[],
                 total=0,
                 latency_ms=round(latency, 2),
-                filters_applied={
-                    "section": section,
-                    "excluded_paper_ids": sorted(exclude_paper_ids or set()),
-                    "diversify_by_paper": diversify_by_paper,
-                },
+                filters_applied=filters_applied,
             )
 
         # Stage 2: Rerank
         diagnostic_codes: list[str] = []
+        filters_applied["recall_count"] = len(hits)
+        filters_applied["reranker_applied"] = use_reranker and len(hits) > 1
         if use_reranker and len(hits) > 1:
             items = _rerank_hits(
                 query,
@@ -370,11 +376,7 @@ def semantic_search(
             items=items,
             total=len(items),
             latency_ms=round(latency, 2),
-            filters_applied={
-                "section": section,
-                "excluded_paper_ids": sorted(exclude_paper_ids or set()),
-                "diversify_by_paper": diversify_by_paper,
-            },
+            filters_applied=filters_applied,
             error=_diagnostic_message(diagnostic_code) if diagnostic_code else None,
             diagnostic_code=diagnostic_code,
         )
@@ -396,6 +398,9 @@ def semantic_search(
                 "section": section,
                 "excluded_paper_ids": sorted(exclude_paper_ids or set()),
                 "diversify_by_paper": diversify_by_paper,
+                "recall_count": 0,
+                "reranker_enabled": use_reranker,
+                "reranker_applied": False,
             },
         )
 

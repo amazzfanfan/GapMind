@@ -2011,6 +2011,7 @@ export interface components {
             /** Retrieval Diagnostic Code */
             retrieval_diagnostic_code?: string | null;
             citation_quality?: components["schemas"]["CitationQualityRead"];
+            retrieval_audit?: components["schemas"]["RetrievalAuditRead"];
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             citation_check?: components["schemas"]["CitationCheckRead"] | null;
@@ -3882,6 +3883,47 @@ export interface components {
         ResumeBody: {
             /** Decision */
             decision?: Record<string, never> | null;
+        };
+        /**
+         * RetrievalAuditRead
+         * @description Persisted, non-sensitive retrieval observability for one answer.
+         */
+        RetrievalAuditRead: {
+            /**
+             * Request Id
+             * @default
+             */
+            request_id: string;
+            /**
+             * Status
+             * @default unknown
+             */
+            status: string;
+            /** Diagnostic Code */
+            diagnostic_code?: string | null;
+            /** Recall Count */
+            recall_count?: number | null;
+            /**
+             * Returned Chunk Count
+             * @default 0
+             */
+            returned_chunk_count: number;
+            /**
+             * Final Paper Count
+             * @default 0
+             */
+            final_paper_count: number;
+            /**
+             * Latency Ms
+             * @default 0
+             */
+            latency_ms: number;
+            /**
+             * Reranker Status
+             * @default unknown
+             * @enum {string}
+             */
+            reranker_status: "applied" | "enabled_no_rerank" | "degraded" | "disabled" | "unknown";
         };
         /**
          * RetrievalResponse

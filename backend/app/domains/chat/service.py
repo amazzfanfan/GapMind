@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Generator
 
@@ -18,7 +18,7 @@ from app.domains.chat.consistency import message_citation_check, source_marker_c
 from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
 from app.domains.discover.models import ResearchOpportunity, ResearchPlan
 from app.domains.paper.models import Paper
-from app.domains.retrieval.schemas import RetrievalResultItem
+from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 from app.domains.retrieval.service import (
     RETRIEVAL_DIAGNOSTIC_MESSAGES,
     find_chunk_record,
@@ -49,6 +49,7 @@ class WorkspaceContext:
     sources: list[dict[str, Any]]
     plan: ResearchPlan | None = None
     retrieval_diagnostic_code: str | None = None
+    retrieval_audit: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -446,6 +447,7 @@ class ChatService:
                 )
                 assistant.source_manifest = sources
                 assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
+                assistant.retrieval_audit = workspace_context.retrieval_audit
                 if not evidence and not sources:
                     return self._complete_without_evidence(
                         conversation,
@@ -606,6 +608,7 @@ class ChatService:
                 )
                 assistant.source_manifest = sources
                 assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
+                assistant.retrieval_audit = workspace_context.retrieval_audit
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
@@ -879,6 +882,7 @@ class ChatService:
                 RETRIEVAL_DIAGNOSTIC_MESSAGES["unknown"],
             )
             assistant = self.db.get(ChatMessage, assistant_id)
+            assistant.retrieval_audit = self._retrieval_audit(result, [])
             self._mark_failed(
                 assistant,
                 diagnostic_message,
@@ -928,7 +932,33 @@ class ChatService:
             sources,
             selection.plan,
             result.diagnostic_code,
+            self._retrieval_audit(result, evidence),
         )
+
+    @staticmethod
+    def _retrieval_audit(
+        result: RetrievalResponse,
+        evidence: list[ChatMessageEvidence],
+    ) -> dict[str, Any]:
+        filters = result.filters_applied or {}
+        if result.diagnostic_code == "reranker_degraded":
+            reranker_status = "degraded"
+        elif filters.get("reranker_applied"):
+            reranker_status = "applied"
+        elif filters.get("reranker_enabled"):
+            reranker_status = "enabled_no_rerank"
+        else:
+            reranker_status = "unknown"
+        return {
+            "request_id": result.request_id,
+            "status": result.status,
+            "diagnostic_code": result.diagnostic_code,
+            "recall_count": filters.get("recall_count"),
+            "returned_chunk_count": result.total,
+            "final_paper_count": len({item.paper_id for item in evidence if item.paper_id}),
+            "latency_ms": result.latency_ms,
+            "reranker_status": reranker_status,
+        }
 
     def context_options(self, workspace_id: str) -> dict[str, list[dict[str, str]]]:
         """List only current-workspace plan/report/code context candidates."""

@@ -61,6 +61,9 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     # small JSON snapshot rather than a queryable document: it is read with
     # the message and is not used for retrieval or filtering.
     citation_quality: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Retrieval-only observability snapshot. It contains counts/status/timing,
+    # not raw query text or provider error details.
+    retrieval_audit: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     # Stable, non-sensitive retrieval diagnosis.  Raw provider/Milvus errors
     # stay in server logs and are never persisted into the workspace UI.
     retrieval_diagnostic_code: Mapped[str | None] = mapped_column(
