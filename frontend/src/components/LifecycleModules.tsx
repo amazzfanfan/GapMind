@@ -82,13 +82,14 @@ export default function LifecycleModules({ workspaceId }: { workspaceId?: string
       title="研究生命周期模块"
       style={{ marginTop: 16 }}
     >
-      <Row gutter={[12, 12]}>
+      <Row gutter={[12, 12]} align="stretch">
         {MODULES.map((module) => (
-          <Col xs={12} sm={8} lg={4} key={module.key}>
+          <Col xs={12} sm={8} lg={4} key={module.key} className="gm-lifecycle-module-column">
             <Card
               hoverable
               className="gm-lifecycle-module"
               onClick={() => openModule(module)}
+              style={{ width: "100%", height: "100%" }}
               bodyStyle={{ padding: 14, minHeight: 132 }}
             >
               <Space direction="vertical" size={6} style={{ width: "100%" }}>
