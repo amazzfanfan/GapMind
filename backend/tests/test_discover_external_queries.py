@@ -387,6 +387,72 @@ def test_external_verify_preserves_successes_when_a_later_query_fails(db_session
     assert summary["query_failures"][0]["status_code"] == 429
 
 
+def test_external_verify_keeps_non_critical_partial_search_informational(db_session) -> None:
+    workspace_id = str(uuid4())
+
+    class _MostlyHealthyS2:
+        def search(self, query: str, *, fields: str, **kw: Any):
+            if query == "limited query":
+                raise SemanticScholarError(status_code=429, message="rate limited")
+            if query == "Unavailable Method":
+                raise SemanticScholarError(status_code=503, message="temporarily unavailable")
+            return {"data": [_s2_paper(f"p-{len(query)}-{query[-1:]}", f"Paper {query}")]}
+
+        def get_paper(self, paper_id: str, *, fields: str):
+            return {"paperId": paper_id}
+
+    service = _service(db_session, _MostlyHealthyS2())
+    run = _run(workspace_id)
+    db_session.add_all([Workspace(id=workspace_id, name="Mostly healthy search", is_archived=False), run])
+    db_session.commit()
+    queries = ["Primary question"] + [f"method query {index}" for index in range(1, 11)] + ["limited query"]
+
+    count = service._external_verify(run, queries, exact_lookups=["Unavailable Method"])
+
+    assert count >= 2
+    summary = run.stage_summaries["external_search"]
+    assert summary["status"] == "succeeded"
+    assert summary["notice_level"] == "informational"
+    assert summary["impact"] == "non_critical_query_limited"
+    assert summary["successful_query_count"] == 11
+    assert summary["failed_query_count"] == 1
+    assert abs(summary["query_success_rate"] - 11 / 12) < 1e-4
+    assert summary["exact_lookup_failure_count"] == 1
+    records = {record["query"]: record for record in summary["query_records"]}
+    assert records["Primary question"]["purpose"] == "primary_question"
+    assert records["limited query"]["purpose"] == "method_overlap"
+    assert records["Unavailable Method"]["purpose"] == "exact_lookup"
+    assert records["Unavailable Method"]["status"] == "failed"
+
+
+def test_external_verify_marks_primary_failure_as_warning(db_session) -> None:
+    workspace_id = str(uuid4())
+
+    class _PrimaryFailureS2:
+        def search(self, query: str, *, fields: str, **kw: Any):
+            if query == "Primary question":
+                raise SemanticScholarError(status_code=429, message="rate limited")
+            return {"data": [_s2_paper("p1", "Paper One"), _s2_paper("p2", "Paper Two")]}
+
+        def get_paper(self, paper_id: str, *, fields: str):
+            return {"paperId": paper_id}
+
+    service = _service(db_session, _PrimaryFailureS2())
+    run = _run(workspace_id)
+    db_session.add_all([Workspace(id=workspace_id, name="Primary failure", is_archived=False), run])
+    db_session.commit()
+
+    count = service._external_verify(run, ["Primary question", "counter evidence critique"])
+
+    assert count == 2
+    summary = run.stage_summaries["external_search"]
+    assert summary["status"] == "succeeded_partial"
+    assert summary["notice_level"] == "warning"
+    assert summary["impact"] == "critical_query_failed"
+    assert summary["query_failures"][0]["purpose"] == "primary_question"
+    assert summary["query_records"][1]["purpose"] == "counter_evidence"
+
+
 # ------------------------------------------------------------------ exact-name lookup
 def test_title_verified_matches_words(db_session) -> None:
     service = DiscoverService(db_session, external_search=_S2Fake({}), llm=_NoopLLM())

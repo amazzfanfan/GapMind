@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 
 CITATION_PATTERN = re.compile(r"\[E(\d+)\]")
+SOURCE_MARKER_PATTERN = re.compile(r"\[(P|D|C)(\d+)\]")
 
 
 @dataclass
@@ -22,6 +23,15 @@ class CitationCheckResult:
     valid: list[int] = field(default_factory=list)
     broken: list[int] = field(default_factory=list)
     grounded_without_citations: bool = False
+    ok: bool = True
+
+
+@dataclass
+class SourceMarkerCheckResult:
+    """Outcome of validating non-paper source markers in one answer."""
+
+    referenced: list[str] = field(default_factory=list)
+    broken: list[str] = field(default_factory=list)
     ok: bool = True
 
 
@@ -47,3 +57,13 @@ def message_citation_check(content: str, citation_ranks: list[int], *, grounded:
     result = check_citation_markers(content, set(r for r in citation_ranks if r is not None))
     result.grounded_without_citations = grounded and not result.referenced
     return result
+
+
+def source_marker_check(content: str, valid_markers: set[str]) -> SourceMarkerCheckResult:
+    """Validate [P1]/[D1]/[C1] markers against a persisted source passport."""
+
+    referenced = sorted(
+        {f"[{kind}{index}]" for kind, index in SOURCE_MARKER_PATTERN.findall(content or "")}
+    )
+    broken = [marker for marker in referenced if marker not in valid_markers]
+    return SourceMarkerCheckResult(referenced=referenced, broken=broken, ok=not broken)

@@ -46,6 +46,14 @@
 - 自动意图建议不会自行创建任务、研究计划或代码产物。
 - 普通论文问答继续保持现有 grounded `[En]` 一致性检查。
 
+### D1 实施记录（2026-08-22）
+
+- 普通助手入口默认是“直接提问”；“生成研究计划、代码生成、结果分析、论文写作、审稿回复”收进“更多研究操作”。操作模式只产生启动建议，用户二次确认后才调用 Agent API，因此不会因问题措辞自动创建 AgentRun、Task 或长期产物。
+- 新增工作区上下文选项接口。只返回当前 workspace 内可确认追溯的研究计划，以及绑定同一计划的已确认深度研究报告和代码草案。跨 workspace 的 `research_plan_id` 或补充产物 ID 会被拒绝，多计划下的“此研究计划”不会猜测绑定。
+- 普通 chat 请求接收并校验 `research_plan_id`、`source_artifact_ids`。回答上下文同时包含研究计划快照、工作区论文检索证据和用户选择的补充产物；计划没有独立损失函数时，提示词明确要求回答“计划未提供”，不得从论文或常见做法补写。
+- `chat_messages.source_manifest` 通过 Alembic `0019_chat_message_sources` 持久化来源快照。论文仍保存在 `chat_message_evidence` 并使用 `[En]`，计划、报告、代码草案分别使用 `[P]`、`[D]`、`[C]`，前端来源面板明确显示“代码草案，未运行验证”。
+- 验收测试覆盖单计划分源、多个计划歧义、跨 workspace 拒绝、报告/代码补充来源、来源 marker 校验及前端来源面板。当前验证：后端 `421 passed`，前端 `53 passed`，TypeScript 类型检查和生产构建通过。
+
 ## D2：工作区检索失败的诊断与恢复
 
 ### 现象与根因
@@ -65,6 +73,14 @@
 - 模拟 embedding、Milvus、reranker 失败分别显示可操作的中文提示。
 - 无向量命中不会被报告为服务故障。
 - 工作区事实问答在检索失败时仍然 fail closed，不产生无依据断言。
+
+### D2 实施记录（2026-08-23）
+
+- 检索响应新增安全 `diagnostic_code`：`embedding_unavailable`、`milvus_unavailable`、`collection_unloaded`、`reranker_degraded`、`unknown`。原始上游异常只写后端日志，不进入工作区 API 文案；collection 未加载单独提示重新加载，不把所有问题指向重建索引。
+- `semantic_search`、similar work 和 counter evidence 都保留失败/空结果边界。reranker 异常继续回退到向量分数，但响应状态变为 `degraded` 并携带 `reranker_degraded`；Milvus 返回零命中仍是正常成功结果，不转成故障。
+- workspace Chat 在检索失败时把安全诊断码持久化到 `chat_messages.retrieval_diagnostic_code`（Alembic `0020_chat_retrieval_diagnostic`），回答不调用 LLM，流式请求结束为可重试的失败状态；降级结果仍可回答但前端显示对应恢复动作。现有失败消息的“重新尝试”入口继续作为重试检索入口。
+- 前端按诊断码区分 embedding Key/地址、Milvus 基础设施、collection 加载和 reranker 降级提示；未知故障不展示原始异常。未命中仍展示“没有使用工作区证据”，不伪造论文事实。
+- 验收测试覆盖 embedding、Milvus、collection、reranker、普通零命中、流式 fail-closed 与前端诊断文案。当前验证：后端 `422 passed`，前端 `53 passed`，TypeScript 类型检查和生产构建通过；Alembic 已升级到 `0020_chat_retrieval_diagnostic`。
 
 ## D3：代码生成的检查语义与候选修复
 
@@ -90,6 +106,13 @@
 - 修复循环最多一次，始终只产生可预览候选，不覆盖已有产物。
 - 下载包中具备项目说明、依赖、配置和最小测试骨架。
 
+### D3 实施记录（2026-08-23）
+
+- 后端将代码生成的六项检查写入 `severity`：缺文件、Python 语法、入口文件属于阻断项；测试、README/依赖骨架和依赖声明属于改进项。结果与 AgentStep 摘要分别保存两组通过数，避免把静态检查误读为运行失败。
+- 前端将“交付完整性检查”和“计划覆盖度自检”分区展示，并明确标注两者都不代表代码已经运行验证；代码卡片只在父代码运行存在失败检查时显示“生成一次候选修复”。
+- 候选修复复用现有 `AgentRun`/`Task` 协议，由用户在确认入口中主动启动。后端校验父运行成功、同一 workspace/对话/代码生成类型和研究计划归属，并通过 `parent_run_id` 保证最多一次；候选文件和检查报告独立保存，原运行不变，验证状态固定为 `not_run`，不执行代码、不覆盖、不宣称验证通过。
+- 验收覆盖：分层检查计数与来源、候选修复只生成一次、候选产物独立保存、跨边界父运行拒绝，以及前端类型检查/已有组件测试。完整回归为后端 `423 passed`、前端 `53 passed`、TypeScript 类型检查和生产构建通过。D3 不新增数据库迁移。
+
 ## D4：Discover 外部检索部分成功的分级
 
 ### 现象与根因
@@ -112,6 +135,13 @@
 - 反证或主问题 query 的失败仍可见且影响等级正确。
 - 运行记录可追溯每条失败 query 及其用途。
 
+### D4 实施记录（2026-08-23）
+
+- `external_search` 阶段摘要现在保存每条相关性 query 和精确查找的用途、状态、结果数、错误与可重试信息；用途区分主问题、方法／重合、反证、评估和精确查找。
+- 按相关性 query 成功率 80%、主问题／反证关键 query、候选数量三个条件分级：非关键 query 受限且候选充足时阶段仍为成功，仅显示灰色“受限”提示；关键 query 失败、成功率过低或候选不足时显示橙色告警；全部相关性 query 失败仍为红色失败。精确查找单点失败只进入审计摘要，不阻断主检索。
+- Discover 页面新增外部检索查询日志折叠区，展示用途、成功/受限/无精确匹配状态、查询文本和结果数量；现有成功候选与全文核验流程不变。
+- 验收测试覆盖 11/12 非关键部分成功、主问题失败告警、精确查找失败记录、查询用途持久化和前端提示。D4 不新增数据库迁移。
+
 ## D5：Gap 标注远程备份抽取器
 
 ### 现象与根因
@@ -133,6 +163,14 @@
 - 远程备份不会绕过 Schema、workspace 隔离或来源记录。
 - 用户可分辨“隧道故障”“模型输出不合格”“论文不适用”。
 
+### D5 实施记录（2026-08-23）
+
+- 新增 `GapExtractor` Protocol；本地 zf Ollama 保持主路径，远程 OpenAI-compatible 结构化输出适配器由 `GAP_EXTRACTOR_REMOTE_ENABLED`、端点、Key 和模型配置共同控制，默认关闭。两条路径都使用同一 `parse_model_json` / `validate_annotation`，远程结构化调用固定 `disable_thinking=True`，不传 `reasoning_effort`。
+- `validation_errors` 现在可归类为 JSON、Schema、关系方向、标签一致性或其他；失败进一步区分本地模型不可用、输出不合格、内容不足和明显不适用。内容不足/不适用不触发远程发送，也不无限重试。
+- Gap 抽取请求新增 `allow_remote_fallback`，前端默认关闭并展示“外发 Markdown”的明确说明。只有本地不可用或完成既有修复后仍输出不合格，且服务端 feature flag、凭据和请求同意同时满足时，才发送 Markdown 到远程；未同意或未配置时保留本地失败并可重试。
+- 远程成功结果单独保存为 `model_provider=remote` 的标注候选，并持久化 provider、model、attempts、validation errors、`fallback_reason` 和结构化参数；棋盘页面显示“远程降级候选”，不把它伪装成本地模型或论文事实。新增 Alembic `0021_gap_remote_fallback`。
+- 验收覆盖本地主路径、显式同意/拒绝、远程 provenance、结构化 Schema、`disable_thinking`、失败分类和内容不足边界；当前验证：后端 `431 passed`，前端 `56 passed`，TypeScript 类型检查和生产构建通过，`0021` 已升级到本地数据库。`alembic check` 仍受既有索引/唯一约束漂移影响，未在 D5 中扩大修复范围。
+
 ## 与下一次预演的关系
 
-完成 D1 至 D3 后再执行不间断全流程预演；D4、D5 可在真实上游受限时分别验证其降级路径。预演话术需明确：工作区论文、已确认计划、AI 草案是三类不同来源，且代码只提供候选，不自动执行。
+完成 D1 至 D5 后再执行不间断全流程预演；D4、D5 已分别验证其降级路径。预演话术需明确：工作区论文、已确认计划、AI 草案是三类不同来源，且代码只提供候选，不自动执行。

@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Generator
+from typing import Any, Iterable, Generator
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.domains.agent.models import AgentArtifact, AgentRun
 from app.domains.artifact.models import Artifact
 from app.domains.artifact.service import ArtifactService
 from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
+from app.domains.discover.models import ResearchOpportunity, ResearchPlan
 from app.domains.paper.models import Paper
 from app.domains.retrieval.schemas import RetrievalResultItem
-from app.domains.retrieval.service import find_chunk_record, semantic_search
+from app.domains.retrieval.service import (
+    RETRIEVAL_DIAGNOSTIC_MESSAGES,
+    find_chunk_record,
+    semantic_search,
+)
 from app.domains.workspace.models import Workspace
 from app.domains.workspace.service import WorkspaceService
 from app.gateway.llm import LLMGateway, get_llm_gateway
@@ -24,6 +31,24 @@ from app.gateway.llm import LLMGateway, get_llm_gateway
 # finally-guard in _stream_complete; rows older than this threshold that are
 # still "generating" are treated as dead leftovers (pre-guard rows).
 STALE_GENERATING_SECONDS = 15 * 60
+PLAN_REFERENCE_PATTERN = re.compile(r"(?:此|这|该)(?:个)?研究计划|当前研究计划|这个计划")
+CONFIRMED_OPPORTUNITY_STATUSES = {"confirmed", "edited_confirmed"}
+CONFIRMED_PLAN_STATUSES = {"confirmed", "approved"}
+
+
+@dataclass
+class WorkspaceContext:
+    messages: list[dict[str, str]]
+    evidence: list[ChatMessageEvidence]
+    sources: list[dict[str, Any]]
+    plan: ResearchPlan | None = None
+    retrieval_diagnostic_code: str | None = None
+
+
+@dataclass
+class ContextSelection:
+    plan: ResearchPlan | None
+    artifacts: list[AgentArtifact]
 
 
 class ChatNotFoundError(LookupError):
@@ -71,10 +96,12 @@ class ChatRetrievalError(RuntimeError):
         *,
         conversation_id: str | None = None,
         assistant_message_id: str | None = None,
+        diagnostic_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
         self.assistant_message_id = assistant_message_id
+        self.diagnostic_code = diagnostic_code
 
 
 def make_conversation_title(content: str) -> str:
@@ -170,6 +197,8 @@ class ChatService:
         self,
         content: str,
         workspace_id: str | None = None,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
         if workspace_id:
@@ -187,6 +216,8 @@ class ChatService:
             user_message.id,
             assistant_message.id,
             [{"role": "user", "content": content}],
+            research_plan_id=research_plan_id,
+            source_artifact_ids=source_artifact_ids,
         )
 
     def send(
@@ -194,6 +225,8 @@ class ChatService:
         conversation_id: str,
         content: str,
         workspace_id: str | None = None,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
         conversation = self.get_conversation(conversation_id)
@@ -204,7 +237,14 @@ class ChatService:
         user_message, assistant_message = self._create_pending_messages(conversation, content)
         self.db.commit()
         context = self._build_context(existing, content)
-        return self._complete(conversation.id, user_message.id, assistant_message.id, context)
+        return self._complete(
+            conversation.id,
+            user_message.id,
+            assistant_message.id,
+            context,
+            research_plan_id=research_plan_id,
+            source_artifact_ids=source_artifact_ids,
+        )
 
     def retry(
         self, conversation_id: str, assistant_message_id: str
@@ -238,7 +278,23 @@ class ChatService:
         assistant.status = "generating"
         assistant.error_message = None
         assistant.content = ""
+        assistant.retrieval_diagnostic_code = None
         self.db.commit()
+        previous_sources = list(assistant.source_manifest or [])
+        plan_id = next(
+            (
+                str(source.get("source_id"))
+                for source in previous_sources
+                if source.get("source_type") == "plan" and source.get("source_id")
+            ),
+            None,
+        )
+        artifact_ids = [
+            str(source.get("source_id"))
+            for source in previous_sources
+            if source.get("source_type") in {"report", "code_draft"}
+            and source.get("source_id")
+        ]
         return self._complete(
             conversation.id,
             user_message.id,
@@ -246,6 +302,8 @@ class ChatService:
             self._build_context(
                 [item for item in prior if item.id != user_message.id], user_message.content
             ),
+            research_plan_id=plan_id,
+            source_artifact_ids=artifact_ids,
         )
 
     def _create_pending_messages(
@@ -337,21 +395,40 @@ class ChatService:
         return context
 
     def _complete(
-        self, conversation_id: str, user_id: str, assistant_id: str, context: list[dict[str, str]]
+        self,
+        conversation_id: str,
+        user_id: str,
+        assistant_id: str,
+        context: list[dict[str, str]],
+        *,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         assistant = self.db.get(ChatMessage, assistant_id)
         conversation = self.db.get(ChatConversation, conversation_id)
         user_message = self.db.get(ChatMessage, user_id)
         try:
+            if (research_plan_id or source_artifact_ids) and not conversation.workspace_id:
+                raise ChatInputError("研究计划和补充来源必须绑定当前工作区")
             evidence: list[ChatMessageEvidence] = []
+            sources: list[dict[str, Any]] = []
             if conversation.workspace_id:
-                context, evidence = self._workspace_context(
+                workspace_context = self._workspace_context(
                     conversation,
                     user_message.content,
                     context,
                     assistant.id,
+                    research_plan_id=research_plan_id,
+                    source_artifact_ids=source_artifact_ids,
                 )
-                if not evidence:
+                context, evidence, sources = (
+                    workspace_context.messages,
+                    workspace_context.evidence,
+                    workspace_context.sources,
+                )
+                assistant.source_manifest = sources
+                assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
+                if not evidence and not sources:
                     return self._complete_without_evidence(
                         conversation,
                         user_message,
@@ -366,6 +443,9 @@ class ChatService:
             raise ChatConfigurationError(
                 str(exc), conversation_id=conversation_id, assistant_message_id=assistant_id
             ) from exc
+        except ChatInputError:
+            self._mark_failed(assistant, "上下文选择无效")
+            raise
         except ChatRetrievalError:
             raise
         except Exception as exc:
@@ -384,7 +464,13 @@ class ChatService:
         assistant.prompt_tokens = response.prompt_tokens
         assistant.completion_tokens = response.completion_tokens
         assistant.total_tokens = response.total_tokens
-        assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
+        assistant.grounding_status = (
+            "grounded"
+            if evidence
+            else "plan_context"
+            if sources
+            else "not_requested"
+        ) if conversation.workspace_id else "not_requested"
         if conversation.workspace_id:
             assistant.citations = evidence
         conversation.model = response.model
@@ -400,6 +486,8 @@ class ChatService:
         self,
         content: str,
         workspace_id: str | None = None,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Stream a new-conversation message. Yields event dicts (see _stream_complete)."""
         content = self._validate_content(content)
@@ -416,6 +504,8 @@ class ChatService:
         yield from self._stream_complete(
             conversation.id, user_message.id, assistant_message.id,
             [{"role": "user", "content": content}],
+            research_plan_id=research_plan_id,
+            source_artifact_ids=source_artifact_ids,
         )
 
     def stream_send(
@@ -423,6 +513,8 @@ class ChatService:
         conversation_id: str,
         content: str,
         workspace_id: str | None = None,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Stream a message into an existing conversation. Yields event dicts."""
         content = self._validate_content(content)
@@ -434,7 +526,14 @@ class ChatService:
         user_message, assistant_message = self._create_pending_messages(conversation, content)
         self.db.commit()
         context = self._build_context(existing, content)
-        yield from self._stream_complete(conversation.id, user_message.id, assistant_message.id, context)
+        yield from self._stream_complete(
+            conversation.id,
+            user_message.id,
+            assistant_message.id,
+            context,
+            research_plan_id=research_plan_id,
+            source_artifact_ids=source_artifact_ids,
+        )
 
     def _stream_complete(
         self,
@@ -442,6 +541,9 @@ class ChatService:
         user_id: str,
         assistant_id: str,
         context: list[dict[str, str]],
+        *,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Stream LLM tokens for a message, persisting on completion.
 
@@ -453,11 +555,26 @@ class ChatService:
         conversation = self.db.get(ChatConversation, conversation_id)
         user_message = self.db.get(ChatMessage, user_id)
         evidence: list[ChatMessageEvidence] = []
+        sources: list[dict[str, Any]] = []
         try:
+            if (research_plan_id or source_artifact_ids) and not conversation.workspace_id:
+                raise ChatInputError("研究计划和补充来源必须绑定当前工作区")
             if conversation.workspace_id:
-                context, evidence = self._workspace_context(
-                    conversation, user_message.content, context, assistant.id
+                workspace_context = self._workspace_context(
+                    conversation,
+                    user_message.content,
+                    context,
+                    assistant.id,
+                    research_plan_id=research_plan_id,
+                    source_artifact_ids=source_artifact_ids,
                 )
+                context, evidence, sources = (
+                    workspace_context.messages,
+                    workspace_context.evidence,
+                    workspace_context.sources,
+                )
+                assistant.source_manifest = sources
+                assistant.retrieval_diagnostic_code = workspace_context.retrieval_diagnostic_code
             gateway = self.gateway or get_llm_gateway()
             if not getattr(gateway, "api_key", None):
                 raise ChatConfigurationError("DeepSeek API key is not configured")
@@ -472,7 +589,20 @@ class ChatService:
             # documented SSE error event instead of closing the connection
             # while the browser still shows the optimistic message as
             # "generating".
+            yield {
+                "type": "error",
+                "message": str(exc),
+                "diagnostic_code": exc.diagnostic_code,
+            }
+            return
+        except ChatInputError as exc:
+            self._mark_failed(assistant, "上下文选择无效")
             yield {"type": "error", "message": str(exc)}
+            return
+
+        if conversation.workspace_id and not evidence and not sources:
+            self._complete_without_evidence(conversation, user_message, assistant)
+            yield {"type": "done", "content": assistant.content}
             return
 
         yield {"type": "start", "conversation_id": conversation_id, "assistant_message_id": assistant_id}
@@ -507,7 +637,9 @@ class ChatService:
             assistant.status = "completed"
             assistant.content = content
             assistant.error_message = None
-            assistant.grounding_status = "grounded" if conversation.workspace_id else "not_requested"
+            assistant.grounding_status = (
+                "grounded" if evidence else "plan_context" if sources else "not_requested"
+            ) if conversation.workspace_id else "not_requested"
             if conversation.workspace_id:
                 assistant.citations = evidence
             conversation.last_message_at = datetime.now(timezone.utc)
@@ -531,8 +663,17 @@ class ChatService:
         question: str,
         context: list[dict[str, str]],
         assistant_id: str,
-    ) -> tuple[list[dict[str, str]], list[ChatMessageEvidence]]:
+        *,
+        research_plan_id: str | None = None,
+        source_artifact_ids: list[str] | None = None,
+    ) -> WorkspaceContext:
         workspace = WorkspaceService(self.db).get(conversation.workspace_id)
+        selection = self._resolve_context_selection(
+            workspace.id,
+            question,
+            research_plan_id=research_plan_id,
+            source_artifact_ids=source_artifact_ids or [],
+        )
         result = semantic_search(
             workspace_id=workspace.id,
             query=question,
@@ -540,16 +681,23 @@ class ChatService:
             use_reranker=True,
         )
         if result.status == "failed":
+            diagnostic_code = result.diagnostic_code or "unknown"
+            diagnostic_message = RETRIEVAL_DIAGNOSTIC_MESSAGES.get(
+                diagnostic_code,
+                RETRIEVAL_DIAGNOSTIC_MESSAGES["unknown"],
+            )
             assistant = self.db.get(ChatMessage, assistant_id)
             self._mark_failed(
                 assistant,
-                result.error or "Workspace retrieval failed",
+                diagnostic_message,
                 grounding_status="retrieval_failed",
+                retrieval_diagnostic_code=diagnostic_code,
             )
             raise ChatRetrievalError(
-                "工作区论文检索失败，请检查向量化服务与 Milvus 后重试",
+                diagnostic_message,
                 conversation_id=conversation.id,
                 assistant_message_id=assistant_id,
+                diagnostic_code=diagnostic_code,
             )
 
         evidence = self._materialize_evidence(
@@ -557,22 +705,288 @@ class ChatService:
             assistant_id,
             result.items,
         )
-        if not evidence:
-            return context, []
-
+        sources = self._source_manifest(selection.plan, evidence, selection.artifacts)
         profile = self._workspace_profile(workspace)
-        evidence_text = self._evidence_prompt(evidence)
+        plan_text = self._plan_prompt(selection.plan) if selection.plan else "未选择研究计划。"
+        artifact_text = self._artifact_prompt(selection.artifacts)
+        evidence_text = self._evidence_prompt(evidence) if evidence else "本次没有检索到可用的工作区论文证据。"
         system_message = {
             "role": "system",
             "content": (
-                "你是 GapMind 的课题空间研究助手。只能依据下方工作区资料回答与该课题相关的事实性问题。"
-                "回答中的关键结论必须使用 [E1]、[E2] 形式引用证据；不要编造不存在的论文、实验结果或引用。"
-                "如果证据不足，请直接说明不足，并指出还需要什么资料。可以使用对话历史理解代词和上下文，"
-                "但历史中的助手回答不能替代论文证据。\n\n"
-                f"工作区资料：\n{profile}\n\n检索证据：\n{evidence_text}"
+                "你是 GapMind 的课题空间研究助手。请清楚区分来源，不要把研究计划、报告或代码草案伪装成论文证据。"
+                "只有工作区论文可以使用 [E1]、[E2] 形式引用；计划使用 [P1]，已确认报告使用 [D1]，代码草案使用 [C1]。"
+                "不要复制报告或代码草案内部的 [E] 标记。可以用对话历史理解代词，但历史中的助手回答不能替代来源。"
+                "如果论文证据不足，请明确说明不足；如果研究计划没有定义损失函数，也必须明确说计划中未提供，"
+                "不得根据常见做法或论文内容猜一个损失函数。代码草案始终标为未运行验证。\n\n"
+                f"工作区资料（非论文来源）：\n{profile}\n\n"
+                f"已确认研究计划 [P1]：\n{plan_text}\n\n"
+                f"可选报告/代码草案：\n{artifact_text}\n\n"
+                f"工作区论文检索证据（仅此部分可作为论文事实依据）：\n{evidence_text}"
             ),
         }
-        return [system_message, *context], evidence
+        return WorkspaceContext(
+            [system_message, *context],
+            evidence,
+            sources,
+            selection.plan,
+            result.diagnostic_code,
+        )
+
+    def context_options(self, workspace_id: str) -> dict[str, list[dict[str, str]]]:
+        """List only current-workspace plan/report/code context candidates."""
+
+        workspace = WorkspaceService(self.db).get(workspace_id)
+        plans = self._eligible_plans(workspace.id)
+        plan_ids = {plan.id for plan in plans}
+        plan_options = [
+            {
+                "id": plan.id,
+                "title": self._postgres_safe_text(plan.title),
+                "research_question": self._postgres_safe_text(plan.research_question),
+                "status": "confirmed",
+            }
+            for plan in plans
+        ]
+        artifacts: list[dict[str, str]] = []
+        rows = self.db.execute(
+            select(AgentArtifact, AgentRun)
+            .join(AgentRun, AgentRun.id == AgentArtifact.run_id)
+            .where(
+                AgentRun.workspace_id == workspace.id,
+                AgentRun.status == "succeeded",
+                AgentArtifact.is_deleted.is_(False),
+            )
+            .order_by(AgentArtifact.updated_at.desc())
+        ).all()
+        for artifact, run in rows:
+            plan_id = str(
+                (run.result or {}).get("research_plan_id")
+                or (run.input_payload or {}).get("research_plan_id")
+                or (artifact.metadata_payload or {}).get("research_plan_id")
+                or ""
+            )
+            if plan_id not in plan_ids:
+                continue
+            if artifact.artifact_type == "deep_research_report":
+                if artifact.validation_status != "confirmed":
+                    continue
+                source_type = "report"
+                label = "已确认报告"
+            elif artifact.artifact_type == "code":
+                source_type = "code_draft"
+                label = "代码草案，未运行验证"
+            else:
+                continue
+            artifacts.append(
+                {
+                    "id": artifact.id,
+                    "plan_id": plan_id,
+                    "source_type": source_type,
+                    "label": label,
+                    "title": self._postgres_safe_text(artifact.filename),
+                    "status": artifact.validation_status,
+                }
+            )
+        return {"plans": plan_options, "artifacts": artifacts}
+
+    def _resolve_context_selection(
+        self,
+        workspace_id: str,
+        question: str,
+        *,
+        research_plan_id: str | None,
+        source_artifact_ids: list[str],
+    ) -> ContextSelection:
+        plans = self._eligible_plans(workspace_id)
+        plan_by_id = {plan.id: plan for plan in plans}
+        plan: ResearchPlan | None = None
+        if research_plan_id:
+            requested = self.db.get(ResearchPlan, research_plan_id)
+            if requested is None or requested.workspace_id != workspace_id:
+                raise ChatInputError("研究计划必须属于当前工作区")
+            plan = plan_by_id.get(requested.id)
+            if plan is None:
+                raise ChatInputError("只能绑定当前工作区内已确认的研究计划")
+        elif PLAN_REFERENCE_PATTERN.search(question or ""):
+            if len(plans) > 1:
+                titles = "；".join(self._postgres_safe_text(item.title) for item in plans[:3])
+                raise ChatInputError(f"当前工作区有多个已确认研究计划，请先选择：{titles}")
+            if len(plans) == 1:
+                plan = plans[0]
+
+        artifacts: list[AgentArtifact] = []
+        if source_artifact_ids:
+            if plan is None:
+                raise ChatInputError("选择报告或代码草案前必须先选择研究计划")
+            rows = self.db.execute(
+                select(AgentArtifact, AgentRun)
+                .join(AgentRun, AgentRun.id == AgentArtifact.run_id)
+                .where(
+                    AgentArtifact.id.in_(source_artifact_ids),
+                    AgentArtifact.is_deleted.is_(False),
+                )
+            ).all()
+            row_by_id = {artifact.id: (artifact, run) for artifact, run in rows}
+            if len(row_by_id) != len(set(source_artifact_ids)):
+                raise ChatInputError("补充来源不存在或不可用")
+            for artifact_id in source_artifact_ids:
+                artifact, run = row_by_id[artifact_id]
+                linked_plan_id = str(
+                    (run.result or {}).get("research_plan_id")
+                    or (run.input_payload or {}).get("research_plan_id")
+                    or (artifact.metadata_payload or {}).get("research_plan_id")
+                    or ""
+                )
+                if run.workspace_id != workspace_id or run.status != "succeeded" or linked_plan_id != plan.id:
+                    raise ChatInputError("补充来源必须属于当前工作区和所选研究计划")
+                if artifact.artifact_type == "deep_research_report":
+                    if artifact.validation_status != "confirmed":
+                        raise ChatInputError("只能引用已确认的深度研究报告")
+                elif artifact.artifact_type != "code":
+                    raise ChatInputError("该产物不能作为助手上下文来源")
+                artifacts.append(artifact)
+        return ContextSelection(plan, artifacts)
+
+    def _eligible_plans(self, workspace_id: str) -> list[ResearchPlan]:
+        plans = list(
+            self.db.scalars(
+                select(ResearchPlan)
+                .where(ResearchPlan.workspace_id == workspace_id)
+                .order_by(ResearchPlan.updated_at.desc())
+            )
+        )
+        return [plan for plan in plans if self._is_confirmed_plan(plan, workspace_id)]
+
+    def _is_confirmed_plan(self, plan: ResearchPlan, workspace_id: str) -> bool:
+        if plan.workspace_id != workspace_id:
+            return False
+        if plan.status in CONFIRMED_PLAN_STATUSES:
+            return True
+        if plan.opportunity_id:
+            opportunity = self.db.get(ResearchOpportunity, plan.opportunity_id)
+            if (
+                opportunity is not None
+                and not opportunity.is_deleted
+                and opportunity.workspace_id == workspace_id
+                and opportunity.status in CONFIRMED_OPPORTUNITY_STATUSES
+            ):
+                return True
+        if plan.agent_run_id:
+            run = self.db.get(AgentRun, plan.agent_run_id)
+            if (
+                run is not None
+                and run.workspace_id == workspace_id
+                and run.status == "succeeded"
+                and run.agent_type == "research_plan"
+            ):
+                return True
+        return False
+
+    def _source_manifest(
+        self,
+        plan: ResearchPlan | None,
+        evidence: list[ChatMessageEvidence],
+        artifacts: list[AgentArtifact],
+    ) -> list[dict[str, Any]]:
+        sources: list[dict[str, Any]] = []
+        if plan is not None:
+            sources.append(
+                {
+                    "marker": "P1",
+                    "source_type": "plan",
+                    "source_id": plan.id,
+                    "label": "已确认研究计划",
+                    "title": self._postgres_safe_text(plan.title),
+                    "status": "confirmed",
+                    "detail": "计划来源，不是论文证据",
+                }
+            )
+        for item in evidence:
+            sources.append(
+                {
+                    "marker": f"E{item.rank}",
+                    "source_type": "paper",
+                    "source_id": item.paper_id or item.id,
+                    "label": "工作区论文",
+                    "title": self._postgres_safe_text(item.paper_title) or "未命名论文",
+                    "status": "indexed",
+                    "detail": self._postgres_safe_text(item.section) or None,
+                }
+            )
+        report_index = 1
+        code_index = 1
+        for artifact in artifacts:
+            if artifact.artifact_type == "deep_research_report":
+                marker = f"D{report_index}"
+                report_index += 1
+                label = "已确认报告"
+                status = "confirmed"
+                source_type = "report"
+                detail = "人工确认的 AI 报告，不是论文原文"
+            else:
+                marker = f"C{code_index}"
+                code_index += 1
+                label = "代码草案，未运行验证"
+                status = "not_run"
+                source_type = "code_draft"
+                detail = "AI 候选产物，不代表已执行或复现"
+            sources.append(
+                {
+                    "marker": marker,
+                    "source_type": source_type,
+                    "source_id": artifact.id,
+                    "label": label,
+                    "title": self._postgres_safe_text(artifact.filename),
+                    "status": status,
+                    "detail": detail,
+                }
+            )
+        return sources
+
+    def _plan_prompt(self, plan: ResearchPlan) -> str:
+        fields = [
+            f"标题：{self._postgres_safe_text(plan.title)}",
+            f"研究问题：{self._postgres_safe_text(plan.research_question)}",
+            f"假设：{self._postgres_safe_text(plan.hypothesis)}",
+            f"范围与前提：{self._postgres_safe_text(plan.scope_and_assumptions)}",
+            f"数据集：{self._postgres_safe_text('；'.join(plan.datasets or []))}",
+            f"基线：{self._postgres_safe_text('；'.join(plan.baselines or []))}",
+            f"指标：{self._postgres_safe_text('；'.join(plan.metrics or []))}",
+            f"验证步骤：{self._postgres_safe_text('；'.join(plan.validation_steps or []))}",
+            f"预期支持结果：{self._postgres_safe_text(plan.expected_supporting_result)}",
+            f"证伪标准：{self._postgres_safe_text(plan.falsification_criteria)}",
+            f"风险：{self._postgres_safe_text('；'.join(plan.risks or []))}",
+            f"资源约束：{self._postgres_safe_text(plan.resource_constraints)}",
+            "独立损失函数：研究计划未提供此字段；除非补充来源明确写出，否则必须回答‘未指定’。",
+        ]
+        return "\n".join(fields)
+
+    def _artifact_prompt(self, artifacts: list[AgentArtifact]) -> str:
+        if not artifacts:
+            return "未选择补充报告或代码草案。"
+        blocks: list[str] = []
+        report_index = 1
+        code_index = 1
+        total_chars = 0
+        budget = max(settings.chat_rag_max_context_chars // 2, 4000)
+        for artifact in artifacts:
+            if artifact.artifact_type == "deep_research_report":
+                marker = f"[D{report_index}] 已确认报告"
+                report_index += 1
+            else:
+                marker = f"[C{code_index}] 代码草案，未运行验证"
+                code_index += 1
+            content = self._postgres_safe_text(artifact.content)
+            # Do not let an embedded report citation accidentally become a
+            # citation to this chat's paper evidence ranks.
+            content = re.sub(r"\[E\d+\]", "[来源内部标记]", content)
+            remaining = budget - total_chars
+            if remaining <= 0:
+                break
+            block = f"{marker} 文件：{self._postgres_safe_text(artifact.filename)}\n{content}"
+            blocks.append(block[:remaining])
+            total_chars += min(len(block), remaining)
+        return "\n\n".join(blocks)
 
     def _materialize_evidence(
         self,
@@ -721,9 +1135,11 @@ class ChatService:
         error_message: str,
         *,
         grounding_status: str | None = None,
+        retrieval_diagnostic_code: str | None = None,
     ) -> None:
         assistant.status = "failed"
         assistant.error_message = error_message[:1000]
+        assistant.retrieval_diagnostic_code = retrieval_diagnostic_code
         if grounding_status:
             assistant.grounding_status = grounding_status
         conversation = self.db.get(ChatConversation, assistant.conversation_id)

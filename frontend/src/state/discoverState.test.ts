@@ -24,6 +24,20 @@ describe("Discover state helpers", () => {
     expect(stageSummaryMessage(summaries, "external_search")).toContain("2 个因 Semantic Scholar 请求频率受限");
   });
 
+  it("keeps a non-critical partial search visually successful but explains the limitation", () => {
+    const summaries = {
+      external_search: {
+        status: "succeeded",
+        notice_level: "informational",
+        successful_query_count: 11,
+        failed_query_count: 1,
+        message: "外部检索成功 11/12 条查询，1 条受限；已保留成功结果。",
+      },
+    };
+    expect(stageSummaryMessage(summaries, "external_search")).toContain("11/12");
+    expect(stageSummaryMessage(summaries, "external_search")).toContain("已保留成功结果");
+  });
+
   it("uses low-frequency polling for waiting states and stops at terminal states", () => {
     expect(pollingInterval("running")).toBe(2000);
     expect(pollingInterval("waiting_for_fulltext")).toBe(5000);

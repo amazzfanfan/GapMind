@@ -331,7 +331,7 @@ export default function ResearchPlansPage() {
                   size="small"
                   style={{ width: "100%" }}
                   title={<Space wrap><RobotOutlined /><Text strong>{plan?.title || "深度研究"}</Text><Tag color={run.status === "succeeded" ? "green" : run.status === "failed" ? "red" : run.status === "waiting_for_user" ? "gold" : "blue"}>{stageLabels[run.current_stage] || run.current_stage}</Tag></Space>}
-                  extra={run.conversation_id ? <Link to={`/workspaces/${workspace.id}/assistant/${run.conversation_id}`}>前往 AI 助手</Link> : null}
+                  extra={run.conversation_id ? <Link to={`/workspaces/${workspace.id}/assistant/${run.conversation_id}?research_plan_id=${encodeURIComponent(planId)}`}>前往 AI 助手</Link> : null}
                 >
                   <Progress percent={Math.round(run.progress * 100)} status={run.status === "failed" ? "exception" : run.status === "succeeded" ? "success" : "active"} />
                   {run.error && <Paragraph type="danger">{run.error}</Paragraph>}

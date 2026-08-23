@@ -17,11 +17,17 @@ from app.domains.gap.markdown import compact_markdown
 from app.domains.gap.models import PaperGapAnnotation
 from app.domains.gap.prompt import PROMPT_VERSION
 from app.domains.gap.service import GapService
+from app.domains.gap.validation import classify_failure_kind
 from app.domains.paper.models import Paper
 from app.domains.task.models import Task
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
-from app.gateway.gap_extractor import GapExtractorUnavailableError, OllamaGapExtractor
+from app.gateway.gap_extractor import (
+    GapExtractor,
+    GapExtractorUnavailableError,
+    OllamaGapExtractor,
+    RemoteGapExtractor,
+)
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -53,12 +59,13 @@ def _run_gap_extraction(
     db: Session,
     task_id: str,
     *,
-    extractor: OllamaGapExtractor | None = None,
+    extractor: GapExtractor | None = None,
 ) -> dict:
     tasks = TaskService(db)
     task = tasks.transition(task_id, "running", progress=0.05)
     paper_id = str((task.payload or {}).get("paper_id") or "")
     force = bool((task.payload or {}).get("force"))
+    allow_remote_fallback = bool((task.payload or {}).get("allow_remote_fallback"))
     paper = db.get(Paper, paper_id)
     if paper is None or paper.is_deleted or paper.workspace_id != task.workspace_id:
         return _fail(tasks, task_id, f"paper not found in workspace: {paper_id}")
@@ -107,6 +114,7 @@ def _run_gap_extraction(
             raw_responses=[],
             output=None,
             validation_errors=[],
+            fallback_reason=None,
             is_deleted=False,
         )
         db.add(row)
@@ -117,6 +125,7 @@ def _run_gap_extraction(
         row.raw_responses = []
         row.output = None
         row.validation_errors = []
+        row.fallback_reason = None
     db.commit()
     tasks.update_progress(task_id, 0.20)
 
@@ -126,43 +135,322 @@ def _run_gap_extraction(
         result = model.extract(markdown)
     except GapExtractorUnavailableError as exc:
         message = str(exc)
-        row.status = "invalid"
-        row.validation_errors = [message]
-        row.output = None
+        _store_failed_annotation(
+            row,
+            provider="ollama",
+            model=settings.gap_extractor_model,
+            attempts=0,
+            raw_responses=[],
+            validation_errors=[message],
+            fallback_reason="local_model_unavailable",
+            failure_kind="model_unavailable",
+        )
+        db.commit()
+        return _try_remote_fallback(
+            db,
+            tasks,
+            task_id,
+            row,
+            markdown,
+            local_error=message,
+            local_status="unavailable",
+            local_failure_kind="model_unavailable",
+            allow_remote_fallback=allow_remote_fallback,
+            force=force,
+        )
+    except RuntimeError:
+        message = "本地研究空白模型返回空响应，请检查服务状态后重试。"
+        _store_failed_annotation(
+            row,
+            provider="ollama",
+            model=settings.gap_extractor_model,
+            attempts=0,
+            raw_responses=[],
+            validation_errors=[message],
+            fallback_reason="local_model_unavailable",
+            failure_kind="model_unavailable",
+        )
+        db.commit()
+        return _try_remote_fallback(
+            db,
+            tasks,
+            task_id,
+            row,
+            markdown,
+            local_error=message,
+            local_status="unavailable",
+            local_failure_kind="model_unavailable",
+            allow_remote_fallback=allow_remote_fallback,
+            force=force,
+        )
+    row.attempts = result.attempts
+    row.raw_responses = result.raw_responses
+    row.validation_errors = result.validation_errors
+    row.output = result.output.model_dump(mode="json") if result.output else None
+    row.model_provider = result.provider
+    row.model_name = result.model or settings.gap_extractor_model
+    row.model_parameters = {
+        **model.model_parameters,
+        "validation_error_categories": result.validation_error_categories,
+    }
+    row.status = "valid" if result.output else "invalid"
+    db.commit()
+    if result.output is None:
+        failure_kind = classify_failure_kind(markdown, result.validation_errors)
+        row.fallback_reason = (
+            "local_validation_failed"
+            if failure_kind == "invalid_output"
+            else failure_kind
+        )
+        db.commit()
+        return _try_remote_fallback(
+            db,
+            tasks,
+            task_id,
+            row,
+            markdown,
+            local_error=_failure_message(failure_kind),
+            local_status="invalid",
+            local_failure_kind=failure_kind,
+            allow_remote_fallback=allow_remote_fallback,
+            force=force,
+        )
+
+    GapService(db).assign_annotation(row)
+    row.fallback_reason = None
+    db.commit()
+    succeeded = {
+        "annotation_id": row.id,
+        "status": "valid",
+        "attempts": row.attempts,
+        "provider": row.model_provider,
+    }
+    tasks.transition(task_id, "succeeded", progress=1.0, result=succeeded)
+    return succeeded
+
+
+def _store_failed_annotation(
+    row: PaperGapAnnotation,
+    *,
+    provider: str,
+    model: str,
+    attempts: int,
+    raw_responses: list[str],
+    validation_errors: list[str],
+    fallback_reason: str,
+    failure_kind: str,
+) -> None:
+    row.model_provider = provider
+    row.model_name = model
+    row.attempts = attempts
+    row.raw_responses = raw_responses
+    row.output = None
+    row.validation_errors = validation_errors
+    row.fallback_reason = fallback_reason
+    row.status = "invalid"
+    row.model_parameters = {
+        **(row.model_parameters or {}),
+        "failure_kind": failure_kind,
+    }
+
+
+def _failure_message(failure_kind: str) -> str:
+    if failure_kind == "content_insufficient":
+        return "论文 Markdown 内容不足，无法可靠生成研究空白标注；请补充解析内容后重试。"
+    if failure_kind == "not_applicable":
+        return "论文可能不适用于研究空白 Schema（例如综述或教程类），未生成空白标注。"
+    return "gap annotation failed validation"
+
+
+def _remote_is_configured() -> bool:
+    return bool(
+        settings.gap_extractor_remote_enabled
+        and settings.gap_extractor_remote_base_url
+        and settings.gap_extractor_remote_api_key
+        and settings.gap_extractor_remote_model
+    )
+
+
+def _try_remote_fallback(
+    db: Session,
+    tasks: TaskService,
+    task_id: str,
+    local_row: PaperGapAnnotation,
+    markdown: str,
+    *,
+    local_error: str,
+    local_status: str,
+    local_failure_kind: str,
+    allow_remote_fallback: bool,
+    force: bool,
+) -> dict:
+    base_result = {
+        "annotation_id": local_row.id,
+        "status": local_status,
+        "attempts": local_row.attempts,
+        "validation_errors": local_row.validation_errors,
+        "fallback_reason": local_row.fallback_reason,
+        "provider": local_row.model_provider,
+    }
+    if local_status == "unavailable":
+        base_result["retryable"] = True
+    if local_failure_kind in {"content_insufficient", "not_applicable"}:
+        return _fail(tasks, task_id, local_error, result=base_result)
+    if not allow_remote_fallback:
+        local_row.fallback_reason = "remote_consent_required"
+        db.commit()
+        base_result["fallback_reason"] = local_row.fallback_reason
+        return _fail(tasks, task_id, local_error, result=base_result)
+    if not _remote_is_configured():
+        local_row.fallback_reason = "remote_fallback_not_configured"
+        db.commit()
+        base_result["fallback_reason"] = local_row.fallback_reason
+        return _fail(tasks, task_id, local_error, result=base_result)
+
+    remote = RemoteGapExtractor()
+    remote_row = _get_or_create_remote_row(
+        db,
+        local_row,
+        model=remote.model,
+        force=force,
+    )
+    if remote_row.status == "valid" and not force:
+        GapService(db).assign_annotation(remote_row)
+        succeeded = {
+            "annotation_id": remote_row.id,
+            "status": "valid",
+            "attempts": remote_row.attempts,
+            "provider": remote_row.model_provider,
+            "fallback_reason": remote_row.fallback_reason,
+            "remote_fallback": True,
+        }
+        tasks.transition(task_id, "succeeded", progress=1.0, result=succeeded)
+        return succeeded
+
+    remote_row.model_parameters = remote.model_parameters
+    remote_row.fallback_reason = "local_model_unavailable" if local_status == "unavailable" else "local_validation_failed"
+    try:
+        remote_result = remote.extract(markdown, repair_attempts=0)
+    except GapExtractorUnavailableError as exc:
+        message = str(exc)
+        _store_failed_annotation(
+            remote_row,
+            provider=remote.provider,
+            model=remote.model,
+            attempts=0,
+            raw_responses=[],
+            validation_errors=[message],
+            fallback_reason=remote_row.fallback_reason,
+            failure_kind="remote_model_unavailable",
+        )
         db.commit()
         return _fail(
             tasks,
             task_id,
             message,
             result={
-                "annotation_id": row.id,
+                "annotation_id": remote_row.id,
                 "status": "unavailable",
                 "retryable": True,
+                "provider": remote_row.model_provider,
+                "fallback_reason": remote_row.fallback_reason,
+                "local_error": local_error,
             },
         )
-    row.attempts = result.attempts
-    row.raw_responses = result.raw_responses
-    row.validation_errors = result.validation_errors
-    row.output = result.output.model_dump(mode="json") if result.output else None
-    row.status = "valid" if result.output else "invalid"
-    db.commit()
-    if result.output is None:
-        failed = {
-            "annotation_id": row.id,
-            "status": "invalid",
-            "attempts": row.attempts,
-            "validation_errors": row.validation_errors,
-        }
-        return _fail(tasks, task_id, "gap annotation failed validation", result=failed)
 
-    GapService(db).assign_annotation(row)
+    remote_row.model_provider = remote_result.provider
+    remote_row.model_name = remote_result.model or remote.model
+    remote_row.model_parameters = {
+        **remote.model_parameters,
+        "validation_error_categories": remote_result.validation_error_categories,
+    }
+    remote_row.attempts = remote_result.attempts
+    remote_row.raw_responses = remote_result.raw_responses
+    remote_row.validation_errors = remote_result.validation_errors
+    remote_row.output = remote_result.output.model_dump(mode="json") if remote_result.output else None
+    remote_row.status = "valid" if remote_result.output else "invalid"
+    db.commit()
+    if remote_result.output is None:
+        failure_kind = classify_failure_kind(markdown, remote_result.validation_errors)
+        if failure_kind in {"content_insufficient", "not_applicable"}:
+            remote_row.fallback_reason = failure_kind
+        db.commit()
+        return _fail(
+            tasks,
+            task_id,
+            _failure_message(failure_kind),
+            result={
+                "annotation_id": remote_row.id,
+                "status": "invalid",
+                "attempts": remote_row.attempts,
+                "validation_errors": remote_row.validation_errors,
+                "provider": remote_row.model_provider,
+                "fallback_reason": remote_row.fallback_reason,
+                "local_error": local_error,
+            },
+        )
+
+    GapService(db).assign_annotation(remote_row)
     succeeded = {
-        "annotation_id": row.id,
+        "annotation_id": remote_row.id,
         "status": "valid",
-        "attempts": row.attempts,
+        "attempts": remote_row.attempts,
+        "provider": remote_row.model_provider,
+        "fallback_reason": remote_row.fallback_reason,
+        "remote_fallback": True,
     }
     tasks.transition(task_id, "succeeded", progress=1.0, result=succeeded)
     return succeeded
+
+
+def _get_or_create_remote_row(
+    db: Session,
+    local_row: PaperGapAnnotation,
+    *,
+    model: str,
+    force: bool,
+) -> PaperGapAnnotation:
+    row = db.execute(
+        select(PaperGapAnnotation).where(
+            PaperGapAnnotation.paper_id == local_row.paper_id,
+            PaperGapAnnotation.input_sha256 == local_row.input_sha256,
+            PaperGapAnnotation.model_name == model,
+            PaperGapAnnotation.prompt_version == local_row.prompt_version,
+            PaperGapAnnotation.is_deleted.is_(False),
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = PaperGapAnnotation(
+            id=str(uuid4()),
+            workspace_id=local_row.workspace_id,
+            paper_id=local_row.paper_id,
+            artifact_id=local_row.artifact_id,
+            task_id=local_row.task_id,
+            input_sha256=local_row.input_sha256,
+            schema_version=local_row.schema_version,
+            prompt_version=local_row.prompt_version,
+            model_provider="remote",
+            model_name=model,
+            model_digest=None,
+            model_parameters={},
+            status="running",
+            attempts=0,
+            raw_responses=[],
+            output=None,
+            validation_errors=[],
+            fallback_reason=None,
+            is_deleted=False,
+        )
+        db.add(row)
+    elif force or row.status != "valid":
+        row.task_id = local_row.task_id
+        row.status = "running"
+        row.attempts = 0
+        row.raw_responses = []
+        row.output = None
+        row.validation_errors = []
+    db.flush()
+    return row
 
 
 def _fail(
@@ -194,6 +482,7 @@ def spawn_gap_extraction(
     workspace_id: str,
     *,
     force: bool = False,
+    allow_remote_fallback: bool = False,
 ) -> tuple[str | None, bool]:
     """Create (or reuse) a gap-extraction task for a paper.
 
@@ -226,7 +515,11 @@ def spawn_gap_extraction(
         TaskCreate(
             workspace_id=workspace_id,
             task_type="extract_gap_annotation",
-            payload={"paper_id": paper_id, "force": force},
+            payload={
+                "paper_id": paper_id,
+                "force": force,
+                "allow_remote_fallback": allow_remote_fallback,
+            },
         )
     )
     async_result = extract_gap_annotation_task.delay(task.id)

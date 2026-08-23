@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Drawer, Grid, Modal, Result, Spin, message } from "antd";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import chatApi, { type ChatConversation, type ChatMessage } from "../api/chat";
+import chatApi, { type ChatContextArtifactOption, type ChatContextPlanOption, type ChatConversation, type ChatMessage } from "../api/chat";
 import workspaceApi from "../api/workspace";
 import agentApi, { type AgentRunDetail } from "../api/agent";
-import { discoverApi, type ResearchPlan } from "../api/discover";
 import type { Workspace } from "../api/types/workspace";
-import { chatConversationPath, chatErrorMessage, sortChatMessages } from "../state/chatState";
+import { chatConversationPath, chatErrorMessage, retrievalDiagnosticCopy, sortChatMessages, type ChatRetrievalDiagnosticCode } from "../state/chatState";
 import { isIndependentWorkspaceName } from "../state/independentMode";
 import ChatComposer, { type ChatMode } from "../components/chat/ChatComposer";
 import ChatEmptyState from "../components/chat/ChatEmptyState";
@@ -47,8 +46,10 @@ export default function ChatPage() {
     if (!routeWorkspaceId && (requested === "research_plan" || requested === "code_generation")) return "chat";
     return requested as ChatMode;
   });
-  const [researchPlans, setResearchPlans] = useState<ResearchPlan[]>([]);
-  const [researchPlanId, setResearchPlanId] = useState<string>();
+  const [contextPlans, setContextPlans] = useState<ChatContextPlanOption[]>([]);
+  const [contextArtifacts, setContextArtifacts] = useState<ChatContextArtifactOption[]>([]);
+  const [researchPlanId, setResearchPlanId] = useState<string | undefined>(() => searchParams.get("research_plan_id") || undefined);
+  const [sourceArtifactIds, setSourceArtifactIds] = useState<string[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRunDetail[]>([]);
   const [agentActionId, setAgentActionId] = useState<string>();
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -99,9 +100,32 @@ export default function ChatPage() {
   useEffect(() => { if (conversation) setSelectedWorkspaceId(conversation.workspace_id ?? undefined); }, [conversation]);
   useEffect(() => { const node = messagesRef.current; if (node) node.scrollTop = node.scrollHeight; }, [messages, sending]);
   useEffect(() => {
-    if (!workspaceEnabled || !activeWorkspaceId) { setResearchPlans([]); setResearchPlanId(undefined); return; }
-    discoverApi.listPlans(activeWorkspaceId, { limit: 100 }).then((response) => setResearchPlans(response.items)).catch(() => setResearchPlans([]));
+    if (!workspaceEnabled || !activeWorkspaceId) {
+      setContextPlans([]);
+      setContextArtifacts([]);
+      setResearchPlanId(undefined);
+      setSourceArtifactIds([]);
+      return;
+    }
+    chatApi.listContextOptions(activeWorkspaceId).then((response) => {
+      setContextPlans(response.plans);
+      setContextArtifacts(response.artifacts);
+      setResearchPlanId((current) => current && response.plans.some((plan) => plan.id === current) ? current : undefined);
+    }).catch(() => {
+      setContextPlans([]);
+      setContextArtifacts([]);
+      setResearchPlanId(undefined);
+      setSourceArtifactIds([]);
+    });
   }, [activeWorkspaceId, workspaceEnabled]);
+  useEffect(() => {
+    if (!researchPlanId) {
+      setSourceArtifactIds([]);
+      return;
+    }
+    const allowed = new Set(contextArtifacts.filter((item) => item.plan_id === researchPlanId).map((item) => item.id));
+    setSourceArtifactIds((current) => current.filter((id) => allowed.has(id)));
+  }, [contextArtifacts, researchPlanId]);
   useEffect(() => {
     if (independentMode && (mode === "research_plan" || mode === "code_generation")) setMode("chat");
   }, [independentMode, mode]);
@@ -172,8 +196,31 @@ export default function ChatPage() {
     } finally { setSending(false); }
   };
 
+  const requestAgentStart = async (content: string) => {
+    const labels: Record<Exclude<ChatMode, "chat">, string> = {
+      research_plan: "生成研究计划",
+      code_generation: "代码生成",
+      analyze: "结果分析",
+      write: "论文写作",
+      respond: "审稿回复",
+    };
+    await new Promise<void>((resolve) => {
+      Modal.confirm({
+        title: `建议启动“${labels[mode as Exclude<ChatMode, "chat">]}”`,
+        content: "确认后才会创建 AgentRun、Task 或长期产物。取消则继续留在普通提问入口。",
+        okText: "确认启动",
+        cancelText: "继续提问",
+        onOk: async () => {
+          await startAgent(content);
+          resolve();
+        },
+        onCancel: () => resolve(),
+      });
+    });
+  };
+
   const send = async (content: string) => {
-    if (mode !== "chat") { await startAgent(content); return; }
+    if (mode !== "chat") { await requestAgentStart(content); return; }
     let targetId = conversationId;
     setInput("");
     setSending(true);
@@ -238,8 +285,20 @@ export default function ChatPage() {
       void loadHistory();
     } catch (error) {
       setStreaming(false);
-      const displayError = chatErrorMessage(error);
-      setMessages((current) => current.map((m) => m.id === assistantKey ? { ...m, status: "failed" as const, error_message: displayError } : m));
+      const rawDiagnosticCode = error && typeof error === "object" && "diagnostic_code" in error
+        ? String((error as { diagnostic_code?: unknown }).diagnostic_code || "") || null
+        : null;
+      const diagnostic = retrievalDiagnosticCopy(rawDiagnosticCode);
+      const diagnosticCode: ChatRetrievalDiagnosticCode | null = diagnostic && rawDiagnosticCode
+        ? rawDiagnosticCode as ChatRetrievalDiagnosticCode
+        : null;
+      const displayError = diagnostic ? `${diagnostic.title} ${diagnostic.recovery}` : chatErrorMessage(error);
+      setMessages((current) => current.map((m) => m.id === assistantKey ? {
+        ...m,
+        status: "failed" as const,
+        error_message: displayError,
+        retrieval_diagnostic_code: diagnosticCode,
+      } : m));
       message.error(displayError);
       void loadHistory();
     } finally { setSending(false); }
@@ -247,7 +306,10 @@ export default function ChatPage() {
 
   const streamAssistant = async (conversationId: string, content: string, appendDelta: (d: string) => void) => {
     console.debug("[chat-stream] enter", { conversationId, at: new Date().toISOString() });
-    const resp = await chatApi.streamSend(conversationId, content);
+    const resp = await chatApi.streamSend(conversationId, content, {
+      researchPlanId: workspaceEnabled ? researchPlanId : undefined,
+      sourceArtifactIds: workspaceEnabled ? sourceArtifactIds : [],
+    });
     if (!resp.ok || !resp.body) throw new Error("流式响应不可用");
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -265,7 +327,7 @@ export default function ChatPage() {
       for (const part of parts) {
         const line = part.trim();
         if (!line.startsWith("data: ")) continue;
-        let event: { type?: string; content?: string; message?: string } | undefined;
+        let event: { type?: string; content?: string; message?: string; diagnostic_code?: ChatRetrievalDiagnosticCode | null } | undefined;
         try {
           event = JSON.parse(line.slice(6)) as { type?: string; content?: string; message?: string };
         } catch { /* ignore malformed SSE line */ }
@@ -275,7 +337,9 @@ export default function ChatPage() {
           appendDelta(event.content);
         }
         if (event?.type === "error") {
-          throw new Error(event.message || "回答失败，请重试。");
+          const streamError = new Error(event.message || "回答失败，请重试。") as Error & { diagnostic_code?: string | null };
+          streamError.diagnostic_code = event.diagnostic_code;
+          throw streamError;
         }
       }
     }
@@ -295,8 +359,9 @@ export default function ChatPage() {
       await agentApi.confirm(activeWorkspaceId, run.id);
       message.success("研究计划已保存到研究中心");
       await refreshAgent(run);
-      const response = await discoverApi.listPlans(activeWorkspaceId, { limit: 100 });
-      setResearchPlans(response.items);
+      const response = await chatApi.listContextOptions(activeWorkspaceId);
+      setContextPlans(response.plans);
+      setContextArtifacts(response.artifacts);
     } catch (error) { message.error(chatErrorMessage(error)); }
     finally { setAgentActionId(undefined); }
   };
@@ -306,6 +371,39 @@ export default function ChatPage() {
     try { await agentApi.cancel(activeWorkspaceId, run.id); message.success("Agent 已停止"); await refreshAgent(run); }
     catch (error) { message.error(chatErrorMessage(error)); }
     finally { setAgentActionId(undefined); }
+  };
+  const requestCodeRepair = (run: AgentRunDetail) => {
+    if (!activeWorkspaceId || !run.conversation_id || run.parent_run_id) return;
+    const repairConversationId = run.conversation_id;
+    const repairPlanId = String(
+      (run.result ?? {}).research_plan_id
+      ?? run.input_payload.research_plan_id
+      ?? "",
+    );
+    Modal.confirm({
+      title: "建议生成一次候选修复",
+      content: "确认后只会创建一次代码修复 AgentRun 和候选产物。系统不会覆盖原代码、不会运行代码或测试；请在生成后人工审查变更。",
+      okText: "确认生成候选",
+      cancelText: "暂不生成",
+      onOk: async () => {
+        setAgentActionId(run.id);
+        try {
+          const child = await agentApi.start(activeWorkspaceId, {
+            agent_type: "code_generation",
+            prompt: "针对上一轮交付完整性检查缺口生成一次最小候选修复。",
+            conversation_id: repairConversationId,
+            input: { research_plan_id: repairPlanId, framework: "PyTorch", repair_parent_run_id: run.id },
+          });
+          message.success("候选修复已启动；原代码不会被覆盖");
+          await Promise.all([loadConversation(repairConversationId), loadAgentRuns(activeWorkspaceId, repairConversationId)]);
+          setAgentActionId(child.id);
+          window.setTimeout(() => setAgentActionId(undefined), 500);
+        } catch (error) {
+          setAgentActionId(undefined);
+          message.error(chatErrorMessage(error));
+        }
+      },
+    });
   };
   const downloadArtifact = async (run: AgentRunDetail, artifactId: string) => {
     if (!activeWorkspaceId) return;
@@ -329,5 +427,9 @@ export default function ChatPage() {
   };
 
   const historyPanel = <ChatHistory items={history} selectedId={conversationId} loading={historyLoading} query={historyQuery} workspaceNames={workspaceNames} onQueryChange={setHistoryQuery} onNew={newConversation} onSelect={selectConversation} onRename={rename} onDelete={remove} />;
-  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} independent={independentMode} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={workspaceEnabled ? activeWorkspaceName : undefined} independent={independentMode} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{independentMode ? <Alert className="gm-chat-scope-note" type="info" showIcon message="当前为独立模式：仅使用本次提供的材料，不会检索课题空间论文或知识库。" /> : activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；引用可定位到解析原文。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在创建 Agent 任务，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={workspaceEnabled} mode={mode} onModeChange={setMode} planOptions={researchPlans.map((plan) => ({ value: plan.id, label: plan.research_question }))} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
+  const planOptions = contextPlans.map((plan) => ({ value: plan.id, label: plan.title, title: plan.research_question }));
+  const sourceOptions = contextArtifacts
+    .filter((artifact) => artifact.plan_id === researchPlanId)
+    .map((artifact) => ({ value: artifact.id, label: `${artifact.label}：${artifact.title}`, title: artifact.status }));
+  return <div className="gm-chat-page"><div className="gm-chat-layout">{!isMobile && <aside className="gm-chat-sidebar">{historyPanel}</aside>}<main className="gm-chat-main"><ChatHeader title={conversation?.title ?? "新对话"} workspaces={workspaces} workspaceId={activeWorkspaceId} independent={independentMode} scopeLocked={Boolean(conversation)} onWorkspaceChange={changeWorkspace} onOpenHistory={() => setHistoryOpen(true)} /><div className="gm-chat-scroll" ref={messagesRef}>{conversationError ? <Result status="404" title="找不到这段对话" subTitle={conversationError} extra={<Button type="primary" onClick={newConversation}>开始新对话</Button>} /> : loadingConversation ? <div className="gm-chat-loading"><Spin /></div> : messages.length === 0 ? <ChatEmptyState onExample={setInput} workspaceName={workspaceEnabled ? activeWorkspaceName : undefined} independent={independentMode} /> : <ChatMessages conversationId={conversationId} messages={messages} agentRuns={agentRuns} onRetry={retry} retryingId={retryingId} agentActionId={agentActionId} onRefreshAgent={(run) => void refreshAgent(run)} onConfirmAgent={(run) => void confirmAgent(run)} onCancelAgent={(run) => void cancelAgent(run)} onRepairCode={(run) => requestCodeRepair(run)} onDownloadAgent={(run) => activeWorkspaceId ? void agentApi.downloadBundle(activeWorkspaceId, run.id) : undefined} onDownloadArtifact={(run, artifactId) => void downloadArtifact(run, artifactId)} />}</div>{independentMode ? <Alert className="gm-chat-scope-note" type="info" showIcon message="当前为独立模式：仅使用本次提供的材料，不会检索课题空间论文或知识库。" /> : activeWorkspaceId ? <Alert className="gm-chat-scope-note" type="success" showIcon message={`正在使用“${activeWorkspaceName ?? "课题空间"}”中已索引的论文回答；计划、报告与代码草案会单独标注来源。`} /> : conversation && <Alert className="gm-chat-scope-note" type="info" showIcon message="当前是普通 AI 对话，不会自动检索论文或知识库。" />}{sending && <div className="gm-chat-sending-note">{mode === "chat" ? "正在检索并组织回答，请稍候…" : "正在执行已确认的 Agent 操作，请稍候…"}</div>}<ChatComposer value={input} onChange={setInput} onSend={(value) => void send(value)} loading={sending || Boolean(retryingId)} workspaceEnabled={workspaceEnabled} mode={mode} onModeChange={setMode} planOptions={planOptions} researchPlanId={researchPlanId} onResearchPlanChange={setResearchPlanId} sourceOptions={sourceOptions} sourceArtifactIds={sourceArtifactIds} onSourceArtifactChange={setSourceArtifactIds} /></main></div><Drawer title="历史对话" placement="left" open={isMobile && historyOpen} onClose={() => setHistoryOpen(false)} width={300}>{historyPanel}</Drawer></div>;
 }

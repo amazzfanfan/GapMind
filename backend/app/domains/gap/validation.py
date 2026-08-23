@@ -13,6 +13,26 @@ from app.domains.gap.schemas import GapAnnotationOutput
 THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 CODE_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
+VALIDATION_ERROR_CATEGORIES = (
+    "json",
+    "schema",
+    "relation_direction",
+    "label_consistency",
+    "other",
+)
+
+NOT_APPLICABLE_MARKERS = (
+    "survey article",
+    "systematic review",
+    "review article",
+    "tutorial paper",
+    "综述",
+    "系统综述",
+    "教程",
+    "社论",
+    "editorial",
+)
+
 
 def parse_model_json(content: str) -> dict[str, Any]:
     cleaned = THINK_BLOCK.sub("", content).strip()
@@ -35,6 +55,48 @@ def parse_model_json(content: str) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
     raise ValueError("model response does not contain a JSON object")
+
+
+def categorize_validation_errors(errors: list[str]) -> list[str]:
+    """Map free-form validator messages to a small auditable taxonomy."""
+
+    categories: set[str] = set()
+    for error in errors:
+        if "does not contain a JSON object" in error or "JSONDecode" in error:
+            categories.add("json")
+        elif error.startswith("JSON Schema"):
+            categories.add("schema")
+        elif any(
+            marker in error
+            for marker in (
+                "必须是 METHOD",
+                "引用了不存在的实体",
+                "缺少入选方法指向它的",
+                "同一方法—问题对",
+            )
+        ):
+            categories.add("relation_direction")
+        elif "problem_label_zh" in error or "名称不一致" in error:
+            categories.add("label_consistency")
+        else:
+            categories.add("other")
+    return [category for category in VALIDATION_ERROR_CATEGORIES if category in categories]
+
+
+def classify_failure_kind(markdown: str, errors: list[str]) -> str:
+    """Classify a failed extraction without turning it into a fabricated result.
+
+    This is intentionally conservative: only obvious short/unsuitable inputs get
+    a content label. Everything else stays ``invalid_output`` so a model failure
+    can be retried or sent to the explicitly authorized backup.
+    """
+
+    normalized = " ".join(markdown.lower().split())
+    if len(normalized) < 400:
+        return "content_insufficient"
+    if any(marker in normalized[:1200] for marker in NOT_APPLICABLE_MARKERS):
+        return "not_applicable"
+    return "invalid_output"
 
 
 def _schema_errors(error: ValidationError) -> list[str]:

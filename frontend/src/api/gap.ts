@@ -12,8 +12,11 @@ export interface GapAnnotation {
   paper_id: string;
   status: string;
   attempts: number;
+  model_provider: string;
   model_name: string;
+  model_parameters?: Record<string, unknown>;
   validation_errors: string[];
+  fallback_reason?: string | null;
   updated_at: string;
 }
 
@@ -58,11 +61,13 @@ export const gapApi = {
     workspaceId: string,
     paperIds: string[],
     force = false,
+    allowRemoteFallback = false,
   ): Promise<{ tasks: GapExtractionTask[] }> {
     return (
       await apiClient.post(`/workspaces/${workspaceId}/gap/extractions`, {
         paper_ids: paperIds,
         force,
+        allow_remote_fallback: allowRemoteFallback,
       })
     ).data;
   },

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
 from app.core.config import settings
 from app.domains.gap.prompt import TRAINING_INSTRUCTION, repair_prompt
 from app.domains.gap.schemas import GapAnnotationOutput
-from app.domains.gap.validation import parse_model_json, validate_annotation
+from app.domains.gap.validation import (
+    categorize_validation_errors,
+    parse_model_json,
+    validate_annotation,
+)
 
 
 @dataclass
@@ -20,6 +24,30 @@ class GapExtractionResult:
     raw_responses: list[str] = field(default_factory=list)
     api_responses: list[dict[str, Any]] = field(default_factory=list)
     validation_errors: list[str] = field(default_factory=list)
+    provider: str = "ollama"
+    model: str = ""
+    validation_error_categories: list[str] = field(default_factory=list)
+
+
+class GapExtractor(Protocol):
+    """Provider-neutral contract for the local extractor and its backup."""
+
+    @property
+    def provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def model_parameters(self) -> dict[str, Any]: ...
+
+    def extract(
+        self,
+        markdown: str,
+        *,
+        instruction: str = TRAINING_INSTRUCTION,
+        repair_attempts: int | None = None,
+    ) -> GapExtractionResult: ...
 
 
 class GapExtractorUnavailableError(RuntimeError):
@@ -39,6 +67,10 @@ class OllamaGapExtractor:
         self.client = client or httpx.Client(timeout=settings.gap_extractor_timeout_seconds)
 
     @property
+    def provider(self) -> str:
+        return "ollama"
+
+    @property
     def model_parameters(self) -> dict[str, Any]:
         return {
             "num_ctx": settings.gap_extractor_num_ctx,
@@ -56,6 +88,7 @@ class OllamaGapExtractor:
                 json={
                     "model": self.model,
                     "stream": False,
+                    "think": False,
                     "messages": messages,
                     "options": self.model_parameters,
                 },
@@ -109,7 +142,16 @@ class OllamaGapExtractor:
                 output = None
                 errors = [str(exc)]
             if output is not None:
-                return GapExtractionResult(output, attempt, raw_responses, api_responses, [])
+                return GapExtractionResult(
+                    output,
+                    attempt,
+                    raw_responses,
+                    api_responses,
+                    [],
+                    self.provider,
+                    self.model,
+                    [],
+                )
             if attempt <= maximum_repairs:
                 messages.extend(
                     [
@@ -117,5 +159,109 @@ class OllamaGapExtractor:
                         {"role": "user", "content": repair_prompt(errors)},
                     ]
                 )
-        return GapExtractionResult(None, len(raw_responses), raw_responses, api_responses, errors)
+        return GapExtractionResult(
+            None,
+            len(raw_responses),
+            raw_responses,
+            api_responses,
+            errors,
+            self.provider,
+            self.model,
+            categorize_validation_errors(errors),
+        )
+
+
+class RemoteGapExtractor:
+    """Explicitly enabled OpenAI-compatible structured-output backup.
+
+    The worker is responsible for checking feature flag and user consent before
+    constructing this adapter. The adapter itself uses the shared LLM gateway so
+    structured calls always pass ``disable_thinking=True`` and never use
+    ``reasoning_effort``.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        gateway: Any | None = None,
+    ) -> None:
+        from app.gateway.llm import LLMGateway
+
+        self.api_key = api_key if api_key is not None else settings.gap_extractor_remote_api_key
+        self.base_url = base_url if base_url is not None else settings.gap_extractor_remote_base_url
+        self.model = model if model is not None else settings.gap_extractor_remote_model
+        self._gateway = gateway or LLMGateway(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            backup_api_key="",
+            backup_base_url="",
+            backup_model="",
+        )
+
+    @property
+    def provider(self) -> str:
+        return "remote"
+
+    @property
+    def model_parameters(self) -> dict[str, Any]:
+        return {
+            "response_format": "json_schema",
+            "temperature": 0.0,
+            "max_tokens": settings.gap_extractor_remote_max_tokens,
+            "disable_thinking": True,
+        }
+
+    def extract(
+        self,
+        markdown: str,
+        *,
+        instruction: str = TRAINING_INSTRUCTION,
+        repair_attempts: int | None = None,
+    ) -> GapExtractionResult:
+        del repair_attempts
+        messages = [{"role": "user", "content": f"{instruction.strip()}\n\n{markdown.strip()}"}]
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "gap_annotation",
+                "strict": True,
+                "schema": GapAnnotationOutput.model_json_schema(),
+            },
+        }
+        try:
+            response = self._gateway.chat_completion(
+                messages,
+                temperature=0.0,
+                max_tokens=settings.gap_extractor_remote_max_tokens,
+                response_format=response_format,
+                disable_thinking=True,
+            )
+        except Exception as exc:
+            raise GapExtractorUnavailableError(
+                "远程研究空白备份模型不可用，请检查远程 API 配置和服务状态后重试。"
+            ) from exc
+
+        raw = response.content
+        errors: list[str] = []
+        try:
+            parsed = parse_model_json(raw)
+            output, errors = validate_annotation(parsed)
+        except ValueError as exc:
+            output = None
+            errors = [str(exc)]
+        categories = categorize_validation_errors(errors)
+        return GapExtractionResult(
+            output,
+            1,
+            [raw],
+            [],
+            errors,
+            self.provider,
+            self.model,
+            categories,
+        )
 

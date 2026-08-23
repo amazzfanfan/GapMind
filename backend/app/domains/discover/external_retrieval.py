@@ -108,6 +108,16 @@ EXTERNAL_QUERY_MAX_EXACT_LOOKUPS = 4  # LLM-selected method names to look up by 
 EXTERNAL_QUERY_SIGNAL_TYPES = ("method", "claim", "task", "limitation")
 EXTERNAL_QUERY_MIN_CONFIDENCE = 0.3  # skip low-confidence extracted signals
 EXTERNAL_QUERY_MAX_KEYWORDS = 2  # generic user keywords are lowest priority
+EXTERNAL_QUERY_MIN_SUCCESS_RATE = 0.8
+EXTERNAL_MIN_CANDIDATES_FOR_CLEAN_STATUS = 2
+EXTERNAL_COUNTER_TOKENS = {
+    "counter", "critique", "failure", "limitation", "robustness", "stability",
+    "sanity", "challenge", "adversarial", "caveat", "反证", "限制", "稳定性",
+}
+EXTERNAL_EVALUATION_TOKENS = {
+    "evaluation", "benchmark", "metric", "metrics", "test", "testing",
+    "assess", "assessment", "实验", "评估", "指标",
+}
 # Reciprocal-rank-fusion constant for merging per-query result lists (P2-4).
 RRF_K = 60  # standard RRF smoothing: dampens per-query position differences
 # Architectural components are not named research contributions, so they are
@@ -529,6 +539,25 @@ class ExternalRetrievalService:
         """Backward-compatible list wrapper around ``_external_query_plan``."""
         return self._external_query_plan(run, primary)[0]
 
+    @staticmethod
+    def _query_purpose(query: str, index: int) -> str:
+        """Assign a stable audit purpose without another LLM call.
+
+        The axis-query prompt intentionally returns concise strings rather than
+        a second schema.  Position identifies the primary question; distinctive
+        counter-evidence/evaluation terms identify the high-value axes, and the
+        remaining queries are method/overlap exploration.
+        """
+
+        if index == 0:
+            return "primary_question"
+        tokens = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", query.lower()))
+        if tokens & EXTERNAL_COUNTER_TOKENS:
+            return "counter_evidence"
+        if tokens & EXTERNAL_EVALUATION_TOKENS:
+            return "evaluation"
+        return "method_overlap"
+
     # ---------------------------------------------------------------- verify
     def _external_verify(self, run: DiscoverRun, queries: list[str], exact_lookups: list[str] | None = None) -> int:
         """Search Semantic Scholar across several queries and merge candidates.
@@ -579,7 +608,9 @@ class ExternalRetrievalService:
             year = f"{scope.year_from or ''}-{scope.year_to or ''}"
         per_query: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = []
         query_failures: list[dict[str, Any]] = []
-        for query in queries:
+        query_records: list[dict[str, Any]] = []
+        for index, query in enumerate(queries):
+            purpose = self._query_purpose(query, index)
             try:
                 # Every query fetches the full top_k: recall of the gate is
                 # capped by per-query truncation, and merging dedupes anyway.
@@ -602,15 +633,25 @@ class ExternalRetrievalService:
                         seen_in_query.add(pid)
                         q_results.append((pid, item))
                 per_query.append((query, q_results))
-            except SemanticScholarError as exc:
-                query_failures.append(
+                query_records.append(
                     {
                         "query": query[:120],
-                        "error": str(exc),
-                        "status_code": exc.status_code,
-                        "retryable": exc.status_code in {429, 502, 504},
+                        "purpose": purpose,
+                        "status": "succeeded",
+                        "result_count": len(q_results),
                     }
                 )
+            except SemanticScholarError as exc:
+                failure = {
+                    "query": query[:120],
+                    "purpose": purpose,
+                    "status": "failed",
+                    "error": str(exc),
+                    "status_code": exc.status_code,
+                    "retryable": exc.status_code in {429, 502, 504},
+                }
+                query_failures.append(failure)
+                query_records.append(failure)
                 logger.warning(
                     "discover.external_query_failed",
                     run_id=run.id,
@@ -631,7 +672,12 @@ class ExternalRetrievalService:
                     "queries": [q[:120] for q in queries],
                     "successful_query_count": 0,
                     "failed_query_count": len(query_failures),
+                    "query_success_rate": 0.0,
+                    "query_records": query_records,
                     "query_failures": query_failures,
+                    "notice_level": "critical",
+                    "impact": "all_queries_failed",
+                    "message": "外部检索全部失败，未获得可用候选论文。",
                 },
             }
             self.db.commit()
@@ -645,10 +691,18 @@ class ExternalRetrievalService:
         # Exact-title lookups for LLM-selected method names (title-verified).
         # Best-effort: a failed lookup only skips that name, never fails the run.
         lookup_hits: list[tuple[str, dict[str, Any], str]] = []
+        exact_lookup_records: list[dict[str, Any]] = []
+        exact_lookup_failures: list[dict[str, Any]] = []
         for name in exact_lookups or []:
             name = (name or "").strip()
             if not name:
                 continue
+            lookup_record: dict[str, Any] = {
+                "query": name[:120],
+                "purpose": "exact_lookup",
+                "status": "no_verified_match",
+                "result_count": 0,
+            }
             try:
                 raw = self.external_search.search(
                     query=name[:200],
@@ -657,7 +711,17 @@ class ExternalRetrievalService:
                     limit=2,
                     year=year,
                 )
-            except SemanticScholarError:
+            except SemanticScholarError as exc:
+                lookup_record.update(
+                    {
+                        "status": "failed",
+                        "error": str(exc),
+                        "status_code": exc.status_code,
+                        "retryable": exc.status_code in {429, 502, 504},
+                    }
+                )
+                exact_lookup_failures.append(lookup_record)
+                exact_lookup_records.append(lookup_record)
                 continue
             for item in raw.get("data") or []:
                 if not isinstance(item, dict) or not item.get("paperId") or not item.get("title"):
@@ -665,7 +729,9 @@ class ExternalRetrievalService:
                 if not title_verified(name, str(item["title"])):
                     continue
                 lookup_hits.append((str(item["paperId"]), item, f"exact: {name[:120]}"))
+                lookup_record.update({"status": "succeeded", "result_count": 1})
                 break  # one verified paper per lookup name
+            exact_lookup_records.append(lookup_record)
 
         # Reciprocal-rank fusion across queries, so the merged top-K reflects
         # cross-query agreement instead of query order (P2-4: a critique-axis
@@ -721,11 +787,42 @@ class ExternalRetrievalService:
             rows.append(row)
         self.db.add_all(rows)
         run.verification_status = "in_progress" if rows else "incomplete"
-        search_status = (
-            "succeeded_partial"
-            if query_failures
-            else ("succeeded" if rows else "succeeded_empty")
+        query_total = len(queries)
+        successful_query_count = len(per_query)
+        query_success_rate = successful_query_count / query_total if query_total else 0.0
+        failed_purposes = {item["purpose"] for item in query_failures}
+        critical_failure = bool(failed_purposes & {"primary_question", "counter_evidence"})
+        low_query_success = query_success_rate < EXTERNAL_QUERY_MIN_SUCCESS_RATE
+        insufficient_candidates = len(rows) < EXTERNAL_MIN_CANDIDATES_FOR_CLEAN_STATUS
+        warning = critical_failure or low_query_success or insufficient_candidates
+        if not rows:
+            search_status = "succeeded_empty"
+        elif warning:
+            search_status = "succeeded_partial"
+        else:
+            search_status = "succeeded"
+        notice_level = "warning" if warning else ("informational" if query_failures or exact_lookup_failures else "none")
+        impact = (
+            "critical_query_failed"
+            if critical_failure
+            else "low_query_success_rate"
+            if low_query_success
+            else "candidate_shortage"
+            if insufficient_candidates
+            else "non_critical_query_limited"
+            if query_failures or exact_lookup_failures
+            else "none"
         )
+        message = (
+            f"外部检索成功 {successful_query_count}/{query_total} 条查询，"
+            f"{len(query_failures)} 条受限；已保留成功结果。"
+            if query_failures
+            else "外部检索完成，已获得候选论文。"
+        )
+        if exact_lookup_failures:
+            message += f"另有 {len(exact_lookup_failures)} 条精确查找受限。"
+        if insufficient_candidates and rows:
+            message += "候选数量偏少，仍需谨慎核验。"
         run.stage_summaries = {
             **(run.stage_summaries or {}),
             "external_search": {
@@ -733,9 +830,17 @@ class ExternalRetrievalService:
                 "executed": True,
                 "candidate_count": len(rows),
                 "queries": [q[:120] for q in queries],
-                "successful_query_count": len(per_query),
+                "successful_query_count": successful_query_count,
                 "failed_query_count": len(query_failures),
+                "query_success_rate": round(query_success_rate, 4),
+                "query_records": [*query_records, *exact_lookup_records],
                 "query_failures": query_failures,
+                "exact_lookup_count": len(exact_lookup_records),
+                "exact_lookup_failure_count": len(exact_lookup_failures),
+                "exact_lookup_failures": exact_lookup_failures,
+                "notice_level": notice_level,
+                "impact": impact,
+                "message": message,
             },
         }
         self.db.commit()

@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Collapse,
   Descriptions,
   Divider,
   Drawer,
@@ -83,6 +84,24 @@ function externalRoleLabel(role: string): string {
     case "supporting": return "可能支持";
     default: return "关系未确定";
   }
+}
+
+function externalQueryPurposeLabel(purpose: string): string {
+  switch (purpose) {
+    case "primary_question": return "主问题";
+    case "method_overlap": return "方法／重合";
+    case "counter_evidence": return "反证";
+    case "evaluation": return "评估";
+    case "exact_lookup": return "精确查找";
+    default: return "其他查询";
+  }
+}
+
+function externalQueryStatusLabel(status: string): string {
+  if (status === "succeeded") return "成功";
+  if (status === "failed") return "受限";
+  if (status === "no_verified_match") return "无精确匹配";
+  return status || "未记录";
 }
 
 function gateDetails(sourcePayload: Record<string, unknown>): { verified: boolean; confirmable: boolean; blockingMissing: string[]; warnings: string[]; missing: string[]; reason?: string } | null {
@@ -378,6 +397,15 @@ export default function DiscoverPage() {
       ? [{ stage: item, status, detail }]
       : [];
   });
+  const externalSummary = (activeRun?.stage_summaries?.external_search ?? {}) as Record<string, unknown>;
+  const externalQueryRecords = Array.isArray(externalSummary.query_records)
+    ? externalSummary.query_records.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    : [];
+  const externalQueryFailureCount = typeof externalSummary.failed_query_count === "number" ? externalSummary.failed_query_count : 0;
+  const externalExactLookupFailureCount = typeof externalSummary.exact_lookup_failure_count === "number" ? externalSummary.exact_lookup_failure_count : 0;
+  const externalFailureTotal = externalQueryFailureCount + externalExactLookupFailureCount;
+  const externalQuerySuccessCount = typeof externalSummary.successful_query_count === "number" ? externalSummary.successful_query_count : 0;
+  const externalQueryTotal = externalQuerySuccessCount + externalQueryFailureCount;
   const selectedOpportunities = opportunities.filter((item) => !selectedRun || item.discover_run_id === selectedRun.id);
 
   return (
@@ -396,6 +424,8 @@ export default function DiscoverPage() {
               {!selectedRun ? <Empty description="新建任务后可在这里查看进度和候选结果" /> : <>
                 <Descriptions size="small" column={{ xs: 1, sm: 2 }}><Descriptions.Item label="研究主题">{selectedRun.input_topic || "基于论断的发现任务"}</Descriptions.Item><Descriptions.Item label="核验状态">{verificationDisplayLabel(selectedRun.verification_status)}</Descriptions.Item><Descriptions.Item label="当前阶段">{discoverStageLabel(stage)}</Descriptions.Item><Descriptions.Item label="研究机会候选数">{selectedOpportunityCount(opportunities, selectedRun.id)}</Descriptions.Item></Descriptions>
                 <Progress percent={Math.round((runDetail?.id === selectedRun.id ? runDetail.progress : selectedRun.progress) * 100)} status={selectedRun.status === "failed" ? "exception" : undefined} />
+                {externalSummary.notice_level === "informational" && externalFailureTotal > 0 && <Tag color="default">外部检索 {externalQuerySuccessCount}/{externalQueryTotal}，{externalQueryFailureCount} 条受限{externalExactLookupFailureCount > 0 ? `，精确查找 ${externalExactLookupFailureCount} 条受限` : ""}，已保留成功结果</Tag>}
+                {externalQueryRecords.length > 0 && externalFailureTotal > 0 && <Collapse size="small" style={{ marginTop: 12 }} items={[{ key: "external-query-log", label: "外部检索查询日志", children: <List size="small" dataSource={externalQueryRecords} renderItem={(record) => { const status = String(record.status ?? ""); const purpose = String(record.purpose ?? ""); return <List.Item><Space wrap><Tag color={status === "failed" ? "orange" : "default"}>{externalQueryPurposeLabel(purpose)}</Tag><Tag color={status === "failed" ? "orange" : "green"}>{externalQueryStatusLabel(status)}</Tag><Text>{String(record.query ?? "")}</Text>{typeof record.result_count === "number" && <Text type="secondary">结果 {record.result_count}</Text>}{typeof record.error === "string" && <Text type="secondary">{record.error}</Text>}</Space></List.Item>; }} /> }]} />}
                 {stagePosition < 0 ? <Tag color="red">未知阶段：{stage || "未提供"}</Tag> : <Steps size="small" current={stagePosition} responsive items={DISCOVER_STAGES.map((item, index) => { const summaryStatus = stageSummaryStatus(activeRun?.stage_summaries, item); const detail = stageSummaryMessage(activeRun?.stage_summaries, item); const failed = summaryStatus === "failed"; const partial = summaryStatus === "succeeded_partial" || summaryStatus === "succeeded_empty"; const visualStatus = failed ? "error" : index < stagePosition || (index === stagePosition && TERMINAL_RUN_STATUSES.has(activeRun?.status || "")) ? "finish" : index === stagePosition ? "process" : "wait"; return { status: visualStatus as "error" | "finish" | "process" | "wait", title: <Tooltip title={detail || DISCOVER_STAGE_LABELS[item]}><span style={partial ? { color: "#d48806" } : undefined}>{DISCOVER_STAGE_LABELS[item]}{partial ? " ⚠" : ""}</span></Tooltip> }; })} />}
                 {stageIssues.length > 0 && <Alert style={{ marginTop: 16 }} type={stageIssues.some((item) => item.status === "failed") ? "error" : "warning"} showIcon message="部分核验阶段未完整完成" description={<Space direction="vertical" size={2}>{stageIssues.map((item) => <Text key={item.stage}><Text strong>{DISCOVER_STAGE_LABELS[item.stage]}：</Text>{item.detail}</Text>)}</Space>} />}
                 {selectedRun.status === "waiting_for_fulltext" && <Paragraph type="warning" style={{ marginTop: 16 }}>已选论文正在进行 PDF 解析、知识抽取和向量索引。流水线完成前，候选综合将暂停。</Paragraph>}

@@ -1253,6 +1253,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/context-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Context Options */
+        get: operations["list_context_options_api_v1_chat_context_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chat/conversations/{conversation_id}": {
         parameters: {
             query?: never;
@@ -1803,6 +1820,42 @@ export interface components {
             /** Arxiv Id */
             arxiv_id?: string | null;
         };
+        /** ChatContextArtifactOption */
+        ChatContextArtifactOption: {
+            /** Id */
+            id: string;
+            /** Plan Id */
+            plan_id: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "report" | "code_draft";
+            /** Label */
+            label: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+        };
+        /** ChatContextOptionsResponse */
+        ChatContextOptionsResponse: {
+            /** Plans */
+            plans?: components["schemas"]["ChatContextPlanOption"][];
+            /** Artifacts */
+            artifacts?: components["schemas"]["ChatContextArtifactOption"][];
+        };
+        /** ChatContextPlanOption */
+        ChatContextPlanOption: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Research Question */
+            research_question: string;
+            /** Status */
+            status: string;
+        };
         /** ChatConversationCreate */
         ChatConversationCreate: {
             /** Title */
@@ -1882,6 +1935,10 @@ export interface components {
             content: string;
             /** Workspace Id */
             workspace_id?: string | null;
+            /** Research Plan Id */
+            research_plan_id?: string | null;
+            /** Source Artifact Ids */
+            source_artifact_ids?: string[];
         };
         /** ChatMessageEvidenceRead */
         ChatMessageEvidenceRead: {
@@ -1951,9 +2008,14 @@ export interface components {
              * @default not_requested
              */
             grounding_status: string;
+            /** Retrieval Diagnostic Code */
+            retrieval_diagnostic_code?: string | null;
             /** Citations */
             citations?: components["schemas"]["ChatMessageEvidenceRead"][];
             citation_check?: components["schemas"]["CitationCheckRead"] | null;
+            /** Sources */
+            sources?: components["schemas"]["ChatMessageSourceRead"][];
+            source_check?: components["schemas"]["SourceCheckRead"] | null;
             /**
              * Created At
              * Format: date-time
@@ -1964,6 +2026,29 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * ChatMessageSourceRead
+         * @description One explicitly labelled context source used for an answer.
+         */
+        ChatMessageSourceRead: {
+            /** Marker */
+            marker: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "plan" | "paper" | "report" | "code_draft";
+            /** Source Id */
+            source_id: string;
+            /** Label */
+            label: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
         };
         /** ChatSendResponse */
         ChatSendResponse: {
@@ -2578,6 +2663,8 @@ export interface components {
             output?: Record<string, never> | null;
             /** Validation Errors */
             validation_errors?: string[];
+            /** Fallback Reason */
+            fallback_reason?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2718,6 +2805,11 @@ export interface components {
              * @default false
              */
             force: boolean;
+            /**
+             * Allow Remote Fallback
+             * @default false
+             */
+            allow_remote_fallback: boolean;
         };
         /** GapExtractionResponse */
         GapExtractionResponse: {
@@ -3798,6 +3890,8 @@ export interface components {
             filters_applied?: Record<string, never>;
             /** Error */
             error?: string | null;
+            /** Diagnostic Code */
+            diagnostic_code?: ("embedding_unavailable" | "milvus_unavailable" | "collection_unloaded" | "reranker_degraded" | "unknown") | null;
             /** Empty Reason */
             empty_reason?: ("retrieval_empty" | "judge_failed" | "genuinely_no_counter_evidence") | null;
         };
@@ -4043,6 +4137,21 @@ export interface components {
              * @default true
              */
             use_reranker: boolean;
+        };
+        /**
+         * SourceCheckRead
+         * @description Validation of [P1]/[D1]/[C1] markers against the source passport.
+         */
+        SourceCheckRead: {
+            /** Referenced */
+            referenced?: string[];
+            /** Broken */
+            broken?: string[];
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
         };
         /** TaskListResponse */
         TaskListResponse: {
@@ -7134,6 +7243,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatSendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_context_options_api_v1_chat_context_options_get: {
+        parameters: {
+            query: {
+                workspace_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatContextOptionsResponse"];
                 };
             };
             /** @description Validation Error */

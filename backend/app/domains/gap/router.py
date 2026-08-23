@@ -67,7 +67,13 @@ def extract_papers(
     tasks: list[GapExtractionTask] = []
     for paper_id in dict.fromkeys(payload.paper_ids):
         try:
-            task_id, skipped = spawn_gap_extraction(db, paper_id, workspace_id, force=payload.force)
+            task_id, skipped = spawn_gap_extraction(
+                db,
+                paper_id,
+                workspace_id,
+                force=payload.force,
+                allow_remote_fallback=payload.allow_remote_fallback,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if skipped:

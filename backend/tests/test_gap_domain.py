@@ -20,7 +20,13 @@ from app.domains.paper.models import Paper
 from app.domains.task.schemas import TaskCreate
 from app.domains.task.service import TaskService
 from app.domains.workspace.models import Workspace
-from app.gateway.gap_extractor import GapExtractorUnavailableError, OllamaGapExtractor
+from app.gateway.gap_extractor import (
+    GapExtractionResult,
+    GapExtractorUnavailableError,
+    OllamaGapExtractor,
+    RemoteGapExtractor,
+)
+from app.domains.gap.validation import categorize_validation_errors, classify_failure_kind
 
 
 def _output(
@@ -171,6 +177,44 @@ class _UnavailableExtractor:
         raise GapExtractorUnavailableError("研究空白模型响应超时，请检查 SSH 隧道和服务器模型负载后重试。")
 
 
+class _SuccessfulExtractor:
+    model_parameters = {"provider": "local-test"}
+
+    def extract(self, markdown: str):
+        return GapExtractionResult(
+            output=type("Output", (), {"model_dump": lambda self, mode: _output()})(),
+            attempts=1,
+            provider="ollama",
+            model="local-test",
+        )
+
+
+class _FakeRemoteExtractor:
+    provider = "remote"
+    model = "remote-test"
+    model_parameters = {"response_format": "json_schema"}
+    calls = 0
+
+    def extract(self, markdown: str, *, repair_attempts: int | None = None):
+        self.calls += 1
+        return GapExtractionResult(
+            output=type("Output", (), {"model_dump": lambda self, mode: _output()})(),
+            attempts=1,
+            provider=self.provider,
+            model=self.model,
+        )
+
+
+class _FakeGateway:
+    def __init__(self, content: str):
+        self.content = content
+        self.calls: list[dict] = []
+
+    def chat_completion(self, messages, **kwargs):
+        self.calls.append({"messages": messages, **kwargs})
+        return type("Response", (), {"content": self.content})()
+
+
 def test_ollama_extractor_repairs_invalid_enum() -> None:
     invalid = _output()
     invalid["entities"][1]["type"] = "DATASET"
@@ -200,6 +244,43 @@ def test_ollama_extractor_reports_tunnel_failure_without_raw_transport_error() -
     message = str(exc_info.value)
     assert "SSH 隧道" in message
     assert "connection refused" not in message
+
+
+def test_gap_validation_failure_categories_and_content_boundaries() -> None:
+    errors = [
+        "model response does not contain a JSON object",
+        "JSON Schema entities: Field required",
+        "R1 的 ADDRESSES 必须是 METHOD → RESEARCH_PROBLEM。",
+        "P1.problem_label_zh 与对应实体名称不一致。",
+    ]
+    assert categorize_validation_errors(errors) == [
+        "json",
+        "schema",
+        "relation_direction",
+        "label_consistency",
+    ]
+    assert classify_failure_kind("short markdown", errors) == "content_insufficient"
+    assert classify_failure_kind(" ".join(["A research paper"] * 150), errors) == "invalid_output"
+    assert classify_failure_kind(" ".join(["A survey article"] * 150), errors) == "not_applicable"
+
+
+def test_remote_extractor_uses_structured_schema_and_disables_thinking() -> None:
+    gateway = _FakeGateway(json.dumps(_output()))
+    extractor = RemoteGapExtractor(
+        api_key="test-key",
+        base_url="https://remote.test/v1",
+        model="remote-model",
+        gateway=gateway,
+    )
+
+    result = extractor.extract("# Introduction\n" + "Paper body " * 100)
+
+    assert result.output is not None
+    assert result.provider == "remote"
+    assert result.model == "remote-model"
+    assert gateway.calls[0]["disable_thinking"] is True
+    assert gateway.calls[0]["response_format"]["type"] == "json_schema"
+    assert "reasoning_effort" not in gateway.calls[0]
 
 
 def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
@@ -269,6 +350,171 @@ def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
         "研究空白模型响应超时，请检查 SSH 隧道和服务器模型负载后重试。"
     ]
     assert task_after.status == "failed"
+
+
+def _prepare_gap_task(db_session: Session, monkeypatch, tmp_path, *, allow_remote: bool) -> tuple[str, Paper]:
+    from app.workers.tasks.extract_gap_annotation import _run_gap_extraction
+
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Gap fallback",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    artifact = Artifact(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        kind="parsed_markdown",
+        file_path="fallback.md",
+        size_bytes=10,
+        is_deleted=False,
+    )
+    paper = Paper(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        title="Fallback paper",
+        authors=[],
+        source="manual",
+        parse_status="parsed",
+        parsed_markdown_artifact_id=artifact.id,
+        chunk_count=0,
+        extract_status="not_applicable",
+        is_deleted=False,
+    )
+    db_session.add_all([workspace, artifact, paper])
+    db_session.commit()
+    markdown_path = tmp_path / "fallback.md"
+    markdown_path.write_text("# Introduction\n" + "Research method and limitation. " * 100, encoding="utf-8")
+    monkeypatch.setattr(ArtifactService, "resolve_abs_path", lambda self, item: markdown_path)
+    task = TaskService(db_session).create(
+        TaskCreate(
+            workspace_id=workspace.id,
+            task_type="extract_gap_annotation",
+            payload={
+                "paper_id": paper.id,
+                "force": False,
+                "allow_remote_fallback": allow_remote,
+            },
+        )
+    )
+    return task.id, paper
+
+
+def test_local_gap_extractor_remains_primary_when_remote_is_configured(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "remote-model")
+    monkeypatch.setattr(
+        gap_task_mod,
+        "RemoteGapExtractor",
+        lambda: (_ for _ in ()).throw(AssertionError("remote fallback must not run after local success")),
+    )
+
+    result = gap_task_mod._run_gap_extraction(db_session, task_id, extractor=_SuccessfulExtractor())
+
+    assert result["status"] == "valid"
+    assert result["provider"] == "ollama"
+
+
+def test_remote_gap_fallback_requires_consent_and_records_remote_provenance(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, paper = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "remote-model")
+    remote = _FakeRemoteExtractor()
+    monkeypatch.setattr(gap_task_mod, "RemoteGapExtractor", lambda: remote)
+
+    result = gap_task_mod._run_gap_extraction(
+        db_session,
+        task_id,
+        extractor=_UnavailableExtractor(),
+    )
+
+    assert result["status"] == "valid"
+    assert result["remote_fallback"] is True
+    assert result["provider"] == "remote"
+    assert remote.calls == 1
+    remote_row = db_session.get(PaperGapAnnotation, result["annotation_id"])
+    assert remote_row is not None
+    assert remote_row.paper_id == paper.id
+    assert remote_row.model_provider == "remote"
+    assert remote_row.fallback_reason == "local_model_unavailable"
+
+
+def test_remote_gap_fallback_does_not_send_without_explicit_consent(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=False)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "remote-model")
+    remote = _FakeRemoteExtractor()
+    monkeypatch.setattr(gap_task_mod, "RemoteGapExtractor", lambda: remote)
+
+    result = gap_task_mod._run_gap_extraction(
+        db_session,
+        task_id,
+        extractor=_UnavailableExtractor(),
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["fallback_reason"] == "remote_consent_required"
+    assert remote.calls == 0
+
+
+def test_gap_fallback_is_not_attempted_for_short_content(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    markdown_path = tmp_path / "fallback.md"
+    markdown_path.write_text("short", encoding="utf-8")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "remote-model")
+    monkeypatch.setattr(
+        gap_task_mod,
+        "RemoteGapExtractor",
+        lambda: (_ for _ in ()).throw(AssertionError("short content must not be sent remotely")),
+    )
+
+    result = gap_task_mod._run_gap_extraction(db_session, task_id, extractor=_InvalidExtractor())
+
+    assert result["status"] == "invalid"
+    assert "内容不足" in result["error"]
+    assert TaskService(db_session).get(task_id).status == "failed"
+
+
+class _InvalidExtractor:
+    model_parameters = {"provider": "local-test"}
+
+    def extract(self, markdown: str):
+        return GapExtractionResult(
+            output=None,
+            attempts=3,
+            validation_errors=["JSON Schema entities: Field required"],
+            provider="ollama",
+            model="local-test",
+            validation_error_categories=["schema"],
+        )
 
 
 def _annotation(

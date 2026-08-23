@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Alert, Button, Card, Empty, Popconfirm, Select, Space, Statistic, Table, Typography } from "antd";
+import { App, Alert, Button, Card, Checkbox, Empty, Popconfirm, Select, Space, Statistic, Table, Typography } from "antd";
 import {
   ArrowRightOutlined,
   CheckCircleFilled,
@@ -14,6 +14,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import gapApi, { type GapAnnotation, type GapBoard, type GapBoardCell } from "../api/gap";
 import paperApi from "../api/paper";
+import { isRemoteGapFallback } from "../state/gapAnnotation";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -68,6 +69,7 @@ export default function GapBoardPage() {
   const [extracting, setExtracting] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [discovering, setDiscovering] = useState<string | null>(null);
+  const [allowRemoteFallback, setAllowRemoteFallback] = useState(false);
   // P0-5: 矩阵可按机会类型筛选（只看某一类，如"明确剩余局限"），矩阵变大后不至于难读。
   const [tierFilter, setTierFilter] = useState<GapTierFilter>("recommended");
 
@@ -119,7 +121,12 @@ export default function GapBoardPage() {
       let submitted = 0;
       let skipped = 0;
       for (let index = 0; index < eligible.length; index += 200) {
-        const response = await gapApi.extract(workspaceId, eligible.slice(index, index + 200));
+        const response = await gapApi.extract(
+          workspaceId,
+          eligible.slice(index, index + 200),
+          false,
+          allowRemoteFallback,
+        );
         for (const task of response.tasks) {
           if (task.skipped) skipped += 1;
           else submitted += 1;
@@ -309,6 +316,7 @@ export default function GapBoardPage() {
   if (!workspaceId) return <Empty description="工作区不存在" />;
   const validCount = annotations.filter((item) => item.status === "valid").length;
   const invalidCount = annotations.filter((item) => item.status === "invalid").length;
+  const remoteFallbackCount = annotations.filter(isRemoteGapFallback).length;
   const uncoveredCount = board?.cells.filter((item) => !item.addressed).length || 0;
   const explicitLimitationCount = board?.cells.filter(
     (item) => !item.addressed && item.candidate_tier === "explicit_limitation",
@@ -335,6 +343,12 @@ export default function GapBoardPage() {
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
             刷新
           </Button>
+          <Checkbox
+            checked={allowRemoteFallback}
+            onChange={(event) => setAllowRemoteFallback(event.target.checked)}
+          >
+            允许远程备份（外发 Markdown）
+          </Checkbox>
           <Button icon={<RobotOutlined />} loading={extracting} onClick={() => void runExtraction()}>
             抽取已解析论文
           </Button>
@@ -359,9 +373,25 @@ export default function GapBoardPage() {
         </Card>
         <Card className="gm-gap-summary-card gm-gap-summary-card--evidence" size="small">
           <Statistic prefix={<RobotOutlined />} title="有效专项标注" value={validCount} suffix="篇" />
-          <span>{invalidCount ? `${invalidCount} 篇无效标注已隔离` : "当前标注均已通过校验"}</span>
+          <span>
+            {remoteFallbackCount
+              ? `${remoteFallbackCount} 篇远程降级候选，${invalidCount ? `${invalidCount} 篇无效标注已隔离` : "其余标注已通过校验"}`
+              : invalidCount
+                ? `${invalidCount} 篇无效标注已隔离`
+                : "当前标注均已通过校验"}
+          </span>
         </Card>
       </div>
+
+      {allowRemoteFallback ? (
+        <Alert
+          className="gm-gap-board-alert"
+          type="warning"
+          showIcon
+          message="已允许远程备份"
+          description="仅当本地模型不可用或输出连续校验失败时，才会把论文 Markdown 发送到已配置的远程结构化模型；远程结果仍会经过同一 Schema 校验，并标记为“远程降级候选”。"
+        />
+      ) : null}
 
       <Alert
         className="gm-gap-board-alert"

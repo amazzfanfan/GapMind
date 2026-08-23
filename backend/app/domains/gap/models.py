@@ -44,6 +44,7 @@ class PaperGapAnnotation(Base, UUIDPKMixin, TimestampMixin):
     raw_responses: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     validation_errors: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    fallback_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
 

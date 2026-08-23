@@ -299,6 +299,7 @@ def test_semantic_search_status_failed_on_embedding_error(monkeypatch) -> None:
     assert resp.status == "failed"
     assert resp.items == []
     assert resp.error is not None and "embedding" in resp.error.lower()
+    assert resp.diagnostic_code == "embedding_unavailable"
 
 
 def test_semantic_search_status_failed_on_milvus_error(monkeypatch) -> None:
@@ -316,6 +317,24 @@ def test_semantic_search_status_failed_on_milvus_error(monkeypatch) -> None:
     resp = retrieval_service.semantic_search("ws-1", "query", top_k=5)
     assert resp.status == "failed"
     assert "milvus" in (resp.error or "").lower()
+    assert resp.diagnostic_code == "milvus_unavailable"
+
+
+def test_semantic_search_status_failed_on_unloaded_collection(monkeypatch) -> None:
+    class _OkEmbedding:
+        def embed_one(self, text): return [0.1] * 4
+
+    class _UnloadedCollection:
+        def search(self, *args, **kwargs):
+            raise RuntimeError("collection not loaded")
+
+    monkeypatch.setattr(retrieval_service, "get_embedding_gateway", lambda: _OkEmbedding())
+    monkeypatch.setattr(retrieval_service, "milvus_client", _UnloadedCollection())
+
+    resp = retrieval_service.semantic_search("ws-1", "query", top_k=5)
+    assert resp.status == "failed"
+    assert resp.diagnostic_code == "collection_unloaded"
+    assert "重建索引" in (resp.error or "")
 
 
 def test_counter_evidence_status_failed_on_milvus_error(monkeypatch) -> None:
@@ -339,13 +358,14 @@ def test_counter_evidence_status_failed_on_milvus_error(monkeypatch) -> None:
     )
     assert resp.status == "failed"
     assert resp.total == 0
+    assert resp.diagnostic_code == "milvus_unavailable"
 
 
 def test_reranker_failure_falls_back_to_score_only(
     monkeypatch, fake_milvus, fake_embedding
 ) -> None:
     """Reranker is best-effort: a failure degrades to vector-score ordering.
-    This is documented behaviour — semantic_search returns succeeded with
+    This is documented behaviour — semantic_search returns degraded with
     the available signal. (Counter Evidence does the same.)"""
     class _BoomReranker:
         def rerank(self, query, documents, *, top_n):
@@ -360,7 +380,8 @@ def test_reranker_failure_falls_back_to_score_only(
     monkeypatch.setattr(retrieval_service, "get_reranker_gateway", lambda: _BoomReranker())
 
     resp = retrieval_service.semantic_search("ws-1", "query", top_k=3, use_reranker=True)
-    assert resp.status == "succeeded"
+    assert resp.status == "degraded"
+    assert resp.diagnostic_code == "reranker_degraded"
     # We got the available signal, not a fake failure.
     assert resp.total == 3
     assert all(item.retrieval_stage == "candidate_recall" for item in resp.items)

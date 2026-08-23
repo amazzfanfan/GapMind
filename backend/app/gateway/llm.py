@@ -134,7 +134,7 @@ class LLMGateway:
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
-        response_format: dict[str, str] | None = None,
+        response_format: dict[str, Any] | None = None,
         disable_thinking: bool = False,
     ) -> LLMResponse:
         """Run a chat completion against the configured Deepseek model.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPKMixin
@@ -52,6 +52,15 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     grounding_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_requested"
+    )
+    # Immutable provenance snapshot for this answer. Paper rows remain in
+    # ``chat_message_evidence`` for source navigation; this field also records
+    # plan/report/code provenance without presenting those artifacts as papers.
+    source_manifest: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    # Stable, non-sensitive retrieval diagnosis.  Raw provider/Milvus errors
+    # stay in server logs and are never persisted into the workspace UI.
+    retrieval_diagnostic_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     citations: Mapped[list["ChatMessageEvidence"]] = relationship(
         back_populates="message",
