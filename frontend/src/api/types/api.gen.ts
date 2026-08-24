@@ -53,10 +53,13 @@ export interface paths {
         };
         /**
          * Readiness
-         * @description Readiness check - probes configured external services.
+         * @description Return dependency readiness with a truthful HTTP status.
          *
-         *     Phase 0: only checks that LLM/Embedding API keys are set. DB/Redis/Milvus
-         *     connectivity will be added in Phase 1-2.
+         *     Database, Redis, Milvus, storage, LLM and Embedding are required for the
+         *     core workspace path. A Celery worker is required for asynchronous
+         *     extraction/agent paths. Reranker and Semantic Scholar are reported but do
+         *     not make the API entirely unavailable because the product has explicit
+         *     degraded/partial-success paths for them.
          */
         get: operations["readiness_api_v1_health_ready_get"];
         put?: never;
@@ -2536,6 +2539,14 @@ export interface components {
             corpus_version?: string | null;
             /** Human Status */
             human_status?: string | null;
+            /**
+             * Evidence Freshness
+             * @default unknown
+             * @enum {string}
+             */
+            evidence_freshness: "current" | "stale" | "expired" | "unknown";
+            /** Evidence Checked At */
+            evidence_checked_at?: string | null;
             /** Items */
             items?: components["schemas"]["EvidenceManifestItem"][];
         };
@@ -3540,6 +3551,20 @@ export interface components {
             /** Parsed At */
             parsed_at?: string | null;
             /**
+             * Page Count
+             * @default 0
+             */
+            page_count: number;
+            /**
+             * Parsed Text Chars
+             * @default 0
+             */
+            parsed_text_chars: number;
+            /** Quality Flags */
+            quality_flags?: string[];
+            /** Parse Error */
+            parse_error?: string | null;
+            /**
              * Chunk Count
              * @default 0
              */
@@ -3745,6 +3770,20 @@ export interface components {
              * @default not_applicable
              */
             parse_status: string;
+            /**
+             * Page Count
+             * @default 0
+             */
+            page_count: number;
+            /**
+             * Parsed Text Chars
+             * @default 0
+             */
+            parsed_text_chars: number;
+            /** Quality Flags */
+            quality_flags?: string[];
+            /** Parse Error */
+            parse_error?: string | null;
             /** Parsed Markdown Artifact Id */
             parsed_markdown_artifact_id?: string | null;
             /**
@@ -4600,7 +4639,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": unknown;
                 };
             };
         };
@@ -4612,7 +4651,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4641,7 +4683,10 @@ export interface operations {
     create_workspace_api_v1_workspaces_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4674,7 +4719,10 @@ export interface operations {
     get_independent_workspace_api_v1_workspaces_independent_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4687,6 +4735,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4899,7 +4956,10 @@ export interface operations {
                 offset?: number;
                 token?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4931,7 +4991,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4960,7 +5023,10 @@ export interface operations {
     delete_search_history_api_v1_papers_search_history__history_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 history_id: string;
             };
@@ -4996,7 +5062,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5025,7 +5094,10 @@ export interface operations {
     save_search_favorite_api_v1_papers_favorites_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5058,7 +5130,10 @@ export interface operations {
     delete_search_favorite_api_v1_papers_favorites__paper_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -5535,7 +5610,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5566,7 +5644,10 @@ export interface operations {
     get_task_api_v1_tasks__task_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 task_id: string;
             };
@@ -5597,7 +5678,10 @@ export interface operations {
     cancel_task_api_v1_tasks__task_id__cancel_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 task_id: string;
             };
@@ -5628,7 +5712,10 @@ export interface operations {
     resume_task_api_v1_tasks__task_id__resume_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 task_id: string;
             };
@@ -5663,7 +5750,10 @@ export interface operations {
     retry_task_api_v1_tasks__task_id__retry_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 task_id: string;
             };
@@ -5700,7 +5790,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5737,7 +5830,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 run_id: string;
@@ -5777,7 +5873,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5813,7 +5912,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5854,7 +5956,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5889,7 +5994,10 @@ export interface operations {
                 projection_mode?: string;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
             };
@@ -5924,7 +6032,10 @@ export interface operations {
                 limit?: number;
                 relation_type?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 node_id: string;
@@ -5956,7 +6067,10 @@ export interface operations {
     get_knowledge_item_api_v1_workspaces__workspace_id__knowledge__item_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 item_id: string;
@@ -5988,7 +6102,10 @@ export interface operations {
     review_knowledge_item_api_v1_workspaces__workspace_id__knowledge__item_id__review_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 item_id: string;
@@ -6024,7 +6141,10 @@ export interface operations {
     list_evidence_api_v1_workspaces__workspace_id__knowledge__item_id__evidence_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 item_id: string;
@@ -6056,7 +6176,10 @@ export interface operations {
     get_evidence_context_api_v1_workspaces__workspace_id__knowledge__item_id__evidence_context_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 workspace_id: string;
                 item_id: string;
@@ -6198,7 +6321,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6227,7 +6353,10 @@ export interface operations {
     get_reading_paper_api_v1_reading_papers__paper_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6258,7 +6387,10 @@ export interface operations {
     add_reading_paper_api_v1_reading_papers__paper_id__post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6289,7 +6421,10 @@ export interface operations {
     remove_reading_paper_api_v1_reading_papers__paper_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6322,7 +6457,10 @@ export interface operations {
     update_reading_progress_api_v1_reading_papers__paper_id__progress_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6357,7 +6495,10 @@ export interface operations {
     list_annotations_api_v1_reading_papers__paper_id__annotations_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6388,7 +6529,10 @@ export interface operations {
     create_annotation_api_v1_reading_papers__paper_id__annotations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 paper_id: string;
             };
@@ -6423,7 +6567,10 @@ export interface operations {
     remove_annotation_api_v1_reading_annotations__annotation_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 annotation_id: string;
             };
@@ -6456,7 +6603,10 @@ export interface operations {
     update_annotation_api_v1_reading_annotations__annotation_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 annotation_id: string;
             };
@@ -6626,6 +6776,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -6695,6 +6846,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -6763,6 +6915,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -6968,6 +7121,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7070,6 +7224,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7108,6 +7263,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7142,6 +7298,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7180,6 +7337,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7218,6 +7376,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;
@@ -7255,7 +7414,10 @@ export interface operations {
                 limit?: number;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7284,7 +7446,10 @@ export interface operations {
     create_conversation_api_v1_chat_conversations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7317,7 +7482,10 @@ export interface operations {
     send_new_api_v1_chat_conversations_send_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7352,7 +7520,10 @@ export interface operations {
             query: {
                 workspace_id: string;
             };
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7381,7 +7552,10 @@ export interface operations {
     get_conversation_api_v1_chat_conversations__conversation_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
             };
@@ -7412,7 +7586,10 @@ export interface operations {
     delete_conversation_api_v1_chat_conversations__conversation_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
             };
@@ -7443,7 +7620,10 @@ export interface operations {
     rename_conversation_api_v1_chat_conversations__conversation_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
             };
@@ -7478,7 +7658,10 @@ export interface operations {
     stream_message_api_v1_chat_conversations__conversation_id__messages_stream_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
             };
@@ -7513,7 +7696,10 @@ export interface operations {
     send_message_api_v1_chat_conversations__conversation_id__messages_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
             };
@@ -7548,7 +7734,10 @@ export interface operations {
     retry_message_api_v1_chat_conversations__conversation_id__messages__assistant_message_id__retry_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
                 assistant_message_id: string;
@@ -7580,7 +7769,10 @@ export interface operations {
     get_evidence_context_api_v1_chat_conversations__conversation_id__messages__message_id__evidence__evidence_id__context_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-User-ID"?: string | null;
+                Authorization?: string | null;
+            };
             path: {
                 conversation_id: string;
                 message_id: string;
@@ -7980,6 +8172,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-User-ID"?: string | null;
+                Authorization?: string | null;
             };
             path: {
                 workspace_id: string;

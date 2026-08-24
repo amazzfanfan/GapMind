@@ -45,6 +45,14 @@ const asKnownGaps = (value: unknown): KnownGap[] =>
 const asStringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
+const artifactReviewMeta = (status: string): { label: string; color: "blue" | "gold" | "green" | "red" | "default" } => {
+  if (status === "confirmed") return { label: "人工已确认", color: "green" };
+  if (status === "rejected") return { label: "人工已驳回", color: "red" };
+  if (status === "pending_review" || status === "unreviewed") return { label: "AI 生成 · 待人工审阅", color: "blue" };
+  if (status === "not_run") return { label: "静态检查 · 未执行", color: "gold" };
+  return { label: status || "状态未记录", color: "default" };
+};
+
 const AGENT_META: Record<string, { label: string; icon: React.ReactNode }> = {
   research_plan: { label: "研究计划 Agent", icon: <ExperimentOutlined /> },
   code_generation: { label: "代码生成 Agent", icon: <CodeOutlined /> },
@@ -96,8 +104,25 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
     ? { covered: rubric.covered, partial: rubric.partial, missing: rubric.missing }
     : null;
   const knownGaps = asKnownGaps(result.known_gaps);
+  const evidenceFreshness = typeof result.evidence_freshness === "string" ? result.evidence_freshness : "unknown";
+  const reviewState = run.status === "failed"
+    ? { label: "AI 生成 · 处理失败", color: "red" as const }
+    : run.status === "waiting_for_user" || run.requires_confirmation
+      ? { label: "AI 生成 · 待人工确认", color: "gold" as const }
+      : isCode && run.status === "succeeded"
+        ? { label: "AI 生成 · 静态检查完成 · 未执行", color: "blue" as const }
+        : run.status === "succeeded"
+          ? { label: "AI 生成 · 待人工审阅", color: "blue" as const }
+          : { label: "AI 生成 · 执行中", color: "processing" as const };
+  const freshnessLabel = evidenceFreshness === "expired"
+    ? "证据已过期"
+    : evidenceFreshness === "stale"
+      ? "证据版本较旧"
+      : evidenceFreshness === "current"
+        ? "证据来自当前快照"
+        : null;
   const copy = async (value: string) => { await navigator.clipboard?.writeText(value); message.success("已复制"); };
-  return <Card className="gm-agent-run-card" size="small" title={<Space>{meta.icon}<Text strong>{meta.label}</Text><Tag color={run.status === "succeeded" ? "green" : run.status === "failed" ? "red" : run.status === "waiting_for_user" ? "gold" : "blue"}>{stageLabel[run.current_stage] ?? run.current_stage}</Tag></Space>} extra={<Button type="link" size="small" onClick={onRefresh}>刷新</Button>}>
+  return <Card className="gm-agent-run-card" size="small" title={<Space wrap>{meta.icon}<Text strong>{meta.label}</Text><Tag color={run.status === "succeeded" ? "green" : run.status === "failed" ? "red" : run.status === "waiting_for_user" ? "gold" : "blue"}>{stageLabel[run.current_stage] ?? run.current_stage}</Tag><Tag color={reviewState.color}>{reviewState.label}</Tag>{freshnessLabel && <Tag color={evidenceFreshness === "expired" ? "red" : "gold"}>{freshnessLabel}</Tag>}</Space>} extra={<Button type="link" size="small" onClick={onRefresh}>刷新</Button>}>
     <Progress percent={Math.round(run.progress * 100)} status={run.status === "failed" ? "exception" : run.status === "succeeded" ? "success" : "active"} />
     {run.steps.length > 0 && <Steps size="small" responsive={false} items={run.steps.map((step) => ({ title: stageLabel[step.stage] ?? step.stage, description: step.summary, status: step.status === "completed" ? "finish" : step.status === "failed" ? "error" : "process" }))} />}
     {run.error && <Paragraph type="danger">{run.error}</Paragraph>}
@@ -122,9 +147,9 @@ export default function ChatAgentRunCard({ run, loading, onRefresh, onConfirm, o
     {isCode && rubricCounts && <Alert type="info" showIcon style={{ marginTop: 8 }} message="计划覆盖度自检，不代表代码已运行验证" description="该报告只对照研究计划检查数据集、基线、指标和验证步骤；生成代码仍需人工审查。" />}
     {isCode && knownGaps.length > 0 && <Alert type="warning" showIcon icon={<WarningOutlined />} style={{ marginTop: 8 }} message={`已知缺口 ${knownGaps.length} 项`} description={<Space direction="vertical" size={2}>{knownGaps.map((gap) => <Text key={`${gap.dimension}:${gap.target}`} style={{ fontSize: 12 }}><Tag>{gap.dimension}</Tag>{gap.target}{typeof gap.note === "string" && gap.note ? `：${gap.note}` : `（${gap.status === "partial" ? "部分覆盖" : "未覆盖"}）`}</Text>)}<Text type="secondary" style={{ fontSize: 12 }}>可到研究计划页调整范围后重新生成代码。</Text></Space>} />}
     {isCode && codeArtifacts.length > 0 && <Alert type="info" showIcon icon={<InfoCircleOutlined />} style={{ marginTop: 8 }} message="AI 生成的实验骨架" description="代码由 AI 自动生成，可能存在未实现或不完整之处，仅供预览与人工审查；使用前请查看“计划覆盖度自检”与已知缺口。" />}
-    {codeArtifacts.length > 0 && <Collapse size="small" items={[{ key: "files", label: `${codeArtifacts.length} 个代码文件`, children: <Space wrap>{codeArtifacts.map((artifact) => <Space key={artifact.id} size={4}>{<Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>}{asStringList(artifact.metadata.evidence_refs).map((ref) => <Tag key={ref} color="blue" style={{ marginInlineEnd: 0 }}>{ref}</Tag>)}</Space>)}</Space> }]} />}
-    {reviewArtifacts.length > 0 && <Collapse size="small" items={[{ key: "rubric", label: candidateRepair ? "候选修复报告与变更预览" : "计划覆盖度自检报告", children: <Space wrap>{reviewArtifacts.map((artifact) => <Space key={artifact.id} size={4}><Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>{onDownloadArtifact && <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => onDownloadArtifact(run, artifact.id)} aria-label={`下载 ${artifact.filename}`} />}</Space>)}</Space> }]} />}
-    {lifecycleArtifacts.length > 0 && <Collapse size="small" items={[{ key: "docs", label: `${lifecycleArtifacts.length} 份文档产物`, children: <Space wrap>{lifecycleArtifacts.map((artifact) => <Button key={artifact.id} size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button>)}</Space> }]} />}
+    {codeArtifacts.length > 0 && <Collapse size="small" items={[{ key: "files", label: `${codeArtifacts.length} 个代码文件`, children: <Space wrap>{codeArtifacts.map((artifact) => { const review = artifactReviewMeta(artifact.validation_status); return <Space key={artifact.id} size={4}><Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button><Tag color={review.color}>{review.label}</Tag>{asStringList(artifact.metadata.evidence_refs).map((ref) => <Tag key={ref} color="blue" style={{ marginInlineEnd: 0 }}>{ref}</Tag>)}</Space>; })}</Space> }]} />}
+    {reviewArtifacts.length > 0 && <Collapse size="small" items={[{ key: "rubric", label: candidateRepair ? "候选修复报告与变更预览" : "计划覆盖度自检报告", children: <Space wrap>{reviewArtifacts.map((artifact) => { const review = artifactReviewMeta(artifact.validation_status); return <Space key={artifact.id} size={4}><Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button><Tag color={review.color}>{review.label}</Tag>{onDownloadArtifact && <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => onDownloadArtifact(run, artifact.id)} aria-label={`下载 ${artifact.filename}`} />}</Space>; })}</Space> }]} />}
+    {lifecycleArtifacts.length > 0 && <Collapse size="small" items={[{ key: "docs", label: `${lifecycleArtifacts.length} 份文档产物`, children: <Space wrap>{lifecycleArtifacts.map((artifact) => { const review = artifactReviewMeta(artifact.validation_status); return <Space key={artifact.id} size={4}><Button size="small" onClick={() => setPreview({ id: artifact.id, filename: artifact.filename, content: artifact.content })}>{artifact.filename}</Button><Tag color={review.color}>{review.label}</Tag></Space>; })}</Space> }]} />}
     <Space wrap style={{ marginTop: 12 }}>
       {run.status === "waiting_for_user" && (isPlan || isDeep) && <Button type="primary" icon={<CheckCircleOutlined />} loading={loading} onClick={onConfirm}>{isDeep ? "确认深度研究报告" : "确认并保存到研究中心"}</Button>}
       {active && <Button danger icon={<StopOutlined />} loading={loading} onClick={onCancel}>停止任务</Button>}

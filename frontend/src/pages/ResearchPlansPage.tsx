@@ -357,6 +357,12 @@ export default function ResearchPlansPage() {
         <div><Title level={2} style={{ margin: 0 }}>研究中心</Title><Text type="secondary">将已确认机会沉淀为结构化计划，并启动证据约束的深度研究。</Text></div>
         <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>刷新</Button>
       </Space>
+      <Alert
+        type="info"
+        showIcon
+        message="研究产物状态提示"
+        description="研究机会已经过人工确认后才会进入这里；计划、深度研究报告和代码相关内容仍可能包含 AI 生成草稿，必须按页面状态继续人工审阅。静态检查不代表代码已经执行或实验已经验证。"
+      />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
         <Card size="small"><Statistic title="已确认机会" value={portfolio.length} prefix={<BulbOutlined />} /></Card>
         <Card size="small"><Statistic title="研究计划" value={plans.length} prefix={<ExperimentOutlined />} /></Card>

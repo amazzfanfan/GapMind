@@ -10,6 +10,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   type UploadProps,
@@ -89,7 +90,7 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
         content: file,
         mime_type: file.type || "application/pdf",
       });
-      message.success(`Uploaded "${paper.title}"`);
+      message.success(`已上传“${paper.title}”，解析任务已排队；请查看解析列的质量反馈`);
       onChanged();
     } catch (err) {
       const msg = (err as { response?: { data?: { detail?: { message?: string } } } }).response?.data?.detail?.message
@@ -289,10 +290,24 @@ export default function PapersSection({ workspaceId, papers, loading, onChanged 
             {
               title: "解析",
               key: "parse",
-              width: 110,
+              width: 210,
               render: (_: unknown, p) => {
                 const status = p.parse_status as string;
-                return <Space size={4}><StatusBadge status={status} />{status === "parsed" && <Text type="secondary">{p.chunk_count} 块</Text>}</Space>;
+                const flags = p.quality_flags ?? [];
+                const detail = status === "failed"
+                  ? p.parse_error || "解析失败，请重试或更换文件"
+                  : status === "parsed"
+                    ? `${p.page_count ?? 0} 页 · ${p.parsed_text_chars ?? 0} 字符 · ${p.chunk_count ?? 0} 块${flags.length ? ` · ${flags.length} 个提示` : ""}`
+                    : "解析完成后才会进入证据检索和知识抽取";
+                return (
+                  <Tooltip title={detail}>
+                    <Space size={4}>
+                      <StatusBadge status={status} />
+                      {status === "parsed" && <Text type="secondary">{p.chunk_count} 块</Text>}
+                      {flags.length > 0 && <Tag color="gold">{flags.length} 个提示</Tag>}
+                    </Space>
+                  </Tooltip>
+                );
               },
             },
             {

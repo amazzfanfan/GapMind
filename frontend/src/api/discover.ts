@@ -233,6 +233,8 @@ export interface EvidenceManifest {
   model_name: string | null;
   corpus_version: string | null;
   human_status: string | null;
+  evidence_freshness: "current" | "stale" | "expired" | "unknown";
+  evidence_checked_at: string | null;
   items: EvidenceManifestItem[];
 }
 
