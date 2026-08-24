@@ -75,7 +75,7 @@
 | 已完成 | T0-02 记录当前基线版本 | 已记录 commit、工作区、迁移 head、测试/构建/lint 和服务配置摘要 |
 | 已完成 | T0-03 冻结本轮不做事项 | 用户已确认学科、用户、核心任务和禁止宣称范围 |
 | 已完成 | T1-01～T1-03 定位、Persona、核心 Demo 任务 | 已形成正式定位、用户矩阵和三条任务文档 |
-| 进行中 | T1-04 统一对外产品话术 | 已同步 README、详细 Demo 脚本和 ChatHub 首屏；PPT、效果报告、视频和外部材料仍待同步 |
+| 进行中 | T1-04 统一对外产品话术 | 已同步 README、详细 Demo 脚本和 ChatHub 首屏；作品方案 PPT v1 已生成，效果报告和视频材料仍待真实数据与录制填充 |
 | 未开始 | 其他 P0/P1/P2 | 按依赖顺序推进，不跨过 P0 验收直接投入 P2 |
 
 ### 4.2 当前唯一进行项
@@ -188,6 +188,9 @@ P2 只在 P0 已冻结、GATE-0 已通过且不会影响最终回归时启动。
 | Persona 与任务矩阵 | `docs/0824_personas_and_tasks.md` | T1-02 |
 | 核心 Demo 任务 | `docs/0824_core_demo_tasks.md` | T1-03 |
 | 产品话术草案 | `docs/0824_product_messaging_draft.md` | T1-04 |
+| PPT 方案大纲与初稿 | `docs/0824_solution_ppt_outline.md`、`submission/GapMind_作品方案_v1.pptx` | T1-04 |
+| 效果验证模板 | `docs/0824_effect_validation_report_template.md` | T1-04、T3-07 |
+| 三分钟 Demo 检查 | `docs/0824_three_minute_demo_checklist.md` | T1-04、T3-04～T3-06 |
 | 模型清单 | `docs/model_manifest.json` 或 `docs/0824_model_card.md` | T2-01、T2-02 |
 | 知识源台账 | `docs/0824_knowledge_source_registry.md` | T2-03、P1-01 |
 | 数据快照 | `demo/` 或受控数据目录 + manifest | T2-04、T3-05 |
@@ -252,7 +255,7 @@ P2 只在 P0 已冻结、GATE-0 已通过且不会影响最终回归时启动。
 
 ## 十一、当前下一步：T1-04
 
-T0-01～T0-03 和 T1-01～T1-03 已完成。当前推进 T1-04“统一对外产品话术”，先完成话术草案，再同步到产品材料。
+T0-01～T0-03 和 T1-01～T1-03 已完成。当前推进 T1-04“统一对外产品话术”；话术草案和作品方案 PPT v1 已形成，效果验证、用户记录、视频和最终一致性检查仍待完成。
 
 ### T1-04 当前执行范围
 
