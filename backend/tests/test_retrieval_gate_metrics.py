@@ -109,3 +109,11 @@ def test_gate_report_fails_below_threshold() -> None:
     report = gate_report(recall=0.65, threshold=0.70, leakage=0.0)
     assert report["recall_passed"] is False
     assert report["passed"] is False
+
+
+def test_gate_report_uses_requested_k_in_metric_keys() -> None:
+    report = gate_report(recall=0.82, threshold=0.80, k=15, mrr=0.5, ndcg=0.4)
+    assert report["recall@15"] == 0.82
+    assert report["mrr@15"] == 0.5
+    assert report["ndcg@15"] == 0.4
+    assert "recall@10" not in report

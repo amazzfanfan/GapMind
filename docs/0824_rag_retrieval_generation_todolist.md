@@ -72,7 +72,7 @@
 | B-03 | 检索审计快照 | ✅ 已完成基础实现 | `0023`、导出器和报告指标完成；历史消息需重新采样 |
 | B-04 | 确定性分面检索 | ◐ 已完成查询规划骨架 | 纯函数规则已测试；仍需离线 A/B，默认不接入 Chat |
 | B-05 | 章节优先级 | ☐ 待做 | 仅使用已存在 canonical section，不能凭空增加章节事实 |
-| B-06 | 阈值校准与 Gold 冻结 | ☐ 待做 | 样本达到复核要求、指标可重复、人工确认后再冻结 |
+| B-06 | 阈值校准与 Gold 冻结 | ◐ 进行中 | Chat QA Gold 已冻结；固定 Retrieval Gold 的 top-k 曲线已完成，生产阈值仍待人工确认 |
 | B-07 | 生成质量回归 | ◐ 结构回归完成 | 同步/流式、无证据、失败回退和重排降级已覆盖；首 token/完成延迟等运行时指标仍待独立观测 |
 | C-01 | 混合检索 | ⏸ 暂缓 | B-04/B-06 完成且证明稠密召回存在稳定缺口后才启动 |
 | D-01 | GraphRAG-lite | ⏸ 暂缓 | B/C 有基线、图证据可回链且有跨论文问答集后才启动 |
@@ -194,6 +194,8 @@
 固定 Retrieval Gold smoke baseline 报告为 `evaluation/retrieval/reports/minimal_gnn_gate_baseline.json`：semantic_search Recall@10=`1.0`、similar_work=`0.6667`、counter_evidence=`1.0`，三类 workspace leakage 均为 `0.0`，Gate overall=`FAIL`。similar_work 的缺口是 `min-sw-01` 和 `min-sw-02` 各命中 1/2 个 Gold 论文，`min-sw-03` 命中但首个 Gold 排在第 8 位；这说明当前 paper-level 相似工作存在待人工确认的召回缺口，不是调整阈值即可修复，也不足以单凭一次 smoke 启动混合检索。该报告使用 `--minimal` 跳过 judge，只作为召回链路基线，不作为角色事实结论。
 
 为区分候选召回与 top-k 截断，已对同一 workspace、同一固定 Gold 以 `top-k=20` 复跑，报告为 `evaluation/retrieval/reports/minimal_gnn_gate_baseline_top20.json`：semantic_search、similar_work、counter_evidence 的 Recall@20 均为 `1.0`，workspace leakage 均为 `0.0`；similar_work 的 Gold 论文在 `min-sw-01` 排名第 `4/15`、`min-sw-02` 排名第 `7/12`、`min-sw-03` 排名第 `7`。因此在这组样本中，top-k=10 的 similar_work 缺口表现为排序/截断问题，尚不足以证明 dense candidate recall 稳定缺失，也不能据此启动 C-01 混合检索或修改固定 Gold。后续阈值评估仍需由人工同时确认 top-k、论文级去重、引用覆盖和延迟之间的取舍；两份报告均使用 `--minimal`，不作为 counter-evidence 角色事实结论。
+
+随后补齐 `top-k=5/15` 曲线，报告分别为 `evaluation/retrieval/reports/minimal_gnn_gate_baseline_top5.json` 和 `evaluation/retrieval/reports/minimal_gnn_gate_baseline_top15.json`；四个 k 值的结果为：k=5 时 similar_work=`0.1667`、counter_evidence=`0.5`；k=10 时 similar_work=`0.6667`；k=15 和 k=20 时三类 Recall 均为 `1.0`。本轮同时修正了评测器固定输出 `@10` 标签的问题，使报告键与实际 `top_k` 一致，并以单元测试覆盖动态指标键。k=15 只能作为本固定 corpus 的候选观察点，不能直接写入生产配置；完整后端回归为 `461 passed, 2 warnings`。
 
 ### B-07. 生成可靠性回归
 
