@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from urllib.parse import quote
 
@@ -138,6 +139,29 @@ def download_bundle(
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for artifact in code:
             archive.writestr(artifact.filename, artifact.content)
+        archive.writestr(
+            "ARTIFACT_STATUS.json",
+            json.dumps(
+                {
+                    "format_version": "1",
+                    "run_id": run.id,
+                    "generated_by": "ai",
+                    "run_status": run.status,
+                    "artifacts": [
+                        {
+                            "filename": artifact.filename,
+                            "artifact_type": artifact.artifact_type,
+                            "validation_status": artifact.validation_status,
+                            "created_at": artifact.created_at,
+                        }
+                        for artifact in artifacts
+                    ],
+                },
+                ensure_ascii=False,
+                default=str,
+                indent=2,
+            ),
+        )
         # include the research plan the code was generated from (complete snapshot)
         plan_id = str((run.result or {}).get("research_plan_id") or "")
         plan = db.get(ResearchPlan, plan_id) if plan_id else None

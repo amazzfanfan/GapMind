@@ -23,6 +23,9 @@ class Workspace(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "workspaces"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_id: Mapped[str] = mapped_column(
+        String(128), default="user", server_default="user", nullable=False, index=True
+    )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Research Profile (inline for MVP)

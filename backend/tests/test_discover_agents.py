@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -427,6 +427,8 @@ def test_build_evidence_manifest_aggregates_counts(db_session) -> None:
     assert manifest.prompt_version == "discover-v1"
     assert manifest.model_name == "deepseek"
     assert manifest.verification_status == "verified_with_warnings"
+    assert manifest.evidence_freshness == "current"
+    assert manifest.evidence_checked_at is not None
     assert len(manifest.items) == 4
     # the manifest is a snapshot, not tied to a new table
     assert db_session.get(type(opp), opp.id) is not None
@@ -440,6 +442,34 @@ def test_build_evidence_manifest_none_without_version(db_session) -> None:
     db_session.commit()
     service = _service(db_session)
     assert service._build_evidence_manifest(opp, None, []) is None
+
+
+def test_evidence_freshness_uses_revalidation_snapshot_age(db_session) -> None:
+    service = _service(db_session)
+    now = datetime(2026, 2, 1, tzinfo=UTC)
+
+    def evidence_at(days_old: int) -> OpportunityEvidence:
+        return OpportunityEvidence(
+            created_at=now - timedelta(days=days_old),
+            opportunity_version_id="version",
+            relation="supports",
+            source_scope="workspace",
+            evidence_level="full_text",
+        )
+
+    status, checked_at = service._evidence_freshness([evidence_at(30)], now=now)
+    assert status == "current"
+    assert checked_at == now - timedelta(days=30)
+
+    status, _ = service._evidence_freshness([evidence_at(31)], now=now)
+    assert status == "stale"
+
+    status, _ = service._evidence_freshness([evidence_at(61)], now=now)
+    assert status == "expired"
+
+    status, checked_at = service._evidence_freshness([], now=now)
+    assert status == "unknown"
+    assert checked_at is None
 
 
 def test_find_evidence_span_strips_nul_from_query(db_session) -> None:

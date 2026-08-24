@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_log_level: str = "INFO"
     app_storage_dir: str = "./storage"
+    workspace_storage_quota_bytes: int = 500 * 1024 * 1024
+
+    # ---- Minimal delivery authentication ----
+    # Format: comma-separated ``token:user_id`` pairs.  Development keeps the
+    # historical single-user fallback; staging/production must use Bearer.
+    auth_required: bool = False
+    auth_tokens: str = ""
 
     # ---- PostgreSQL ----
     postgres_user: str = "gapmind"
@@ -99,6 +106,12 @@ class Settings(BaseSettings):
     chat_plan_max_context_chars: int = 6000
     chat_artifact_max_context_chars: int = 6000
     chat_workspace_profile_max_context_chars: int = 2000
+
+    # Evidence Passport operational freshness policy. This describes the age
+    # of the verification snapshot, not the scientific validity or publication
+    # date of the cited paper. Keep the thresholds explicit and configurable so
+    # a delivery environment can choose a stricter revalidation window.
+    evidence_freshness_max_age_days: int = 30
 
     # ---- Controlled workspace agents ----
     agent_rag_top_k: int = 10

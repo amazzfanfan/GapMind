@@ -40,3 +40,25 @@ def test_get_current_user_handles_empty_header() -> None:
     client = _client()
     response = client.get("/me", headers={"X-User-ID": ""})
     assert response.json() == {"user": "user"}
+
+
+def test_get_current_user_accepts_configured_bearer_token(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "auth_required", True)
+    monkeypatch.setattr(settings, "auth_tokens", "demo-token:alice")
+    response = _client().get("/me", headers={"Authorization": "Bearer demo-token"})
+    assert response.status_code == 200
+    assert response.json() == {"user": "alice"}
+
+
+def test_get_current_user_rejects_spoofed_header_outside_development(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "auth_required", True)
+    monkeypatch.setattr(settings, "auth_tokens", "demo-token:alice")
+    response = _client().get("/me", headers={"X-User-ID": "alice"})
+    assert response.status_code == 401
+    assert response.json()["detail"]["error"] == "authentication_required"

@@ -68,12 +68,12 @@ export default function ChatHubPage() {
 
   return <div className="gm-assistant-hub">
     <section className="gm-assistant-hero">
-      <div><Text className="gm-eyebrow">Research Copilot</Text><Title level={2}>AI 研究助手</Title><Paragraph>选择一个课题空间，基于其中已解析的论文、知识点和证据继续研究。复杂的新颖性核验仍由 Discover Workbench 完成。</Paragraph></div>
+      <div><Text className="gm-eyebrow">Graph ML Research Copilot</Text><Title level={2}>图机器学习科研助手</Title><Paragraph>面向图机器学习与图神经网络研究：从论文证据问答，到研究机会核验、Critic 收窄和人工确认。当前回答只基于所选课题空间的资料，AI 产物默认是待审阅草稿。</Paragraph></div>
       <Button icon={<BulbOutlined />} onClick={() => navigate("/chat/new")}>通用对话</Button>
     </section>
 
     <section className="gm-assistant-section">
-      <div className="gm-assistant-section-heading"><div><Title level={4}>选择课题空间</Title><Text type="secondary">进入课题后，AI 回答会检索该空间中已向量化的论文并附带原文证据。</Text></div><Button type="link" onClick={() => navigate("/workspaces")}>管理课题空间</Button></div>
+      <div className="gm-assistant-section-heading"><div><Title level={4}>选择图机器学习课题空间</Title><Text type="secondary">进入课题后，AI 回答会检索该空间中已向量化的论文并附带原文证据；资料不足时不会补写无来源结论。</Text></div><Button type="link" onClick={() => navigate("/workspaces")}>管理课题空间</Button></div>
       {loading ? <Row gutter={[16, 16]}>{[1, 2, 3].map((item) => <Col xs={24} md={12} xl={8} key={item}><Card><Skeleton active paragraph={{ rows: 2 }} /></Card></Col>)}</Row> : workspaceError ? <Alert type="warning" showIcon message="课题空间暂时无法加载" description={workspaceError} action={<Button size="small" onClick={() => void load()}>重试</Button>} /> : assistantWorkspaces.length === 0 ? <Card><Empty description="还没有课题空间" image={Empty.PRESENTED_IMAGE_SIMPLE}><Button type="primary" onClick={() => navigate("/workspaces")}>创建课题空间</Button></Empty></Card> : <Row gutter={[16, 16]}>{assistantWorkspaces.map((workspace) => <Col xs={24} md={12} xl={8} key={workspace.id}><Card hoverable className="gm-assistant-workspace-card" onClick={() => navigate(`/workspaces/${workspace.id}/assistant`)}><Space direction="vertical" size={10} style={{ width: "100%" }}><div className="gm-assistant-workspace-title"><span className="gm-assistant-workspace-icon"><ProjectOutlined /></span><Title level={5}>{workspace.name}</Title><ArrowRightOutlined /></div><Paragraph type="secondary" ellipsis={{ rows: 2 }}>{workspace.topic || workspace.description || "尚未填写研究主题"}</Paragraph><Space wrap><Tag color="blue">证据对话</Tag><Text type="secondary">{conversationCounts[workspace.id] ?? 0} 段历史对话</Text></Space></Space></Card></Col>)}</Row>}
     </section>
 

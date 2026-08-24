@@ -69,6 +69,29 @@ def test_upload_paper_rejects_empty_file(client: TestClient) -> None:
     assert resp.json()["detail"]["error"] == "empty_file"
 
 
+def test_upload_paper_rejects_non_pdf_content_even_with_pdf_extension(client: TestClient) -> None:
+    ws = _create_workspace(client)
+    resp = client.post(
+        f"/api/v1/workspaces/{ws['id']}/papers/upload",
+        files={"file": ("not-really-a-pdf.pdf", b"<html>not a PDF</html>", "application/pdf")},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "invalid_pdf"
+
+
+def test_upload_paper_respects_workspace_storage_quota(client: TestClient, monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "workspace_storage_quota_bytes", 8)
+    ws = _create_workspace(client)
+    resp = client.post(
+        f"/api/v1/workspaces/{ws['id']}/papers/upload",
+        files={"file": ("quota.pdf", _pdf_bytes(), "application/pdf")},
+    )
+    assert resp.status_code == 413
+    assert resp.json()["detail"]["error"] == "workspace_storage_quota_exceeded"
+
+
 def test_upload_paper_falls_back_to_filename_as_title(client: TestClient) -> None:
     ws = _create_workspace(client)
     resp = client.post(
@@ -152,6 +175,42 @@ def test_soft_delete_paper_hides_from_list(client: TestClient) -> None:
 
     body = client.get(f"/api/v1/workspaces/{ws['id']}/papers").json()
     assert paper["id"] not in {p["id"] for p in body["items"]}
+
+
+def test_external_search_history_and_favorites_are_owner_scoped(
+    client: TestClient, monkeypatch
+) -> None:
+    alice = {"X-User-ID": "alice"}
+    bob = {"X-User-ID": "bob"}
+
+    def fake_search(self, **kwargs):
+        del self, kwargs
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "s2-1", "title": "A shared paper"}],
+        }
+
+    monkeypatch.setattr("app.domains.paper.router.SemanticScholarClient.search", fake_search)
+
+    response = client.get("/api/v1/papers/search?query=graph", headers=alice)
+    assert response.status_code == 200, response.text
+    assert len(client.get("/api/v1/papers/search/history", headers=alice).json()) == 1
+    assert client.get("/api/v1/papers/search/history", headers=bob).json() == []
+
+    favorite_payload = {"paper": {"paperId": "s2-1", "title": "A shared paper"}}
+    assert client.post("/api/v1/papers/favorites", headers=alice, json=favorite_payload).status_code == 200
+    assert client.get("/api/v1/papers/favorites", headers=bob).json() == []
+
+    # The same external paper can be favorited independently by another user.
+    assert client.post("/api/v1/papers/favorites", headers=bob, json=favorite_payload).status_code == 200
+    assert len(client.get("/api/v1/papers/favorites", headers=alice).json()) == 1
+    assert len(client.get("/api/v1/papers/favorites", headers=bob).json()) == 1
+
+    history_id = client.get("/api/v1/papers/search/history", headers=alice).json()[0]["id"]
+    assert client.delete(
+        f"/api/v1/papers/search/history/{history_id}", headers=bob
+    ).status_code == 404
 
 
 # --------------------------------------------------------------- timeline

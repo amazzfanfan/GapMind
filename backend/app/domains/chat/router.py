@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.domains.chat.consistency import message_citation_check, source_marker_check
 from app.domains.chat.models import ChatMessage
 from app.domains.chat.schemas import (
@@ -98,8 +98,11 @@ def list_conversations(
     limit: int = Query(30, ge=1, le=100),
     offset: int = Query(0, ge=0),
     service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ChatConversationListResponse:
-    items, total = service.list_conversations(query, limit, offset, workspace_id)
+    items, total = service.list_conversations(
+        query, limit, offset, workspace_id, actor_id=user_id
+    )
     return ChatConversationListResponse(
         items=[ChatConversationRead.model_validate(item) for item in items],
         total=total,
@@ -109,20 +112,29 @@ def list_conversations(
 
 
 @router.post("/conversations", response_model=ChatConversationRead, status_code=status.HTTP_201_CREATED)
-def create_conversation(payload: ChatConversationCreate, service: ChatService = Depends(_service)) -> ChatConversationRead:
+def create_conversation(
+    payload: ChatConversationCreate,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatConversationRead:
     return ChatConversationRead.model_validate(
-        service.create_conversation(payload.title, payload.workspace_id)
+        service.create_conversation(payload.title, payload.workspace_id, actor_id=user_id)
     )
 
 
 @router.post("/conversations/send", response_model=ChatSendResponse)
-def send_new(payload: ChatMessageCreate, service: ChatService = Depends(_service)) -> ChatSendResponse:
+def send_new(
+    payload: ChatMessageCreate,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatSendResponse:
     return _send_response(
         service.send_new(
             payload.content,
             payload.workspace_id,
             payload.research_plan_id,
             payload.source_artifact_ids,
+            actor_id=user_id,
         )
     )
 
@@ -131,8 +143,9 @@ def send_new(payload: ChatMessageCreate, service: ChatService = Depends(_service
 def list_context_options(
     workspace_id: str = Query(...),
     service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ChatContextOptionsResponse:
-    options = service.context_options(workspace_id)
+    options = service.context_options(workspace_id, actor_id=user_id)
     return ChatContextOptionsResponse(
         plans=[ChatContextPlanOption(**item) for item in options["plans"]],
         artifacts=[ChatContextArtifactOption(**item) for item in options["artifacts"]],
@@ -140,8 +153,12 @@ def list_context_options(
 
 
 @router.get("/conversations/{conversation_id}", response_model=ChatConversationDetail)
-def get_conversation(conversation_id: str, service: ChatService = Depends(_service)) -> ChatConversationDetail:
-    conversation, messages = service.detail(conversation_id)
+def get_conversation(
+    conversation_id: str,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatConversationDetail:
+    conversation, messages = service.detail(conversation_id, actor_id=user_id)
     return ChatConversationDetail(
         conversation=ChatConversationRead.model_validate(conversation),
         messages=[_message_view(item) for item in messages],
@@ -149,13 +166,24 @@ def get_conversation(conversation_id: str, service: ChatService = Depends(_servi
 
 
 @router.patch("/conversations/{conversation_id}", response_model=ChatConversationRead)
-def rename_conversation(conversation_id: str, payload: ChatConversationUpdate, service: ChatService = Depends(_service)) -> ChatConversationRead:
-    return ChatConversationRead.model_validate(service.rename(conversation_id, payload.title))
+def rename_conversation(
+    conversation_id: str,
+    payload: ChatConversationUpdate,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatConversationRead:
+    return ChatConversationRead.model_validate(
+        service.rename(conversation_id, payload.title, actor_id=user_id)
+    )
 
 
 @router.delete("/conversations/{conversation_id}", response_model=ChatDeleteResponse)
-def delete_conversation(conversation_id: str, service: ChatService = Depends(_service)) -> ChatDeleteResponse:
-    service.soft_delete(conversation_id)
+def delete_conversation(
+    conversation_id: str,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatDeleteResponse:
+    service.soft_delete(conversation_id, actor_id=user_id)
     return ChatDeleteResponse(id=conversation_id, deleted=True)
 
 
@@ -166,6 +194,7 @@ def stream_message(
     conversation_id: str,
     payload: ChatMessageCreate,
     service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a chat completion as Server-Sent Events (P0.5-1).
 
@@ -180,11 +209,17 @@ def stream_message(
             workspace_id=payload.workspace_id,
             research_plan_id=payload.research_plan_id,
             source_artifact_ids=payload.source_artifact_ids,
+            actor_id=user_id,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatSendResponse)
-def send_message(conversation_id: str, payload: ChatMessageCreate, service: ChatService = Depends(_service)) -> ChatSendResponse:
+def send_message(
+    conversation_id: str,
+    payload: ChatMessageCreate,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatSendResponse:
     return _send_response(
         service.send(
             conversation_id,
@@ -192,13 +227,21 @@ def send_message(conversation_id: str, payload: ChatMessageCreate, service: Chat
             payload.workspace_id,
             payload.research_plan_id,
             payload.source_artifact_ids,
+            actor_id=user_id,
         )
     )
 
 
 @router.post("/conversations/{conversation_id}/messages/{assistant_message_id}/retry", response_model=ChatSendResponse)
-def retry_message(conversation_id: str, assistant_message_id: str, service: ChatService = Depends(_service)) -> ChatSendResponse:
-    return _send_response(service.retry(conversation_id, assistant_message_id))
+def retry_message(
+    conversation_id: str,
+    assistant_message_id: str,
+    service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
+) -> ChatSendResponse:
+    return _send_response(
+        service.retry(conversation_id, assistant_message_id, actor_id=user_id)
+    )
 
 
 @router.get(
@@ -210,11 +253,13 @@ def get_evidence_context(
     message_id: str,
     evidence_id: str,
     service: ChatService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ChatEvidenceContextRead:
     evidence, artifact, content, unavailable_message = service.evidence_context(
         conversation_id,
         message_id,
         evidence_id,
+        actor_id=user_id,
     )
     return ChatEvidenceContextRead(
         evidence=evidence,

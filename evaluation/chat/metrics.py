@@ -161,6 +161,15 @@ def build_report(gold, observations) -> dict[str, Any]:
         if observation.retrieval_audit is not None
     ]
     audit_latencies = [snapshot.latency_ms for snapshot in audit_snapshots]
+    retrieved_entries = [
+        entry
+        for entry in observed_entries
+        if entry["retrieval_audit"] is not None
+        and entry["retrieval_audit"]["returned_chunk_count"] > 0
+    ]
+    retrieved_without_paper_citation = [
+        entry for entry in retrieved_entries if not entry["paper_marker_check"]["referenced"]
+    ]
     mechanical_passed = not unknown_query_ids and len(observed_entries) == len(entries) and all(
         entry["mechanical_passed"] for entry in observed_entries
     )
@@ -213,6 +222,12 @@ def build_report(gold, observations) -> dict[str, Any]:
                 "p95": _nearest_rank(audit_latencies, 0.95),
                 "max": max(audit_latencies) if audit_latencies else None,
             },
+            "retrieved_without_paper_citation_count": len(retrieved_without_paper_citation),
+            "retrieved_without_paper_citation_rate": (
+                len(retrieved_without_paper_citation) / len(retrieved_entries)
+                if retrieved_entries
+                else None
+            ),
             "mechanical_passed": mechanical_passed,
         },
         "items": entries,

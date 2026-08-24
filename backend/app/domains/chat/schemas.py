@@ -179,6 +179,10 @@ class ChatMessageRead(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    prompt_chars: int | None = Field(default=None, ge=0)
+    response_chars: int | None = Field(default=None, ge=0)
+    first_token_latency_ms: float | None = Field(default=None, ge=0)
+    completion_latency_ms: float | None = Field(default=None, ge=0)
     grounding_status: str = "not_requested"
     retrieval_diagnostic_code: str | None = None
     citation_quality: CitationQualityRead = Field(default_factory=CitationQualityRead)

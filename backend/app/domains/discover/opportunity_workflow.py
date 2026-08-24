@@ -12,11 +12,13 @@ working without rewiring every ``self.X`` access.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select
 
+from app.core.config import settings
 from app.domains.discover.exceptions import (
     DiscoverGateError,
     InvalidOpportunityTransition,
@@ -49,6 +51,41 @@ class OpportunityWorkflow:
     """
 
     # ------------------------------------------------------- read paths
+    @staticmethod
+    def _evidence_freshness(
+        evidence: list[OpportunityEvidence],
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, datetime | None]:
+        """Classify the age of the verification snapshot attached to evidence.
+
+        This is an operational revalidation signal. It intentionally does not
+        claim that a paper or scientific result has become invalid. Evidence
+        rows without a recorded timestamp stay ``unknown`` rather than being
+        silently treated as current.
+        """
+        if not evidence or any(row.created_at is None for row in evidence):
+            return "unknown", None
+
+        timestamps: list[datetime] = []
+        for row in evidence:
+            value = row.created_at
+            if not isinstance(value, datetime):
+                return "unknown", None
+            timestamps.append(value if value.tzinfo else value.replace(tzinfo=timezone.utc))
+
+        checked_at = max(timestamps)
+        current_time = now or datetime.now(timezone.utc)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=timezone.utc)
+        age = max(current_time - checked_at, timedelta(0))
+        max_age = timedelta(days=max(settings.evidence_freshness_max_age_days, 1))
+        if age <= max_age:
+            return "current", checked_at
+        if age <= max_age * 2:
+            return "stale", checked_at
+        return "expired", checked_at
+
     def list_opportunities(
         self,
         workspace_id: str,
@@ -249,6 +286,7 @@ class OpportunityWorkflow:
         critic = source.get("critic_review") or {}
         narrowing = source.get("narrowing_pass") or {}
         synthesis_meta = current.synthesis_metadata or {}
+        evidence_freshness, evidence_checked_at = self._evidence_freshness(evidence)
 
         counts = {"supports": 0, "similar": 0, "counter": 0}
         papers: set[str] = set()
@@ -304,6 +342,8 @@ class OpportunityWorkflow:
             model_name=synthesis_meta.get("provider"),
             corpus_version=synthesis_meta.get("corpus_version") or source.get("corpus_version"),
             human_status=item.status,
+            evidence_freshness=evidence_freshness,
+            evidence_checked_at=evidence_checked_at,
             items=items,
         )
 

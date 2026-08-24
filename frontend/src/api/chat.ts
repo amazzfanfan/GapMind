@@ -22,6 +22,10 @@ export interface ChatMessage {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;
+  prompt_chars: number | null;
+  response_chars: number | null;
+  first_token_latency_ms: number | null;
+  completion_latency_ms: number | null;
   grounding_status?: "not_requested" | "grounded" | "plan_context" | "context_selection_required" | "no_evidence" | "retrieval_failed";
   retrieval_diagnostic_code?: "embedding_unavailable" | "milvus_unavailable" | "collection_unloaded" | "reranker_degraded" | "unknown" | null;
   citation_quality?: CitationQuality;

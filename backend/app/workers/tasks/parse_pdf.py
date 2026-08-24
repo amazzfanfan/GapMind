@@ -80,11 +80,15 @@ def _run_parse_pdf(db: Session, task_id: str) -> dict:
         task_service.transition(task_id, "failed", error=error_msg, progress=1.0)
         # Also mark paper as not_applicable since there's nothing to parse.
         paper.parse_status = "not_applicable"
+        paper.parse_error = error_msg
+        paper.quality_flags = ["no_pdf"]
         db.commit()
         return {"status": "failed", "error": error_msg}
 
     # Mark paper as parsing
     paper.parse_status = "parsing"
+    paper.parse_error = None
+    paper.quality_flags = []
     db.commit()
 
     try:
@@ -96,6 +100,8 @@ def _run_parse_pdf(db: Session, task_id: str) -> dict:
         paper = db.get(Paper, paper_id)
         if paper is not None:
             paper.parse_status = "failed"
+            paper.parse_error = str(e)[:4000]
+            paper.quality_flags = ["parse_failed"]
             db.commit()
             try:
                 from app.domains.discover.service import resume_discover_runs_for_paper
@@ -188,6 +194,14 @@ def _do_parse(
     paper = db.get(Paper, paper.id)  # refresh to avoid stale state
     paper.parse_status = "parsed"
     paper.parsed_at = datetime.now(timezone.utc)
+    paper.page_count = parsed.page_count
+    paper.parsed_text_chars = len(parsed.full_text)
+    paper.quality_flags = list(parsed.warnings)
+    if not parsed.sections:
+        paper.quality_flags.append("no_section_headings_detected")
+    if any(not page.strip() for page in parsed.full_text.split("\f")):
+        paper.quality_flags.append("blank_page_detected")
+    paper.parse_error = None
     paper.chunk_count = len(chunks)
     paper.parsed_text_artifact_id = parsed_text_artifact.id
     paper.chunk_index_artifact_id = chunk_index_artifact.id
@@ -206,6 +220,8 @@ def _do_parse(
             "parsed_md_artifact_id": parsed_md_artifact.id,
             "chunk_index_artifact_id": chunk_index_artifact.id,
             "page_count": parsed.page_count,
+            "parsed_text_chars": len(parsed.full_text),
+            "quality_flags": paper.quality_flags,
         },
     )
 
@@ -218,6 +234,8 @@ def _do_parse(
         payload={
             "chunk_count": len(chunks),
             "page_count": parsed.page_count,
+            "parsed_text_chars": len(parsed.full_text),
+            "quality_flags": paper.quality_flags,
             "sections_detected": len(parsed.sections),
             "parsed_text_artifact_id": parsed_text_artifact.id,
             "chunk_index_artifact_id": chunk_index_artifact.id,

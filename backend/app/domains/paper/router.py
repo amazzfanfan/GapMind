@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.core.logging import get_logger
 from app.domains.paper.schemas import (
     PaperCreate,
@@ -48,6 +48,7 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["paper"])
 
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 S2_SEARCH_FIELDS = (
     "paperId,corpusId,externalIds,title,abstract,year,publicationDate,authors,"
     "venue,url,citationCount,referenceCount,influentialCitationCount,isOpenAccess,"
@@ -69,6 +70,48 @@ def _get_workspace_service(db: Session = Depends(get_db)) -> WorkspaceService:
 
 def _get_semantic_scholar_client() -> SemanticScholarClient:
     return SemanticScholarClient()
+
+
+async def _read_pdf_upload(file: UploadFile) -> bytes:
+    """Read an uploaded PDF with a bounded memory budget and magic check.
+
+    The declared MIME type is supplied by the client and is therefore only
+    advisory.  The extension is checked by the endpoint, while this helper
+    checks the PDF signature and reads in chunks so a forged ``Content-Length``
+    cannot make the process hold an unbounded upload in memory.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_PDF_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={
+                    "error": "file_too_large",
+                    "message": f"PDF exceeds {MAX_PDF_BYTES // (1024 * 1024)} MB",
+                },
+            )
+        chunks.append(chunk)
+
+    content = b"".join(chunks)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "empty_file", "message": "Uploaded file is empty"},
+        )
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_pdf",
+                "message": "Uploaded file does not have a valid PDF signature",
+            },
+        )
+    return content
 
 
 def _arxiv_pdf_url(external_ids: dict[str, object]) -> str | None:
@@ -110,6 +153,7 @@ def search_external_papers(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     token: str | None = Query(None, max_length=500),
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
     client: SemanticScholarClient = Depends(_get_semantic_scholar_client),
 ) -> SemanticScholarSearchResponse:
@@ -153,6 +197,7 @@ def search_external_papers(
             },
             sort=sort,
             result_count=int(raw.get("total") or len(raw.get("data") or [])),
+            actor_id=user_id,
         )
     except Exception as exc:
         db.rollback()
@@ -165,15 +210,22 @@ def search_external_papers(
 def list_search_history(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[SemanticScholarSearchHistoryRead]:
-    rows = PaperSearchService(db).list_history(limit=limit, offset=offset)
+    rows = PaperSearchService(db).list_history(
+        limit=limit, offset=offset, actor_id=user_id
+    )
     return [SemanticScholarSearchHistoryRead.model_validate(row) for row in rows]
 
 
 @router.delete("/papers/search/history/{history_id}")
-def delete_search_history(history_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
-    if not PaperSearchService(db).delete_history(history_id):
+def delete_search_history(
+    history_id: str,
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    if not PaperSearchService(db).delete_history(history_id, actor_id=user_id):
         raise HTTPException(status_code=404, detail={"error": "search_history_not_found"})
     return {"deleted": True}
 
@@ -182,27 +234,36 @@ def delete_search_history(history_id: str, db: Session = Depends(get_db)) -> dic
 def list_search_favorites(
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[SemanticScholarFavoriteRead]:
-    rows = PaperSearchService(db).list_favorites(limit=limit, offset=offset)
+    rows = PaperSearchService(db).list_favorites(
+        limit=limit, offset=offset, actor_id=user_id
+    )
     return [SemanticScholarFavoriteRead.model_validate(row) for row in rows]
 
 
 @router.post("/papers/favorites", response_model=SemanticScholarFavoriteRead)
 def save_search_favorite(
     payload: SemanticScholarFavoriteCreate,
+    user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SemanticScholarFavoriteRead:
     row = PaperSearchService(db).upsert_favorite(
         paper=payload.paper.model_dump(by_alias=True),
         note=payload.note,
+        actor_id=user_id,
     )
     return SemanticScholarFavoriteRead.model_validate(row)
 
 
 @router.delete("/papers/favorites/{paper_id}")
-def delete_search_favorite(paper_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
-    if not PaperSearchService(db).delete_favorite(paper_id):
+def delete_search_favorite(
+    paper_id: str,
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    if not PaperSearchService(db).delete_favorite(paper_id, actor_id=user_id):
         raise HTTPException(status_code=404, detail={"error": "favorite_not_found"})
     return {"deleted": True}
 
@@ -345,20 +406,7 @@ async def upload_paper(
             detail={"error": "invalid_file", "message": "A .pdf file is required"},
         )
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "empty_file", "message": "Uploaded file is empty"},
-        )
-    if len(content) > MAX_PDF_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail={
-                "error": "file_too_large",
-                "message": f"PDF exceeds {MAX_PDF_BYTES // (1024 * 1024)} MB",
-            },
-        )
+    content = await _read_pdf_upload(file)
 
     # When the user doesn't supply a title, pass None - the service will
     # fill it from PDF metadata, or fall back to the filename stem.
@@ -382,7 +430,9 @@ async def upload_paper(
         payload=payload,
         filename=file.filename,
         content=content,
-        mime_type=file.content_type or "application/pdf",
+        # The client MIME type is advisory; the helper already checked the
+        # PDF signature, so persist and serve the authoritative type.
+        mime_type="application/pdf",
     )
     return PaperRead.model_validate(paper)
 
@@ -412,27 +462,14 @@ async def attach_pdf_to_paper(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "invalid_file", "message": "A .pdf file is required"},
         )
-    content = await file.read()
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "empty_file", "message": "Uploaded file is empty"},
-        )
-    if len(content) > MAX_PDF_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail={
-                "error": "file_too_large",
-                "message": f"PDF exceeds {MAX_PDF_BYTES // (1024 * 1024)} MB",
-            },
-        )
+    content = await _read_pdf_upload(file)
 
     paper = service.attach_pdf_to_existing(
         workspace_id=workspace_id,
         paper_id=paper_id,
         filename=file.filename,
         content=content,
-        mime_type=file.content_type or "application/pdf",
+        mime_type="application/pdf",
     )
     return PaperRead.model_validate(paper)
 

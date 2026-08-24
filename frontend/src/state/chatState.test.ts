@@ -12,7 +12,7 @@ describe("chat helpers", () => {
   });
 
   it("sorts messages by sequence", () => {
-    const base = { conversation_id: "c", role: "user" as const, content: "", status: "completed" as const, error_message: null, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, created_at: "", updated_at: "" };
+    const base = { conversation_id: "c", role: "user" as const, content: "", status: "completed" as const, error_message: null, model: null, prompt_tokens: null, completion_tokens: null, total_tokens: null, prompt_chars: null, response_chars: null, first_token_latency_ms: null, completion_latency_ms: null, created_at: "", updated_at: "" };
     expect(sortChatMessages([{ ...base, id: "2", sequence: 2 }, { ...base, id: "1", sequence: 1 }]).map((item) => item.id)).toEqual(["1", "2"]);
   });
 

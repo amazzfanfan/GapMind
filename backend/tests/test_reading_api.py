@@ -68,3 +68,23 @@ def test_reading_item_can_be_removed_and_readded(client: TestClient) -> None:
     readded = client.post(f"/api/v1/reading/papers/{paper_id}")
     assert readded.status_code == 201
     assert readded.json()["paper_id"] == paper_id
+
+
+def test_reading_paper_and_annotation_routes_are_owner_scoped(client: TestClient) -> None:
+    headers = {"X-User-ID": "alice"}
+    workspace = client.post(
+        "/api/v1/workspaces", headers=headers, json={"name": "Alice Reading WS"}
+    ).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        headers=headers,
+        json={"title": "Alice Paper", "authors": ["Alice"], "year": 2025},
+    ).json()
+
+    other_headers = {"X-User-ID": "bob"}
+    assert client.post(
+        f"/api/v1/reading/papers/{paper['id']}", headers=other_headers
+    ).status_code == 404
+    assert client.get(
+        "/api/v1/reading/papers", headers=other_headers
+    ).json()["total"] == 0

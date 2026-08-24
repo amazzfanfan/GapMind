@@ -57,6 +57,10 @@ class Paper(Base, UUIDPKMixin, TimestampMixin):
     parsed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    parsed_text_chars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    quality_flags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Points to the parsed_text artifact produced by parse_pdf
     parsed_text_artifact_id: Mapped[str | None] = mapped_column(

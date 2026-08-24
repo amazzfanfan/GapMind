@@ -10,7 +10,7 @@ import secrets
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,6 +25,15 @@ class ArtifactNotFoundError(Exception):
     def __init__(self, artifact_id: str) -> None:
         super().__init__(f"Artifact not found: {artifact_id}")
         self.artifact_id = artifact_id
+
+
+class ArtifactQuotaExceededError(Exception):
+    """Raised before writing when a workspace storage quota would be exceeded."""
+
+    def __init__(self, workspace_id: str, quota_bytes: int) -> None:
+        super().__init__(f"Workspace storage quota exceeded: {workspace_id}")
+        self.workspace_id = workspace_id
+        self.quota_bytes = quota_bytes
 
 
 class ArtifactService:
@@ -62,6 +71,21 @@ class ArtifactService:
         """
         if not content:
             raise ValueError("Uploaded file is empty")
+
+        current_bytes = int(
+            self.db.execute(
+                select(func.coalesce(func.sum(Artifact.size_bytes), 0)).where(
+                    Artifact.workspace_id == workspace_id,
+                    Artifact.is_deleted.is_(False),
+                )
+            ).scalar()
+            or 0
+        )
+        if current_bytes + len(content) > settings.workspace_storage_quota_bytes:
+            raise ArtifactQuotaExceededError(
+                workspace_id,
+                settings.workspace_storage_quota_bytes,
+            )
 
         ws_dir = self._workspace_dir(workspace_id)
         token = secrets.token_hex(8)

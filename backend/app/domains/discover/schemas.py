@@ -280,6 +280,8 @@ class EvidenceManifest(BaseModel):
     model_name: str | None = None
     corpus_version: str | None = None
     human_status: str | None = None
+    evidence_freshness: Literal["current", "stale", "expired", "unknown"] = "unknown"
+    evidence_checked_at: datetime | None = None
     items: list[EvidenceManifestItem] = Field(default_factory=list)
 
 

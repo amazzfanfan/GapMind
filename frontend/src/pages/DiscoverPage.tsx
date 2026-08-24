@@ -550,6 +550,7 @@ function OpportunityPanel({ workspaceId, detail, loading, onAction, onEdit, onCo
   const decisionColor = (action: string) => ({ confirm: "green", edit_confirm: "blue", reject: "red", defer: "orange" }[action] ?? "default");
   return <Space direction="vertical" style={{ width: "100%" }}>
     <Space wrap><Tag color={statusColor(opportunityStatus(detail.opportunity))}>{opportunityStatusLabel(opportunityStatus(detail.opportunity))}</Tag><Tag color={statusColor(version?.verification_status || "unverified")}>{verificationDisplayLabel(version?.verification_status)}</Tag><Tag>证据覆盖率 {Math.round((version?.evidence_coverage || 0) * 100)}%</Tag><Tag>智能体置信度 {Math.round(detail.opportunity.confidence * 100)}%</Tag></Space>
+    <Alert type="info" showIcon message="置信度不等于证据覆盖率" description="智能体置信度只是候选排序信号；是否可以确认，以独立全文证据、证据门、核验状态和人工决策为准。" />
     {!confirmable && <Alert type="warning" showIcon message="该研究机会目前还不能确认" description={gate?.blockingMissing.length ? <List size="small" dataSource={gate.blockingMissing} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} /> : gateMessageLabel(gate?.reason || "核心证据门槛尚未满足。") } action={supporting.length ? <Button size="small" onClick={onReassess} loading={loading}>重新评估证据</Button> : undefined} />}
     {confirmable && gate?.warnings.length ? <Alert type="info" showIcon message="可以确认，但仍有核验警告" description={<List size="small" dataSource={gate.warnings} renderItem={(item) => <List.Item>{gateMessageLabel(item)}</List.Item>} />} /> : null}
     <EvidencePassportCard manifest={detail.evidence_manifest} />
@@ -603,6 +604,8 @@ function EvidencePassportCard({ manifest }: { manifest: EvidenceManifest | null 
   const gateLabel = manifest.gate_verified ? "已通过" : manifest.gate_confirmable ? "可确认（带警告）" : "未通过";
   const criticLabel = manifest.critic_verdict === "reject" ? <Tag color="red">reject</Tag> : manifest.critic_verdict === "narrow" ? <Tag color="orange">narrow</Tag> : manifest.critic_verdict ? <Tag color="green">{manifest.critic_verdict}</Tag> : null;
   const narrowingLabel = manifest.narrowing_outcome === "obstacle_found" ? "发现反证障碍" : manifest.narrowing_outcome === "direction_clear" ? "收窄方向可行" : null;
+  const freshnessLabel = manifest.evidence_freshness === "current" ? "当前快照" : manifest.evidence_freshness === "stale" ? "版本较旧" : manifest.evidence_freshness === "expired" ? "需要重新核验" : "未记录";
+  const freshnessColor = manifest.evidence_freshness === "current" ? "green" : manifest.evidence_freshness === "expired" ? "red" : manifest.evidence_freshness === "stale" ? "orange" : "default";
   return (
     <Card size="small" title="证据可信度（Evidence Passport）">
       <Descriptions column={{ xs: 1, sm: 2 }} size="small">
@@ -617,6 +620,7 @@ function EvidencePassportCard({ manifest }: { manifest: EvidenceManifest | null 
         {criticLabel && <Descriptions.Item label="Critic 判定">{criticLabel}</Descriptions.Item>}
         {narrowingLabel && <Descriptions.Item label="收窄结果">{narrowingLabel}</Descriptions.Item>}
         <Descriptions.Item label="人工状态">{opportunityStatusLabel(manifest.human_status ?? "")}</Descriptions.Item>
+        <Descriptions.Item label="证据新鲜度"><Tag color={freshnessColor}>{freshnessLabel}</Tag>{manifest.evidence_checked_at ? `（截至 ${new Date(manifest.evidence_checked_at).toLocaleString()}）` : ""}</Descriptions.Item>
         <Descriptions.Item label="Prompt / 模型">{manifest.prompt_version || "—"} / {manifest.model_name || "—"}</Descriptions.Item>
       </Descriptions>
     </Card>

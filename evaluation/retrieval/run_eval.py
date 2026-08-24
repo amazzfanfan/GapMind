@@ -170,8 +170,8 @@ def run_semantic_search(db, workspace_id: str, q: SemanticSearchQuery, top_k: in
         "retrieved_paper_ids": pids,
         "status": resp.status,
         "count": len(pids),
-        "recall@10": recall_at_k({target.id}, pids, top_k),
-        "mrr@10": mrr_at_k({target.id}, pids, top_k),
+        f"recall@{top_k}": recall_at_k({target.id}, pids, top_k),
+        f"mrr@{top_k}": mrr_at_k({target.id}, pids, top_k),
         "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
     }
 
@@ -200,8 +200,8 @@ def run_similar_work(db, workspace_id: str, q: SimilarWorkQuery, top_k: int, min
         "retrieved_paper_ids": pids,
         "status": resp.status,
         "count": len(pids),
-        "recall@10": recall_at_k(gold_ids, pids, top_k),
-        "mrr@10": mrr_at_k(gold_ids, pids, top_k),
+        f"recall@{top_k}": recall_at_k(gold_ids, pids, top_k),
+        f"mrr@{top_k}": mrr_at_k(gold_ids, pids, top_k),
         "diversity": paper_diversity(pids, top_k),
         "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
         "source_leaked": source.id in pids,
@@ -247,8 +247,8 @@ def run_counter_evidence(db, workspace_id: str, q: CounterEvidenceQuery, top_k: 
         "retrieved_paper_ids": pids,
         "status": resp.status,
         "count": len(pids),
-        "recall@10": recall_at_k(gold_ids, pids, top_k),
-        "mrr@10": mrr_at_k(gold_ids, pids, top_k),
+        f"recall@{top_k}": recall_at_k(gold_ids, pids, top_k),
+        f"mrr@{top_k}": mrr_at_k(gold_ids, pids, top_k),
         "diversity": paper_diversity(pids, top_k),
         "leakage": workspace_leakage(_paper_workspace_ids(db, resp.items, workspace_id), workspace_id),
         "source_leaked": source.id in pids,
@@ -338,17 +338,21 @@ def _run(db, gold: GoldSet, workspace_id: str, args: argparse.Namespace) -> int:
         "counter_evidence": ce_entries,
     }
 
+    recall_key = f"recall@{top_k}"
+    mrr_key = f"mrr@{top_k}"
+
     def valid(entries: list[dict]) -> list[dict]:
-        return [e for e in entries if "recall@10" in e and isinstance(e["recall@10"], (int, float))]
+        return [e for e in entries if recall_key in e and isinstance(e[recall_key], (int, float))]
 
     for name, entries in (("semantic_search", ss_entries), ("similar_work", sw_entries), ("counter_evidence", ce_entries)):
         valid_entries = valid(entries)
-        agg = _aggregate(valid_entries, ("recall@10", "mrr@10", "diversity", "leakage"))
+        agg = _aggregate(valid_entries, (recall_key, mrr_key, "diversity", "leakage"))
         threshold = GATE_THRESHOLDS[name]
         report["gate"][name] = gate_report(
-            recall=agg["recall@10"] or 0.0,
+            recall=agg[recall_key] or 0.0,
             threshold=threshold,
-            mrr=agg["mrr@10"],
+            k=top_k,
+            mrr=agg[mrr_key],
             ndcg=None,
             diversity=agg["diversity"],
             leakage=agg["leakage"],
@@ -365,7 +369,7 @@ def _run(db, gold: GoldSet, workspace_id: str, args: argparse.Namespace) -> int:
     print("\n=== Gate verdict ===")
     for name, block in report["gate"].items():
         status = "PASS" if block["passed"] else "FAIL"
-        print(f"  [{status}] {name}: recall@{top_k}={block['recall@10']} "
+        print(f"  [{status}] {name}: recall@{top_k}={block[recall_key]} "
               f"(threshold {block['recall_threshold']}) leakage={block['workspace_leakage']}")
     print(f"  overall: {'PASS' if overall_passed else 'FAIL'}")
 

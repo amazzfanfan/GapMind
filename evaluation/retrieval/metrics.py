@@ -77,6 +77,7 @@ def gate_report(
     *,
     recall: float,
     threshold: float,
+    k: int = 10,
     mrr: float | None = None,
     ndcg: float | None = None,
     diversity: float | None = None,
@@ -85,11 +86,11 @@ def gate_report(
     """Build the per-benchmark Gate verdict block for the report JSON."""
     recall_passed = recall >= threshold - 1e-9
     return {
-        "recall@10": round(recall, 4),
+        f"recall@{k}": round(recall, 4),
         "recall_threshold": threshold,
         "recall_passed": recall_passed,
-        "mrr@10": round(mrr, 4) if mrr is not None else None,
-        "ndcg@10": round(ndcg, 4) if ndcg is not None else None,
+        f"mrr@{k}": round(mrr, 4) if mrr is not None else None,
+        f"ndcg@{k}": round(ndcg, 4) if ndcg is not None else None,
         "paper_diversity": round(diversity, 4) if diversity is not None else None,
         "workspace_leakage": round(leakage, 4) if leakage is not None else None,
         "passed": recall_passed and (leakage is None or leakage == 0.0),

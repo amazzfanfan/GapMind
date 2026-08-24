@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "case_id": "chat-gnn-explanations-draft-v3",
+  "corpus_version": "gnn-explanation-9papers",
+  "annotation_status": "draft",
+  "freeze": {
+    "chunk_version": "v1",
+    "embedding_model": "BAAI/bge-m3",
+    "reranker_model": "BAAI/bge-reranker-v2-m3",
+    "judge_model": "deepseek-v4-flash"
+  },
+  "questions": [
+    {
+      "query_id": "chat-gnn-08",
+      "question": "当前工作区论文主要在哪些数据集、实验设置和评价指标上评估 GNN 解释方法？请只依据工作区证据回答，证据不足的部分明确说明。",
+      "expected_verdict": "supported",
+      "required_paper_refs": [
+        "ProtGNN",
+        "GraphFramEx: Towards Systematic Evaluation of Explainability Methods for Graph Neural Networks",
+        "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks"
+      ],
+      "note": "候选必需论文按该真实回答实际使用的 [E1]-[E3] 映射列出；仍需逐篇人工复核，不能直接冻结。"
+    },
+    {
+      "query_id": "chat-gnn-09",
+      "question": "这些 GNN 解释方法分别与哪些基线比较？请说明相对优势和局限，并使用有效的 [En] 引用；证据不足时明确说明。",
+      "expected_verdict": "supported",
+      "required_paper_refs": [
+        "Zorro: Valid, Sparse, and Stable Explanations in Graph Neural Networks",
+        "Self-Interpretable Graph Learning with Sufficient and Necessary Explanations",
+        "TIF",
+        "LogiX-GIN",
+        "ProtGNN"
+      ],
+      "note": "候选必需论文按该真实回答实际使用的 [E1]、[E3]-[E6] 映射列出；仍需逐篇人工复核，不能直接冻结。"
+    }
+  ]
+}

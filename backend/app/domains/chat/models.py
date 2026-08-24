@@ -11,16 +11,16 @@ from app.db.base import Base, TimestampMixin, UUIDPKMixin
 
 
 class ChatConversation(Base, UUIDPKMixin, TimestampMixin):
-    """A soft-deletable conversation shared by the current deployment.
-
-    GapMind has no user/authentication model yet, so conversations are scoped
-    to the deployment rather than to a user account.
-    """
+    """A soft-deletable conversation scoped to its acting owner."""
 
     __tablename__ = "chat_conversations"
-    __table_args__ = (Index("ix_chat_conversations_last_message_at", "last_message_at"),)
+    __table_args__ = (
+        Index("ix_chat_conversations_last_message_at", "last_message_at"),
+        Index("ix_chat_conversations_owner_id", "owner_id"),
+    )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="新对话")
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False, default="user")
     workspace_id: Mapped[str | None] = mapped_column(
         ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -50,6 +50,12 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Generation-only observability. Nullable for historical rows, failed
+    # calls, and non-streaming first-token latency which is not observable.
+    prompt_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_token_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completion_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     grounding_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_requested"
     )

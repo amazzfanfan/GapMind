@@ -100,6 +100,10 @@ def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
     assert body["assistant_message"]["status"] == "completed"
     assert body["assistant_message"]["model"] == "fake-deepseek"
     assert body["assistant_message"]["total_tokens"] == 15
+    assert body["assistant_message"]["prompt_chars"] == len("什么是时间图神经网络？")
+    assert body["assistant_message"]["response_chars"] == len("这是 AI 的回答")
+    assert body["assistant_message"]["first_token_latency_ms"] is None
+    assert body["assistant_message"]["completion_latency_ms"] >= 0
     assert len(fake_gateway.calls) == 1
     assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
 
@@ -394,6 +398,143 @@ def test_workspace_chat_without_hits_does_not_ask_llm(client, fake_gateway, monk
     assert fake_gateway.calls == []
 
 
+def test_workspace_chat_keeps_reranker_degraded_as_a_diagnostic_state(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "重排降级工作区"}).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "Degraded Reranker Evidence", "authors": [], "year": 2024},
+    ).json()
+    from app.domains.artifact.service import ArtifactService
+
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content=b"Evidence remains available when reranking degrades.",
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            status="degraded",
+            diagnostic_code="reranker_degraded",
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-reranker-degraded",
+                    section="Method",
+                    text="Evidence remains available when reranking degrades.",
+                    score=0.7,
+                    retrieval_stage="candidate_recall",
+                )
+            ],
+            total=1,
+            filters_applied={
+                "recall_count": 3,
+                "reranker_enabled": True,
+                "reranker_applied": False,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(source_artifact_id=artifact.id, start_char=0, end_char=52),
+    )
+    fake_gateway.content = "降级时仍有论文证据。[E1]"
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "重排降级时还能依据什么？", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 200
+    assistant = response.json()["assistant_message"]
+    assert assistant["status"] == "completed"
+    assert assistant["grounding_status"] == "grounded"
+    assert assistant["retrieval_audit"]["status"] == "degraded"
+    assert assistant["retrieval_audit"]["diagnostic_code"] == "reranker_degraded"
+    assert assistant["retrieval_audit"]["reranker_status"] == "degraded"
+    assert assistant["citations"]
+
+
+def test_stream_workspace_chat_without_hits_has_the_same_no_evidence_contract(
+    client, fake_gateway, monkeypatch
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "流式空工作区"}).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[],
+            total=0,
+        ),
+    )
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "stream no evidence", "workspace_id": workspace["id"]},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages/stream",
+        json={"content": "总结工作区论文"},
+    )
+
+    assert response.status_code == 200
+    assert '"type": "done"' in response.text
+    detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
+    assistant = [item for item in detail["messages"] if item["role"] == "assistant"][-1]
+    assert assistant["grounding_status"] == "no_evidence"
+    assert assistant["citations"] == []
+    assert "没有检索到" in assistant["content"]
+    assert fake_gateway.calls == []
+    assert fake_gateway.stream_calls == []
+
+
+def test_sync_retrieval_failure_keeps_diagnostic_and_error_envelope(
+    client, fake_gateway, monkeypatch
+):
+    workspace = client.post(
+        "/api/v1/workspaces",
+        json={"name": "同步向量服务异常工作区"},
+    ).json()
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            status="failed",
+            error="embedding provider unavailable",
+            diagnostic_code="embedding_unavailable",
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/chat/conversations/send",
+        json={"content": "检索失败时应保持可诊断", "workspace_id": workspace["id"]},
+    )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["error"] == "workspace_retrieval_failed"
+    assert detail["diagnostic_code"] == "embedding_unavailable"
+    conversation_id = detail["conversation_id"]
+    messages = client.get(f"/api/v1/chat/conversations/{conversation_id}").json()["messages"]
+    assistant = [item for item in messages if item["role"] == "assistant"][-1]
+    assert assistant["status"] == "failed"
+    assert assistant["grounding_status"] == "retrieval_failed"
+    assert assistant["retrieval_diagnostic_code"] == "embedding_unavailable"
+    assert fake_gateway.calls == []
+
+
 def test_workspace_chat_repairs_invalid_citation_once_and_persists_audit(
     client,
     db_session,
@@ -468,6 +609,7 @@ def test_workspace_chat_repairs_invalid_citation_once_and_persists_audit(
     }
     assert len(fake_gateway.calls) == 2
     assert all(call["disable_thinking"] is True for call in fake_gateway.call_kwargs)
+    assert all("reasoning_effort" not in call for call in fake_gateway.call_kwargs)
     assert fake_gateway.call_kwargs[1]["max_tokens"] == 2000
 
 
@@ -747,6 +889,10 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["content"] == "第一段内容"
     assert assistant["status"] == "completed"
+    assert assistant["prompt_chars"] == len("hi")
+    assert assistant["response_chars"] == len("第一段内容")
+    assert assistant["first_token_latency_ms"] >= 0
+    assert assistant["completion_latency_ms"] >= assistant["first_token_latency_ms"]
     assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
 
 
@@ -812,6 +958,77 @@ def test_stream_message_repairs_invalid_citation_before_persisting(
     assert assistant["citation_quality"]["status"] == "repaired"
     assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
     assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
+    assert "reasoning_effort" not in fake_gateway.stream_call_kwargs[-1]
+    assert "reasoning_effort" not in fake_gateway.call_kwargs[-1]
+
+
+def test_stream_rejects_invalid_citation_after_one_failed_repair(
+    client,
+    db_session,
+    fake_gateway,
+    monkeypatch,
+):
+    workspace = client.post("/api/v1/workspaces", json={"name": "流式引用回退"}).json()
+    paper = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/papers",
+        json={"title": "Stream Fallback Evidence", "authors": [], "year": 2024},
+    ).json()
+    from app.domains.artifact.service import ArtifactService
+
+    artifact = ArtifactService(db_session).save_upload(
+        workspace_id=workspace["id"],
+        filename="paper.txt",
+        content=b"Stream fallback evidence.",
+        mime_type="text/plain",
+        kind="parsed_text",
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.semantic_search",
+        lambda **kwargs: RetrievalResponse(
+            workspace_id=kwargs["workspace_id"],
+            query=kwargs["query"],
+            items=[
+                RetrievalResultItem(
+                    paper_id=paper["id"],
+                    artifact_id=artifact.id,
+                    chunk_id="chunk-stream-fallback",
+                    section="Results",
+                    text="Stream fallback evidence.",
+                    score=0.8,
+                    retrieval_stage="reranked",
+                )
+            ],
+            total=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.domains.chat.service.find_chunk_record",
+        lambda *_: SimpleNamespace(source_artifact_id=artifact.id, start_char=0, end_char=25),
+    )
+    fake_gateway.stream_deltas = ["初始回答 [E9]"]
+    fake_gateway.chat_contents = ["修复仍然错误 [E8]"]
+    conversation = client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "stream fallback", "workspace_id": workspace["id"]},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/chat/conversations/{conversation['id']}/messages/stream",
+        json={"content": "证据是否足够？"},
+    )
+
+    assert response.status_code == 200
+    detail = client.get(f"/api/v1/chat/conversations/{conversation['id']}").json()
+    assistant = [item for item in detail["messages"] if item["role"] == "assistant"][-1]
+    assert "未能通过工作区论文引用校验" in assistant["content"]
+    assert "[E8]" not in assistant["content"]
+    assert assistant["citation_quality"]["status"] == "rejected"
+    assert assistant["citation_quality"]["attempts"] == 1
+    assert assistant["citation_quality"]["fallback"] is True
+    assert len(fake_gateway.stream_calls) == 1
+    assert len(fake_gateway.call_kwargs) == 1
+    assert fake_gateway.call_kwargs[0]["disable_thinking"] is True
+    assert "reasoning_effort" not in fake_gateway.call_kwargs[0]
 
 
 def test_stream_retrieval_failure_emits_sse_error_and_marks_failed(
@@ -923,3 +1140,32 @@ def test_stale_generating_row_is_healed_instead_of_bricking(db_session, fake_gat
     assert "generating" not in statuses
     assert statuses.count("failed") == 1  # the healed stale row
     assert statuses.count("completed") == 1  # the new answer
+
+
+def test_chat_conversations_are_scoped_to_owner(client, fake_gateway):
+    created = client.post(
+        "/api/v1/chat/conversations",
+        headers={"X-User-ID": "alice"},
+        json={"title": "Alice private conversation"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["id"]
+
+    own = client.get(
+        f"/api/v1/chat/conversations/{conversation_id}",
+        headers={"X-User-ID": "alice"},
+    )
+    assert own.status_code == 200
+
+    other_list = client.get(
+        "/api/v1/chat/conversations",
+        headers={"X-User-ID": "bob"},
+    )
+    assert other_list.status_code == 200
+    assert other_list.json()["total"] == 0
+
+    other_detail = client.get(
+        f"/api/v1/chat/conversations/{conversation_id}",
+        headers={"X-User-ID": "bob"},
+    )
+    assert other_detail.status_code == 404
