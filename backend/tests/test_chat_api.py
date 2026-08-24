@@ -100,6 +100,10 @@ def test_first_send_creates_conversation_and_two_messages(client, fake_gateway):
     assert body["assistant_message"]["status"] == "completed"
     assert body["assistant_message"]["model"] == "fake-deepseek"
     assert body["assistant_message"]["total_tokens"] == 15
+    assert body["assistant_message"]["prompt_chars"] == len("什么是时间图神经网络？")
+    assert body["assistant_message"]["response_chars"] == len("这是 AI 的回答")
+    assert body["assistant_message"]["first_token_latency_ms"] is None
+    assert body["assistant_message"]["completion_latency_ms"] >= 0
     assert len(fake_gateway.calls) == 1
     assert fake_gateway.call_kwargs[-1]["disable_thinking"] is True
 
@@ -885,6 +889,10 @@ def test_stream_message_emits_sse_events(client, fake_gateway):
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
     assert assistant["content"] == "第一段内容"
     assert assistant["status"] == "completed"
+    assert assistant["prompt_chars"] == len("hi")
+    assert assistant["response_chars"] == len("第一段内容")
+    assert assistant["first_token_latency_ms"] >= 0
+    assert assistant["completion_latency_ms"] >= assistant["first_token_latency_ms"]
     assert fake_gateway.stream_call_kwargs[-1]["disable_thinking"] is True
 
 

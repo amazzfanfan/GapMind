@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.domains.chat.retrieval_facets import (
     MAX_RETRIEVAL_FACETS,
     plan_retrieval_facets,
 )
+from app.domains.retrieval.schemas import RetrievalResultItem
 
 
 def test_formula_facet_preserves_the_normalized_primary_question() -> None:
@@ -46,3 +49,37 @@ def test_english_word_matching_does_not_match_longer_words() -> None:
 
 def test_empty_question_returns_no_facet() -> None:
     assert plan_retrieval_facets(" \n\t ") == ()
+
+
+def test_eval_item_snapshot_preserves_offsets_without_exporting_text(monkeypatch) -> None:
+    from evaluation.retrieval import run_chat_facet_ab
+
+    monkeypatch.setattr(
+        run_chat_facet_ab,
+        "find_chunk_record",
+        lambda workspace_id, paper_id, chunk_id: SimpleNamespace(
+            workspace_id=workspace_id,
+            paper_id=paper_id,
+            section="Method",
+            chunk_index=4,
+            start_char=120,
+            end_char=240,
+        ),
+    )
+    item = RetrievalResultItem(
+        paper_id="paper-1",
+        artifact_id="artifact-1",
+        chunk_id="chunk-1",
+        section="Unknown",
+        text="private retrieved text",
+        score=0.81234567,
+    )
+
+    snapshot = run_chat_facet_ab._item_snapshot("workspace-1", item)
+
+    assert snapshot["section"] == "Method"
+    assert snapshot["chunk_index"] == 4
+    assert snapshot["start_char"] == 120
+    assert snapshot["end_char"] == 240
+    assert snapshot["chunk_record_resolved"] is True
+    assert "text" not in snapshot

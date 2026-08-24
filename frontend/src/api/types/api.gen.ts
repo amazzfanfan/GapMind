@@ -2003,6 +2003,14 @@ export interface components {
             completion_tokens?: number | null;
             /** Total Tokens */
             total_tokens?: number | null;
+            /** Prompt Chars */
+            prompt_chars?: number | null;
+            /** Response Chars */
+            response_chars?: number | null;
+            /** First Token Latency Ms */
+            first_token_latency_ms?: number | null;
+            /** Completion Latency Ms */
+            completion_latency_ms?: number | null;
             /**
              * Grounding Status
              * @default not_requested

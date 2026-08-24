@@ -74,15 +74,15 @@ def _metrics(
 
     if response.status == "failed":
         return {
-            "recall@10": None,
-            "mrr@10": None,
+            f"recall@{top_k}": None,
+            f"mrr@{top_k}": None,
             "paper_diversity": None,
             "workspace_leakage": None,
         }
     paper_ids = _paper_ids(response.items)
     return {
-        "recall@10": round(recall_at_k({target_paper_id}, paper_ids, top_k), 4),
-        "mrr@10": round(mrr_at_k({target_paper_id}, paper_ids, top_k), 4),
+        f"recall@{top_k}": round(recall_at_k({target_paper_id}, paper_ids, top_k), 4),
+        f"mrr@{top_k}": round(mrr_at_k({target_paper_id}, paper_ids, top_k), 4),
         "paper_diversity": round(paper_diversity(paper_ids, top_k), 4),
         "workspace_leakage": round(
             workspace_leakage(
@@ -146,6 +146,16 @@ def run_experiment(*, workspace_id: str, gold: GoldSet, top_k: int) -> dict[str,
                 for facet in facets
             ]
             merged = _merge_items([primary, *facet_responses], top_k)
+            response_set = [primary, *facet_responses]
+            recall_count = sum(
+                (response.filters_applied or {}).get("recall_count", 0)
+                for response in response_set
+            )
+            reranker_applied = all(
+                (response.filters_applied or {}).get("reranker_applied", False)
+                for response in response_set
+                if response.status != "failed"
+            )
             faceted = RetrievalResponse(
                 request_id=primary.request_id,
                 workspace_id=workspace_id,
@@ -161,9 +171,11 @@ def run_experiment(*, workspace_id: str, gold: GoldSet, top_k: int) -> dict[str,
                 filters_applied={
                     "query_count": 1 + len(facet_responses),
                     "primary": primary.filters_applied,
-                    "facet_recall_count": sum(
-                        (response.filters_applied or {}).get("recall_count", 0)
-                        for response in facet_responses
+                    "recall_count": recall_count,
+                    "reranker_applied": reranker_applied,
+                    "reranker_enabled": any(
+                        (response.filters_applied or {}).get("reranker_enabled", False)
+                        for response in response_set
                     ),
                 },
                 diagnostic_code=next(
@@ -204,21 +216,21 @@ def run_experiment(*, workspace_id: str, gold: GoldSet, top_k: int) -> dict[str,
             row
             for row in rows
             if "primary" in row
-            and row["primary"]["metrics"]["recall@10"] is not None
-            and row["faceted"]["metrics"]["recall@10"] is not None
+            and row["primary"]["metrics"][f"recall@{top_k}"] is not None
+            and row["faceted"]["metrics"][f"recall@{top_k}"] is not None
         ]
         facet_comparable = [row for row in comparable if row["facet_names"]]
         improved = [
             row
             for row in facet_comparable
-            if row["faceted"]["metrics"]["recall@10"]
-            > row["primary"]["metrics"]["recall@10"]
+            if row["faceted"]["metrics"][f"recall@{top_k}"]
+            > row["primary"]["metrics"][f"recall@{top_k}"]
         ]
         regressed = [
             row
             for row in facet_comparable
-            if row["faceted"]["metrics"]["recall@10"]
-            < row["primary"]["metrics"]["recall@10"]
+            if row["faceted"]["metrics"][f"recall@{top_k}"]
+            < row["primary"]["metrics"][f"recall@{top_k}"]
         ]
 
         def mean(rows_to_average: list[dict[str, Any]], side: str, metric: str) -> float | None:
@@ -268,10 +280,14 @@ def run_experiment(*, workspace_id: str, gold: GoldSet, top_k: int) -> dict[str,
                         ).items()
                     )
                 ),
-                "primary_mean_recall@10": mean(comparable, "primary", "recall@10"),
-                "faceted_mean_recall@10": mean(comparable, "faceted", "recall@10"),
-                "primary_mean_mrr@10": mean(comparable, "primary", "mrr@10"),
-                "faceted_mean_mrr@10": mean(comparable, "faceted", "mrr@10"),
+                f"primary_mean_recall@{top_k}": mean(
+                    comparable, "primary", f"recall@{top_k}"
+                ),
+                f"faceted_mean_recall@{top_k}": mean(
+                    comparable, "faceted", f"recall@{top_k}"
+                ),
+                f"primary_mean_mrr@{top_k}": mean(comparable, "primary", f"mrr@{top_k}"),
+                f"faceted_mean_mrr@{top_k}": mean(comparable, "faceted", f"mrr@{top_k}"),
                 "primary_max_workspace_leakage": max(
                     (
                         row["primary"]["metrics"]["workspace_leakage"]

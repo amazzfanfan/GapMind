@@ -33,7 +33,7 @@ import app.db.models  # noqa: E402,F401
 from app.db.session import SessionLocal  # noqa: E402
 from app.domains.chat.retrieval_facets import plan_retrieval_facets  # noqa: E402
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem  # noqa: E402
-from app.domains.retrieval.service import semantic_search  # noqa: E402
+from app.domains.retrieval.service import find_chunk_record, semantic_search  # noqa: E402
 from evaluation.chat.gold_set import ChatQAGoldSet  # noqa: E402
 from evaluation.retrieval.run_eval import resolve_many  # noqa: E402
 
@@ -105,6 +105,34 @@ def _merge_items(responses: list[RetrievalResponse], top_k: int) -> list[Retriev
     return diversified[:top_k]
 
 
+def _item_snapshot(workspace_id: str, item: RetrievalResultItem) -> dict[str, Any]:
+    """Return provenance and offsets without copying retrieved text."""
+
+    record = (
+        find_chunk_record(workspace_id, item.paper_id, item.chunk_id)
+        if item.paper_id and item.chunk_id
+        else None
+    )
+    record_matches = bool(
+        record
+        and record.workspace_id == workspace_id
+        and record.paper_id == item.paper_id
+    )
+    return {
+        "paper_id": item.paper_id,
+        "artifact_id": item.artifact_id,
+        "chunk_id": item.chunk_id,
+        "source_scope": item.source_scope,
+        "evidence_level": item.evidence_level,
+        "section": (record.section if record_matches else None) or item.section,
+        "chunk_index": record.chunk_index if record_matches else None,
+        "start_char": record.start_char if record_matches else None,
+        "end_char": record.end_char if record_matches else None,
+        "chunk_record_resolved": record_matches,
+        "score": round(item.score, 6),
+    }
+
+
 def _coverage(required_ids: set[str], items: list[RetrievalResultItem]) -> float | None:
     if not required_ids:
         return None
@@ -164,11 +192,13 @@ def run_experiment(
                     "facet_section_hints": {
                         facet.name: list(facet.section_hints) for facet in facets
                     },
+                    "section_hints_applied": False,
                     "primary": {
                         "audit": _audit(primary),
                         "paper_ids": _paper_ids(primary.items),
                         "paper_count": len(_paper_ids(primary.items)),
                         "paper_titles": [item.paper_title for item in primary.items if item.paper_title],
+                        "items": [_item_snapshot(workspace_id, item) for item in primary.items],
                         "required_paper_coverage": (
                             _coverage(required_ids, primary.items)
                             if primary.status != "failed"
@@ -192,10 +222,14 @@ def run_experiment(
                             "reranker_statuses": [
                                 _audit(response)["reranker_status"] for response in facet_responses
                             ],
+                            "response_audits": [_audit(response) for response in facet_responses],
+                            "merge_policy": "chunk_dedupe_then_paper_dedupe",
+                            "section_hints_mode": "diagnostic_only",
                         },
                         "paper_ids": _paper_ids(merged),
                         "paper_count": len(_paper_ids(merged)),
                         "paper_titles": [item.paper_title for item in merged if item.paper_title],
+                        "items": [_item_snapshot(workspace_id, item) for item in merged],
                         "required_paper_coverage": (
                             _coverage(required_ids, merged)
                             if faceted_status != "failed"

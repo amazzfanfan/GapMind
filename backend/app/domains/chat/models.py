@@ -50,6 +50,12 @@ class ChatMessage(Base, UUIDPKMixin, TimestampMixin):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Generation-only observability. Nullable for historical rows, failed
+    # calls, and non-streaming first-token latency which is not observable.
+    prompt_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_token_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completion_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     grounding_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_requested"
     )
