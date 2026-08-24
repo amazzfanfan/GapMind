@@ -158,14 +158,16 @@
 #### B-04-3 离线 A/B 验收
 
 - [x] 新增只读实验 runner `evaluation/retrieval/run_chat_facet_ab.py`，明确标记 `production_enabled=false`、`llm_called=false`、`workspace_mutated=false`。
-- [ ] 在固定 retrieval Gold Set 上跑 primary-only 与 primary+facet 两组结果。
+- [x] 在固定 retrieval Gold Set 上跑 primary-only 与 primary+facet 两组结果；`minimal_gnn_v1` 的 3 条 semantic query 均成功、无未解析论文，workspace leakage 两组均为 `0.0`，但没有任何问题触发当前 facet 规则，因此报告标记为 `experiment_usable=false`，不能把相同结果当作 facet 收益。
 - [x] 在 Chat QA draft 上比较必需论文覆盖、独立论文数、回答中有效引用覆盖和人工证据不足判断；本轮使用 5 条带审计真实样本。
-- [ ] 检查 workspace leakage 必须为 `0`。
+- [x] 检查 workspace leakage 必须为 `0`；固定 Gold 报告 primary/faceted 最大 leakage 均为 `0.0`，Chat QA facet A/B 当前未接入生产合并链路。
 - [x] 记录额外延迟、reranker 降级率和空结果变化；本轮 5/5 检索成功、5/5 reranker `applied`。
 - [ ] 只有在覆盖提升或明确解决已人工确认的缺口，且无安全/隔离回归时，才提出启用方案。
 - [ ] 若没有稳定收益，保留 planner 作为实验工具，不接入默认 Chat。
 
 本轮 A/B 实验报告为 `evaluation/retrieval/reports/chat_gnn_facet_ab_draft_unsandboxed.json`。embedding、Milvus 和 reranker 恢复后，primary-only 的必需论文平均覆盖为 `1.0`，primary+facet 为 `0.875`；5 个问题中 facet 提升 `0` 条、回归 `1` 条。回归发生在 `chat-gnn-03`：方法 facet 将必需的 `Self-Interpretable Graph Learning with Sufficient and Necessary Explanations` 排出 top-k，覆盖从 `1.0` 降至 `0.5`；四个带 facet 问题平均增加约 `794.15 ms`。因此当前结论是保持 facet 默认关闭，不能据此接入生产 Chat，也不能把方法 facet 宣称为质量提升。
+
+固定 Retrieval Gold 的补充报告为 `evaluation/retrieval/reports/minimal_gnn_facet_ab_draft.json`。`minimal_gnn_v1` 的 3 条 semantic query primary-only 平均 Recall@10 为 `1.0`、MRR@10 为 `0.8333`；由于 0 条 query 命中 facet 规则，primary+facet 实际上等价于 primary-only，报告的 `experiment_usable=false`。这次运行只证明固定 Gold 的 workspace 隔离和基线可达，不足以证明 facet 的质量收益；不得为制造 facet 覆盖而修改固定 Gold，后续若要补固定基准，应新增经人工确认的问题集或使用独立的产品相关 draft 集。
 
 此前的受限网络运行曾将 5 个 primary query 分型为 `embedding_unavailable`；该结果保留在本地失败报告中，但不作为质量结论。后续 A/B 必须优先确认 embedding 可达，再比较检索结果。
 

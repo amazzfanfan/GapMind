@@ -146,13 +146,12 @@ def run_experiment(
                 for facet in facets
             ]
             merged = _merge_items([primary, *facet_responses], top_k)
+            all_responses = [primary, *facet_responses]
             faceted_status = (
-                primary.status
-                if not facet_responses
-                else "failed"
-                if any(response.status == "failed" for response in facet_responses)
+                "failed"
+                if any(response.status == "failed" for response in all_responses)
                 else "degraded"
-                if any(response.status == "degraded" for response in facet_responses)
+                if any(response.status == "degraded" for response in all_responses)
                 else "succeeded"
             )
             rows.append(
