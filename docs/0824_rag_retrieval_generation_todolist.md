@@ -187,9 +187,13 @@
 - [ ] 汇总固定 retrieval Gold、Chat QA draft 和真实审计样本后，再计算候选阈值。
 - [ ] 对每个候选阈值记录 false positive：把相关但不足的证据当成可回答；记录 false negative：已有足够证据却误报不足。
 - [ ] 由人工确认阈值语义和错误代价；自动 runner 只计算，不自动批准。
-- [ ] Gold 冻结前完成双人复核、版本号、corpus/chunk/embedding/reranker freeze 信息。
+- [x] Chat QA v1/v2 Gold 已完成双人复核、版本号以及 corpus/chunk/embedding/reranker freeze 信息；固定 Retrieval Gold 未修改。
 - [ ] Gold 冻结后，产品相关 draft 可以继续新增，但不得回写或修改固定 Gold。
 - [ ] 阈值接入代码前先加入边界测试：无命中、单篇命中、多篇命中、reranker degraded、跨 workspace、引用缺失。
+
+固定 Retrieval Gold smoke baseline 报告为 `evaluation/retrieval/reports/minimal_gnn_gate_baseline.json`：semantic_search Recall@10=`1.0`、similar_work=`0.6667`、counter_evidence=`1.0`，三类 workspace leakage 均为 `0.0`，Gate overall=`FAIL`。similar_work 的缺口是 `min-sw-01` 和 `min-sw-02` 各命中 1/2 个 Gold 论文，`min-sw-03` 命中但首个 Gold 排在第 8 位；这说明当前 paper-level 相似工作存在待人工确认的召回缺口，不是调整阈值即可修复，也不足以单凭一次 smoke 启动混合检索。该报告使用 `--minimal` 跳过 judge，只作为召回链路基线，不作为角色事实结论。
+
+为区分候选召回与 top-k 截断，已对同一 workspace、同一固定 Gold 以 `top-k=20` 复跑，报告为 `evaluation/retrieval/reports/minimal_gnn_gate_baseline_top20.json`：semantic_search、similar_work、counter_evidence 的 Recall@20 均为 `1.0`，workspace leakage 均为 `0.0`；similar_work 的 Gold 论文在 `min-sw-01` 排名第 `4/15`、`min-sw-02` 排名第 `7/12`、`min-sw-03` 排名第 `7`。因此在这组样本中，top-k=10 的 similar_work 缺口表现为排序/截断问题，尚不足以证明 dense candidate recall 稳定缺失，也不能据此启动 C-01 混合检索或修改固定 Gold。后续阈值评估仍需由人工同时确认 top-k、论文级去重、引用覆盖和延迟之间的取舍；两份报告均使用 `--minimal`，不作为 counter-evidence 角色事实结论。
 
 ### B-07. 生成可靠性回归
 
