@@ -24,14 +24,14 @@
 - 阶段 B 真实评测基础：
   - `evaluation/chat/` 已具备 Gold schema、匿名观测快照、引用/来源一致性评分和 runner。
   - 已完成人工复核的 GNN 解释样本共 7 条，分为 v1 的 2 条和 v2 的 5 条。
-  - v1 报告 `2/2` 覆盖、v2 报告 `5/5` 覆盖；两批机械检查、论文引用有效性、必需论文覆盖和人工结论准确率均为 `1.0`。
-  - v1/v2 仍是产品相关的 `draft`，尚未升级为固定 `gold`。
+  - v1 reviewer2 报告 `2/2` 覆盖、人工结论准确率 `1.0`，v2 reviewer2 报告 `5/5` 覆盖、人工结论准确率 `1.0`；两批机械检查和论文引用有效性均为 `1.0`。
+  - v1/v2 已完成第二位人工复核；经用户确认，已分别创建 `gnn_explanations_gold_v1.json` 和 `gnn_explanations_gold_v2.json`，draft 原文件保留不变。
 - 阶段 B 可观测性：
   - `ChatMessage.retrieval_audit` 通过 Alembic `0023_chat_retrieval_audit` 持久化检索状态、召回数、返回 chunk 数、最终论文数、reranker 状态和延迟。
   - 匿名导出器和离线报告已支持这些字段；`request_id` 和本地 `message_id` 不进入匿名评测快照。
   - 本地新发送的 GIB 问题已验证真实审计：`succeeded`、召回 18、返回 4 个 chunk、最终 4 篇论文、reranker `applied`、延迟 `986.83 ms`。
 - 当前验证基线：
-  - 完整后端测试：`450 passed, 2 warnings`。
+  - 完整后端测试：`460 passed, 2 warnings`。
   - 前端测试：`56 passed`。
   - TypeScript 类型检查、生产构建通过。
   - ESLint：`0 errors`、`14 warnings`。
@@ -68,7 +68,7 @@
 |---|---|---|---|
 | A-01 | 阶段 A 基线治理 | ✅ 已完成 | 关闭 thinking、提示词预算、最近历史优先、按论文去重及测试完成 |
 | B-01 | 引用质量门 | ✅ 已完成 | 同步/流式共用有界修复、失败回退、审计和前端告警完成 |
-| B-02 | Chat QA 真实样本 | ◐ 已完成第一批 | 7 条人工复核；v1/v2 仍为 draft；需继续补齐审计样本并复核 |
+| B-02 | Chat QA 真实样本 | ✅ v1/v2 Gold 已冻结 | 7 条人工复核完成；v1 历史样本审计为空，v2 新样本审计完整；未自动校准生产阈值 |
 | B-03 | 检索审计快照 | ✅ 已完成基础实现 | `0023`、导出器和报告指标完成；历史消息需重新采样 |
 | B-04 | 确定性分面检索 | ◐ 已完成查询规划骨架 | 纯函数规则已测试；仍需离线 A/B，默认不接入 Chat |
 | B-05 | 章节优先级 | ☐ 待做 | 仅使用已存在 canonical section，不能凭空增加章节事实 |
@@ -95,8 +95,8 @@
 - [ ] B-02-03 导出时默认匿名化：`message_id=null`，不带 request id，不带数据库内部路径。
 - [ ] B-02-04 人工填写 `human_verdict`：`supported`、`insufficient_evidence` 或 `unsupported`；未确认前保留 `null`。
 - [ ] B-02-05 对 `supported` 题逐篇确认必需论文；对 `insufficient_evidence` 题不预置必需论文。
-- [ ] B-02-06 至少完成第二位人工复核后，才把 draft Gold 改为 `gold`；不得因为机械指标为 `1.0` 自动冻结。
-- [ ] B-02-07 对每条新样本确认 `retrieval_audit` 是否存在；旧消息审计为空时标记为“无运行时审计”，不能补写。
+- [x] B-02-06 v1/v2 均已完成第二位人工复核；用户确认后创建 `gold` 副本，draft 原文件保留，不因机械指标为 `1.0` 自动冻结。
+- [x] B-02-07 v2 的 5 条新样本均有 `retrieval_audit`；v1 的 2 条历史消息审计为空，已明确标记为“无运行时审计”，未补写。
 
 验收：
 
