@@ -25,6 +25,10 @@ class ReadingPaperRead(BaseModel):
     external_paper_id: str | None = None
     primary_artifact_id: str | None = None
     parse_status: str = "not_applicable"
+    page_count: int = 0
+    parsed_text_chars: int = 0
+    quality_flags: list[str] = Field(default_factory=list)
+    parse_error: str | None = None
     parsed_markdown_artifact_id: str | None = None
     chunk_count: int = 0
     reading_status: str = "unread"

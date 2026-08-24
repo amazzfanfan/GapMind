@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.core.errors import error_envelope
-from app.domains.artifact.service import ArtifactNotFoundError
+from app.domains.artifact.service import ArtifactNotFoundError, ArtifactQuotaExceededError
 from app.gateway.semantic_scholar import SemanticScholarError
 from app.domains.chat.service import (
     ChatConfigurationError,
@@ -59,6 +59,7 @@ from app.domains.agent.service import (
 EXCEPTION_REGISTRY: dict[type[Exception], tuple[int, str, bool]] = {
     # 404 — Not Found
     ArtifactNotFoundError: (404, "artifact_not_found", False),
+    ArtifactQuotaExceededError: (413, "workspace_storage_quota_exceeded", False),
     ChatNotFoundError: (404, "chat_not_found", False),
     DiscoverRunNotFoundError: (404, "discover_run_not_found", False),
     ExtractionRunNotFoundError: (404, "extraction_run_not_found", False),

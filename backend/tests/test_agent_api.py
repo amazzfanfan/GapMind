@@ -436,9 +436,14 @@ def test_code_agent_requires_plan_and_generates_safe_downloadable_files(
     with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
         names = zf.namelist()
         assert "RESEARCH_PLAN.md" in names  # plan included alongside the code
+        assert "ARTIFACT_STATUS.json" in names
         assert "README.md" in names
         assert "src/train.py" in names
         assert "研究问题" in zf.read("RESEARCH_PLAN.md").decode("utf-8")
+        artifact_status = json.loads(zf.read("ARTIFACT_STATUS.json").decode("utf-8"))
+        assert artifact_status["generated_by"] == "ai"
+        statuses = {item["filename"]: item["validation_status"] for item in artifact_status["artifacts"]}
+        assert statuses["src/train.py"] == "not_run"
 
 
 def test_code_agent_generates_one_preview_only_repair_candidate(

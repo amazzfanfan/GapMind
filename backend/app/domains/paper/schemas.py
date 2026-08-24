@@ -70,6 +70,10 @@ class PaperRead(BaseModel):
     # Phase 2: parsing state
     parse_status: str = "not_applicable"
     parsed_at: datetime | None = None
+    page_count: int = 0
+    parsed_text_chars: int = 0
+    quality_flags: list[str] = Field(default_factory=list)
+    parse_error: str | None = None
     chunk_count: int = 0
     parsed_text_artifact_id: str | None = None
     chunk_index_artifact_id: str | None = None

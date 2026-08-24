@@ -21,7 +21,7 @@ from app.domains.task.service import TaskService
 def task_factory(db_session: Session):
     """Return a callable that creates a task using the test session."""
 
-    def _make(workspace_id: str, task_type: str = "parse_pdf") -> str:
+    def _make(workspace_id: str | None, task_type: str = "parse_pdf") -> str:
         svc = TaskService(db_session)
         task = svc.create(TaskCreate(workspace_id=workspace_id, task_type=task_type))
         return task.id
@@ -172,3 +172,24 @@ def test_task_timeline_events_recorded(
 def test_task_get_not_found(client: TestClient) -> None:
     resp = client.get("/api/v1/tasks/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
+
+
+def test_task_resource_routes_are_owner_scoped(
+    client: TestClient, task_factory
+) -> None:
+    alice = {"X-User-ID": "alice"}
+    bob = {"X-User-ID": "bob"}
+    ws = client.post(
+        "/api/v1/workspaces", headers=alice, json={"name": "Alice Task WS"}
+    ).json()
+    tid = task_factory(ws["id"])
+
+    assert client.get(f"/api/v1/tasks/{tid}", headers=bob).status_code == 404
+    assert client.post(f"/api/v1/tasks/{tid}/cancel", headers=bob).status_code == 404
+
+
+def test_unscoped_task_resource_is_hidden_from_user_api(client: TestClient, task_factory) -> None:
+    tid = task_factory(None)
+
+    assert client.get(f"/api/v1/tasks/{tid}").status_code == 404
+    assert client.post(f"/api/v1/tasks/{tid}/cancel").status_code == 404

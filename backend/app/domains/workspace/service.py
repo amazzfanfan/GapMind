@@ -42,10 +42,11 @@ class WorkspaceService:
         self.db = db
 
     # ------------------------------------------------------------------ create
-    def create(self, payload: WorkspaceCreate) -> Workspace:
+    def create(self, payload: WorkspaceCreate, *, owner_id: str = "user") -> Workspace:
         ws = Workspace(
             id=str(uuid4()),
             name=payload.name,
+            owner_id=owner_id,
             description=payload.description,
             topic=payload.topic,
             keywords=list(payload.keywords),
@@ -66,10 +67,10 @@ class WorkspaceService:
         return ws
 
     # -------------------------------------------------------------------- read
-    def get(self, workspace_id: str) -> Workspace:
+    def get(self, workspace_id: str, *, actor_id: str | None = None) -> Workspace:
         self._validate_uuid(workspace_id)
         ws = self.db.get(Workspace, workspace_id)
-        if ws is None or ws.is_deleted:
+        if ws is None or ws.is_deleted or (actor_id is not None and ws.owner_id != actor_id):
             raise WorkspaceNotFoundError(workspace_id)
         return ws
 
@@ -79,12 +80,15 @@ class WorkspaceService:
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
+        owner_id: str | None = None,
     ) -> tuple[list[Workspace], int]:
         """Return (items, total) with soft-deleted rows excluded."""
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
 
         base = select(Workspace).where(Workspace.is_deleted.is_(False))
+        if owner_id is not None:
+            base = base.where(Workspace.owner_id == owner_id)
         if not include_archived:
             base = base.where(Workspace.is_archived.is_(False))
 
@@ -129,7 +133,7 @@ class WorkspaceService:
         logger.info("workspace.archived", workspace_id=ws.id)
         return ws
 
-    def get_or_create_independent(self) -> Workspace:
+    def get_or_create_independent(self, *, owner_id: str = "user") -> Workspace:
         """Return (creating if needed) the system independent workspace.
 
         Used by standalone W7 agents (analyze/write/respond) when the user has
@@ -139,6 +143,7 @@ class WorkspaceService:
         existing = self.db.scalar(
             select(Workspace).where(
                 Workspace.name == INDEPENDENT_WORKSPACE_NAME,
+                Workspace.owner_id == owner_id,
                 Workspace.is_deleted.is_(False),
             ).limit(1)
         )
@@ -147,6 +152,7 @@ class WorkspaceService:
         ws = Workspace(
             id=str(uuid4()),
             name=INDEPENDENT_WORKSPACE_NAME,
+            owner_id=owner_id,
             description="独立模式空间：供未选择课题空间的 W7 分析/写作/审稿使用",
             is_archived=False,
             is_deleted=False,

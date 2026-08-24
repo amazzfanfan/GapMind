@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.domains.reading.schemas import (
     PaperAnnotationCreate,
     PaperAnnotationRead,
@@ -46,6 +46,10 @@ def _paper_read(row: tuple) -> ReadingPaperRead:
         external_paper_id=paper.external_paper_id,
         primary_artifact_id=paper.primary_artifact_id,
         parse_status=paper.parse_status,
+        page_count=paper.page_count,
+        parsed_text_chars=paper.parsed_text_chars,
+        quality_flags=paper.quality_flags or [],
+        parse_error=paper.parse_error,
         parsed_markdown_artifact_id=paper.parsed_markdown_artifact_id,
         chunk_count=paper.chunk_count,
         reading_status=item.status,
@@ -69,12 +73,14 @@ def list_reading_papers(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ReadingPaperListResponse:
     rows, total = service.list_items(
         workspace_id=workspace_id,
         status=reading_status,
         limit=limit,
         offset=offset,
+        actor_id=user_id,
     )
     return ReadingPaperListResponse(
         items=[_paper_read(row) for row in rows],
@@ -86,10 +92,12 @@ def list_reading_papers(
 
 @router.get("/papers/{paper_id}", response_model=ReadingPaperRead)
 def get_reading_paper(
-    paper_id: str, service: ReadingService = Depends(_service)
+    paper_id: str,
+    service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ReadingPaperRead:
     try:
-        return _paper_read(service.get_item(paper_id))
+        return _paper_read(service.get_item(paper_id, actor_id=user_id))
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -102,10 +110,12 @@ def get_reading_paper(
     status_code=status.HTTP_201_CREATED,
 )
 def add_reading_paper(
-    paper_id: str, service: ReadingService = Depends(_service)
+    paper_id: str,
+    service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ReadingPaperRead:
     try:
-        return _paper_read(service.add_item(paper_id))
+        return _paper_read(service.add_item(paper_id, actor_id=user_id))
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -114,10 +124,12 @@ def add_reading_paper(
 
 @router.delete("/papers/{paper_id}")
 def remove_reading_paper(
-    paper_id: str, service: ReadingService = Depends(_service)
+    paper_id: str,
+    service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> dict[str, str | bool]:
     try:
-        service.remove_item(paper_id)
+        service.remove_item(paper_id, actor_id=user_id)
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -130,9 +142,10 @@ def update_reading_progress(
     paper_id: str,
     payload: ReadingProgressUpdate,
     service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> ReadingPaperRead:
     try:
-        return _paper_read(service.update_progress(paper_id, payload))
+        return _paper_read(service.update_progress(paper_id, payload, actor_id=user_id))
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -141,10 +154,15 @@ def update_reading_progress(
 
 @router.get("/papers/{paper_id}/annotations", response_model=list[PaperAnnotationRead])
 def list_annotations(
-    paper_id: str, service: ReadingService = Depends(_service)
+    paper_id: str,
+    service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> list[PaperAnnotationRead]:
     try:
-        return [PaperAnnotationRead.model_validate(a) for a in service.list_annotations(paper_id)]
+        return [
+            PaperAnnotationRead.model_validate(a)
+            for a in service.list_annotations(paper_id, actor_id=user_id)
+        ]
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -160,9 +178,12 @@ def create_annotation(
     paper_id: str,
     payload: PaperAnnotationCreate,
     service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> PaperAnnotationRead:
     try:
-        return PaperAnnotationRead.model_validate(service.create_annotation(paper_id, payload))
+        return PaperAnnotationRead.model_validate(
+            service.create_annotation(paper_id, payload, actor_id=user_id)
+        )
     except ReadingPaperNotFoundError as exc:
         from fastapi import HTTPException
 
@@ -174,10 +195,11 @@ def update_annotation(
     annotation_id: str,
     payload: PaperAnnotationUpdate,
     service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> PaperAnnotationRead:
     try:
         return PaperAnnotationRead.model_validate(
-            service.update_annotation(annotation_id, payload)
+            service.update_annotation(annotation_id, payload, actor_id=user_id)
         )
     except ReadingAnnotationNotFoundError as exc:
         from fastapi import HTTPException
@@ -187,10 +209,12 @@ def update_annotation(
 
 @router.delete("/annotations/{annotation_id}")
 def remove_annotation(
-    annotation_id: str, service: ReadingService = Depends(_service)
+    annotation_id: str,
+    service: ReadingService = Depends(_service),
+    user_id: str = Depends(get_current_user),
 ) -> dict[str, str | bool]:
     try:
-        service.remove_annotation(annotation_id)
+        service.remove_annotation(annotation_id, actor_id=user_id)
     except ReadingAnnotationNotFoundError as exc:
         from fastapi import HTTPException
 

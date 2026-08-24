@@ -22,7 +22,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_db, get_owned_workspace
 from app.domains.knowledge.schemas import (
     EvidenceSpanListResponse,
     EvidenceSpanRead,
@@ -44,7 +44,10 @@ from app.domains.knowledge.service import (
 )
 from app.domains.workspace.service import WorkspaceService
 
-router = APIRouter(tags=["knowledge"])
+router = APIRouter(
+    tags=["knowledge"],
+    dependencies=[Depends(get_owned_workspace)],
+)
 
 
 def _get_knowledge_service(db: Session = Depends(get_db)) -> KnowledgeService:

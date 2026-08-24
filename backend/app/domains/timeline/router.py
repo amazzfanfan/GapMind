@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.domains.timeline.schemas import TimelineListResponse, TimelineEventRead
 from app.domains.timeline.service import TimelineService
 from app.domains.workspace.service import WorkspaceService
@@ -44,8 +44,9 @@ def list_timeline(
     offset: int = Query(0, ge=0),
     service: TimelineService = Depends(_get_timeline_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TimelineListResponse:
-    workspace_service.get(workspace_id)
+    workspace_service.get(workspace_id, actor_id=user_id)
     items, total = service.list(
         workspace_id=workspace_id,
         subject_type=subject_type,

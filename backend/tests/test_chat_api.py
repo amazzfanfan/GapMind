@@ -1140,3 +1140,32 @@ def test_stale_generating_row_is_healed_instead_of_bricking(db_session, fake_gat
     assert "generating" not in statuses
     assert statuses.count("failed") == 1  # the healed stale row
     assert statuses.count("completed") == 1  # the new answer
+
+
+def test_chat_conversations_are_scoped_to_owner(client, fake_gateway):
+    created = client.post(
+        "/api/v1/chat/conversations",
+        headers={"X-User-ID": "alice"},
+        json={"title": "Alice private conversation"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["id"]
+
+    own = client.get(
+        f"/api/v1/chat/conversations/{conversation_id}",
+        headers={"X-User-ID": "alice"},
+    )
+    assert own.status_code == 200
+
+    other_list = client.get(
+        "/api/v1/chat/conversations",
+        headers={"X-User-ID": "bob"},
+    )
+    assert other_list.status_code == 200
+    assert other_list.json()["total"] == 0
+
+    other_detail = client.get(
+        f"/api/v1/chat/conversations/{conversation_id}",
+        headers={"X-User-ID": "bob"},
+    )
+    assert other_detail.status_code == 404

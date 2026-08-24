@@ -137,10 +137,14 @@ class ChatService:
         limit: int,
         offset: int,
         workspace_id: str | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> tuple[list[ChatConversation], int]:
         stmt = select(ChatConversation).where(ChatConversation.is_deleted.is_(False))
+        if actor_id is not None:
+            stmt = stmt.where(ChatConversation.owner_id == actor_id)
         if workspace_id:
-            WorkspaceService(self.db).get(workspace_id)
+            WorkspaceService(self.db).get(workspace_id, actor_id=actor_id)
             stmt = stmt.where(ChatConversation.workspace_id == workspace_id)
         if query and query.strip():
             stmt = stmt.where(ChatConversation.title.ilike(f"%{query.strip()}%"))
@@ -161,31 +165,39 @@ class ChatService:
         self,
         title: str | None = None,
         workspace_id: str | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> ChatConversation:
         if workspace_id:
-            WorkspaceService(self.db).get(workspace_id)
+            WorkspaceService(self.db).get(workspace_id, actor_id=actor_id)
         conversation = ChatConversation(
             title=(title or "新对话").strip() or "新对话",
             workspace_id=workspace_id,
+            owner_id=actor_id or "user",
         )
         self.db.add(conversation)
         self.db.commit()
         self.db.refresh(conversation)
         return conversation
 
-    def get_conversation(self, conversation_id: str) -> ChatConversation:
-        conversation = self.db.scalar(
-            select(ChatConversation).where(
-                ChatConversation.id == conversation_id,
-                ChatConversation.is_deleted.is_(False),
-            )
-        )
+    def get_conversation(
+        self, conversation_id: str, *, actor_id: str | None = None
+    ) -> ChatConversation:
+        conditions = [
+            ChatConversation.id == conversation_id,
+            ChatConversation.is_deleted.is_(False),
+        ]
+        if actor_id is not None:
+            conditions.append(ChatConversation.owner_id == actor_id)
+        conversation = self.db.scalar(select(ChatConversation).where(*conditions))
         if conversation is None:
             raise ChatNotFoundError("conversation not found")
         return conversation
 
-    def detail(self, conversation_id: str) -> tuple[ChatConversation, list[ChatMessage]]:
-        conversation = self.get_conversation(conversation_id)
+    def detail(
+        self, conversation_id: str, *, actor_id: str | None = None
+    ) -> tuple[ChatConversation, list[ChatMessage]]:
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         messages = list(
             self.db.scalars(
                 select(ChatMessage)
@@ -195,15 +207,17 @@ class ChatService:
         )
         return conversation, messages
 
-    def rename(self, conversation_id: str, title: str) -> ChatConversation:
-        conversation = self.get_conversation(conversation_id)
+    def rename(
+        self, conversation_id: str, title: str, *, actor_id: str | None = None
+    ) -> ChatConversation:
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         conversation.title = title.strip()
         self.db.commit()
         self.db.refresh(conversation)
         return conversation
 
-    def soft_delete(self, conversation_id: str) -> None:
-        conversation = self.get_conversation(conversation_id)
+    def soft_delete(self, conversation_id: str, *, actor_id: str | None = None) -> None:
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         conversation.is_deleted = True
         self.db.commit()
 
@@ -213,13 +227,16 @@ class ChatService:
         workspace_id: str | None = None,
         research_plan_id: str | None = None,
         source_artifact_ids: list[str] | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
         if workspace_id:
-            WorkspaceService(self.db).get(workspace_id)
+            WorkspaceService(self.db).get(workspace_id, actor_id=actor_id)
         conversation = ChatConversation(
             title=make_conversation_title(content),
             workspace_id=workspace_id,
+            owner_id=actor_id or "user",
         )
         self.db.add(conversation)
         self.db.flush()
@@ -241,9 +258,11 @@ class ChatService:
         workspace_id: str | None = None,
         research_plan_id: str | None = None,
         source_artifact_ids: list[str] | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
         content = self._validate_content(content)
-        conversation = self.get_conversation(conversation_id)
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         if workspace_id is not None and workspace_id != conversation.workspace_id:
             raise ChatConflictError("conversation workspace cannot be changed")
         self._ensure_not_generating(conversation.id)
@@ -261,9 +280,9 @@ class ChatService:
         )
 
     def retry(
-        self, conversation_id: str, assistant_message_id: str
+        self, conversation_id: str, assistant_message_id: str, *, actor_id: str | None = None
     ) -> tuple[ChatConversation, ChatMessage, ChatMessage]:
-        conversation = self.get_conversation(conversation_id)
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         assistant = self.db.scalar(
             select(ChatMessage).where(
                 ChatMessage.id == assistant_message_id,
@@ -531,14 +550,17 @@ class ChatService:
         workspace_id: str | None = None,
         research_plan_id: str | None = None,
         source_artifact_ids: list[str] | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Stream a new-conversation message. Yields event dicts (see _stream_complete)."""
         content = self._validate_content(content)
         if workspace_id:
-            WorkspaceService(self.db).get(workspace_id)
+            WorkspaceService(self.db).get(workspace_id, actor_id=actor_id)
         conversation = ChatConversation(
             title=make_conversation_title(content),
             workspace_id=workspace_id,
+            owner_id=actor_id or "user",
         )
         self.db.add(conversation)
         self.db.flush()
@@ -558,10 +580,12 @@ class ChatService:
         workspace_id: str | None = None,
         research_plan_id: str | None = None,
         source_artifact_ids: list[str] | None = None,
+        *,
+        actor_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Stream a message into an existing conversation. Yields event dicts."""
         content = self._validate_content(content)
-        conversation = self.get_conversation(conversation_id)
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         if workspace_id is not None and workspace_id != conversation.workspace_id:
             raise ChatConflictError("conversation workspace cannot be changed")
         self._ensure_not_generating(conversation.id)
@@ -982,10 +1006,12 @@ class ChatService:
             "reranker_status": reranker_status,
         }
 
-    def context_options(self, workspace_id: str) -> dict[str, list[dict[str, str]]]:
+    def context_options(
+        self, workspace_id: str, *, actor_id: str | None = None
+    ) -> dict[str, list[dict[str, str]]]:
         """List only current-workspace plan/report/code context candidates."""
 
-        workspace = WorkspaceService(self.db).get(workspace_id)
+        workspace = WorkspaceService(self.db).get(workspace_id, actor_id=actor_id)
         plans = self._eligible_plans(workspace.id)
         plan_ids = {plan.id for plan in plans}
         plan_options = [
@@ -1412,8 +1438,10 @@ class ChatService:
         conversation_id: str,
         message_id: str,
         evidence_id: str,
+        *,
+        actor_id: str | None = None,
     ) -> tuple[ChatMessageEvidence, Artifact | None, str | None, str | None]:
-        conversation = self.get_conversation(conversation_id)
+        conversation = self.get_conversation(conversation_id, actor_id=actor_id)
         evidence = self.db.scalar(
             select(ChatMessageEvidence)
             .join(ChatMessage, ChatMessage.id == ChatMessageEvidence.message_id)

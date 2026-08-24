@@ -18,11 +18,11 @@ central handler registered in ``app.core.exception_handlers``.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.domains.task.schemas import TaskListResponse, TaskRead
 from app.domains.task.service import TaskService
 from app.domains.workspace.service import WorkspaceService
@@ -42,6 +42,24 @@ class ResumeBody(BaseModel):
     decision: dict | None = None
 
 
+def _assert_task_owner(
+    task,
+    *,
+    workspace_service: WorkspaceService,
+    user_id: str,
+) -> None:
+    """Fail closed for task rows that have no user-visible Workspace owner."""
+    if not task.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "task_not_found",
+                "message": "Task is not attached to an accessible workspace",
+            },
+        )
+    workspace_service.get(task.workspace_id, actor_id=user_id)
+
+
 @router.get(
     "/workspaces/{workspace_id}/tasks",
     response_model=TaskListResponse,
@@ -54,8 +72,9 @@ def list_tasks(
     offset: int = Query(0, ge=0),
     service: TaskService = Depends(_get_task_service),
     workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TaskListResponse:
-    workspace_service.get(workspace_id)
+    workspace_service.get(workspace_id, actor_id=user_id)
     items, total = service.list(
         workspace_id=workspace_id,
         status_filter=status_filter,
@@ -78,8 +97,12 @@ def list_tasks(
 def get_task(
     task_id: str,
     service: TaskService = Depends(_get_task_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TaskRead:
-    return TaskRead.model_validate(service.get(task_id))
+    task = service.get(task_id)
+    _assert_task_owner(task, workspace_service=workspace_service, user_id=user_id)
+    return TaskRead.model_validate(task)
 
 
 @router.post(
@@ -90,7 +113,11 @@ def get_task(
 def cancel_task(
     task_id: str,
     service: TaskService = Depends(_get_task_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TaskRead:
+    task = service.get(task_id)
+    _assert_task_owner(task, workspace_service=workspace_service, user_id=user_id)
     return TaskRead.model_validate(service.request_cancel(task_id))
 
 
@@ -103,7 +130,11 @@ def resume_task(
     task_id: str,
     body: ResumeBody,
     service: TaskService = Depends(_get_task_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TaskRead:
+    task = service.get(task_id)
+    _assert_task_owner(task, workspace_service=workspace_service, user_id=user_id)
     return TaskRead.model_validate(service.resume_from_user(task_id, decision=body.decision))
 
 
@@ -115,5 +146,9 @@ def resume_task(
 def retry_task(
     task_id: str,
     service: TaskService = Depends(_get_task_service),
+    workspace_service: WorkspaceService = Depends(_get_workspace_service),
+    user_id: str = Depends(get_current_user),
 ) -> TaskRead:
+    task = service.get(task_id)
+    _assert_task_owner(task, workspace_service=workspace_service, user_id=user_id)
     return TaskRead.model_validate(service.retry(task_id))

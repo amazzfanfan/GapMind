@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from fastapi import Header
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -29,14 +29,87 @@ def get_settings_dep() -> "settings.__class__":  # type: ignore[valid-type]
     return settings
 
 
+def authentication_required() -> bool:
+    """Return whether this deployment must authenticate every API request."""
+    return settings.auth_required or settings.app_env != "development"
+
+
+def _token_users() -> dict[str, str]:
+    """Parse the intentionally small delivery-time token registry."""
+    users: dict[str, str] = {}
+    for item in settings.auth_tokens.split(","):
+        token, separator, user_id = item.strip().partition(":")
+        if separator and token and user_id.strip():
+            users[token] = user_id.strip()[:128]
+    return users
+
+
+def resolve_user_id(
+    *,
+    authorization: str | None = None,
+    x_user_id: str | None = None,
+) -> str:
+    """Resolve a user from Bearer auth, with a development-only fallback.
+
+    ``X-User-ID`` is deliberately not accepted as an identity source once the
+    app is running outside development.  The token registry is a minimal
+    competition/deployment guard, not a replacement for an institutional IdP.
+    """
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.casefold() != "bearer" or not token.strip():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "invalid_authorization",
+                    "message": "Use a Bearer token",
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user_id = _token_users().get(token.strip())
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "invalid_token",
+                    "message": "Bearer token is invalid or expired",
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return user_id
+
+    if authentication_required():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "authentication_required",
+                "message": "A valid Bearer token is required",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return (x_user_id or "user").strip()[:128] or "user"
+
+
 def get_current_user(
     x_user_id: str | None = Header(default=None, alias="X-User-ID"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> str:
-    """Resolve the acting user identity from the ``X-User-ID`` header.
+    """Resolve the acting user identity for a route dependency."""
+    return resolve_user_id(authorization=authorization, x_user_id=x_user_id)
 
-    The MVP is single-user, so the header is optional and defaults to
-    ``"user"``. Plumbing this through now means swapping in real auth
-    later only touches this dependency — every downstream service already
-    reads the actor from the request scope.
+
+def get_owned_workspace(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Resolve a Workspace only when it belongs to the acting user.
+
+    Routers whose URL is uniformly ``/workspaces/{workspace_id}/...`` can use
+    this dependency as a defense-in-depth check.  The delivery middleware
+    performs the same check before routing, while this dependency also keeps
+    direct route tests and non-middleware callers honest.
     """
-    return x_user_id or "user"
+    from app.domains.workspace.service import WorkspaceService
+
+    return WorkspaceService(db).get(workspace_id, actor_id=user_id)

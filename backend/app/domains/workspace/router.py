@@ -18,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.domains.workspace.readiness import WorkspaceReadinessService
 from app.domains.workspace.schemas import (
     WorkspaceCreate,
@@ -45,8 +45,9 @@ def _get_service(db: Session = Depends(get_db)) -> WorkspaceService:
 def create_workspace(
     payload: WorkspaceCreate,
     service: WorkspaceService = Depends(_get_service),
+    user_id: str = Depends(get_current_user),
 ) -> WorkspaceRead:
-    ws = service.create(payload)
+    ws = service.create(payload, owner_id=user_id)
     return WorkspaceRead.model_validate(ws)
 
 
@@ -60,9 +61,10 @@ def list_workspaces(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     service: WorkspaceService = Depends(_get_service),
+    user_id: str = Depends(get_current_user),
 ) -> WorkspaceListResponse:
     items, total = service.list(
-        include_archived=include_archived, limit=limit, offset=offset
+        include_archived=include_archived, limit=limit, offset=offset, owner_id=user_id
     )
     return WorkspaceListResponse(
         items=[WorkspaceRead.model_validate(w) for w in items],
@@ -79,9 +81,10 @@ def list_workspaces(
 )
 def get_independent_workspace(
     service: WorkspaceService = Depends(_get_service),
+    user_id: str = Depends(get_current_user),
 ) -> WorkspaceRead:
     """System independent workspace for standalone W7 agents (no workspace selected)."""
-    return WorkspaceRead.model_validate(service.get_or_create_independent())
+    return WorkspaceRead.model_validate(service.get_or_create_independent(owner_id=user_id))
 
 
 @router.get(
