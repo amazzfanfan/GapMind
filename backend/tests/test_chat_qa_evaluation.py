@@ -143,6 +143,8 @@ def test_retrieval_audit_is_reported_without_becoming_a_quality_verdict() -> Non
         "p95": 986.83,
         "max": 986.83,
     }
+    assert report["summary"]["retrieved_without_paper_citation_count"] == 0
+    assert report["summary"]["retrieved_without_paper_citation_rate"] == 0.0
 
 
 def test_assess_answer_requires_a_real_plan_marker_when_plan_context_is_selected() -> None:

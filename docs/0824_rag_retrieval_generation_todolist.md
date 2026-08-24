@@ -40,7 +40,7 @@
 
 - 阶段 B 的确定性分面检索和章节优先级尚未接入生产 Chat。
 - 阶段 B 的最小相关性、覆盖率和“证据不足”阈值尚未校准，也不能凭当前小样本写死阈值。
-- 当前 v2 历史 5 条匿名候选快照不含 `retrieval_audit`，其审计覆盖率为 `0`；只有重新发送后导出的新 GIB 样本包含完整审计。若要分析延迟和召回，必须重新导出每一条新样本。
+- v2 历史 5 条匿名候选快照不含 `retrieval_audit`，其审计覆盖率为 `0`；本轮已在 5 个独立新对话中重新获得带审计样本，新的本地 draft 报告审计覆盖率为 `1.0`。旧快照仍保留，不用新消息覆盖旧人工记录。
 - 混合检索、BM25/词法召回、RRF 和 GraphRAG-lite 均未实现，且在阶段 B/C 评测基线完成前不得提前实现。
 - 当前 Workspace Chat 仍是 workspace 隔离的稠密向量 RAG，不应宣传为 GraphRAG。
 
@@ -70,7 +70,7 @@
 | B-01 | 引用质量门 | ✅ 已完成 | 同步/流式共用有界修复、失败回退、审计和前端告警完成 |
 | B-02 | Chat QA 真实样本 | ◐ 已完成第一批 | 7 条人工复核；v1/v2 仍为 draft；需继续补齐审计样本并复核 |
 | B-03 | 检索审计快照 | ✅ 已完成基础实现 | `0023`、导出器和报告指标完成；历史消息需重新采样 |
-| B-04 | 确定性分面检索 | ☐ 待做 | 先做离线 A/B，再决定是否接入 Chat |
+| B-04 | 确定性分面检索 | ◐ 已完成查询规划骨架 | 纯函数规则已测试；仍需离线 A/B，默认不接入 Chat |
 | B-05 | 章节优先级 | ☐ 待做 | 仅使用已存在 canonical section，不能凭空增加章节事实 |
 | B-06 | 阈值校准与 Gold 冻结 | ☐ 待做 | 样本达到复核要求、指标可重复、人工确认后再冻结 |
 | B-07 | 生成质量回归 | ◐ 基础完成 | 引用边界已有；需补齐同步/流式、无证据、降级和延迟回归矩阵 |
@@ -111,9 +111,11 @@
 - [x] B-03-02 失败路径保存稳定 diagnostic code，不保存 provider 原始异常。
 - [x] B-03-03 匿名导出器保留状态、诊断码、召回数、chunk 数、论文数、reranker 和延迟。
 - [x] B-03-04 离线报告支持审计覆盖率、状态分布、reranker 分布和 P50/P95/最大延迟。
-- [ ] B-03-05 对 v2 全部问题重新产生带 `retrieval_audit` 的真实消息或明确标注旧样本不可用于延迟/召回分析。
-- [ ] B-03-06 将每条问题的检索审计和回答证据放在同一份本地报告中；不写入 Gold，不覆盖人工 verdict。
-- [ ] B-03-07 形成一次基线报告：主查询、最终论文数、已检索无引用比例、人工证据不足判断和端到端延迟。
+- [x] B-03-05 对 v2 全部问题重新产生带 `retrieval_audit` 的真实消息；5 个问题均在独立新对话中完成，状态均为 `succeeded`、reranker 均为 `applied`。
+- [x] B-03-06 将每条问题的检索审计和回答证据放在同一份本地报告中；报告为 `gnn_explanations_v2_audited_report.json`，不写入 Gold，不覆盖人工 verdict。
+- [x] B-03-07 形成一次基线报告：主查询、最终论文数、已检索无引用比例、人工证据不足判断和端到端延迟。
+
+本轮真实审计基线：5/5 观测覆盖，5/5 检索成功，5/5 reranker `applied`，召回数均为 `18`，最终论文数为 `4–6`，检索延迟 P50=`953.07 ms`、P95=`1250.67 ms`，已检索但无论文引用率为 `0.0`。用户确认 `chat-gnn-03` 至 `chat-gnn-06` 为 `supported`，`chat-gnn-07` 为 `insufficient_evidence`；q07 的理由是当前工作区没有直接回答“分布偏移下 GNN 解释稳定性”的充分论文证据，回答明确要求补充研究或实验。最终人工 verdict 覆盖率和准确率均为 `1.0`，但 v2 仍保持产品相关 `draft`，不自动升级为固定 Gold。
 
 建议记录的指标：
 
@@ -133,15 +135,16 @@
 
 #### B-04-1 查询规划
 
-- [ ] 保留原始问题作为 primary query，任何 facet 都不能替换或删除原问题。
-- [ ] 设计纯确定性、可审查的 facet 规则：
-  - [ ] 方法：`method / approach / mechanism / 方法 / 机制`。
-  - [ ] 损失与公式：`loss / objective / formula / equation / 损失 / 公式 / 优化目标`。
-  - [ ] 数据集与实验：`dataset / benchmark / experiment / evaluation / 数据集 / 基准 / 实验`。
-  - [ ] 基线与比较：`baseline / comparison / compare / 基线 / 对比 / 比较`。
-- [ ] 规则必须可由单元测试覆盖，不能调用 LLM 生成查询 facet。
-- [ ] 控制额外 query 数量，记录额外 embedding、Milvus、reranker 调用和延迟。
-- [ ] section hint 只能使用现有 canonical section，例如 `Method`、`Experiment`、`Related Work`；不得把 hint 当作论文事实。
+- [x] 已新增纯函数 `backend/app/domains/chat/retrieval_facets.py`；不调用 LLM、embedding、Milvus 或数据库，当前不改变生产 Chat 行为。
+- [x] 规划器保留原始问题作为 primary query，任何 facet 都不能替换或删除原问题。
+- [x] 设计纯确定性、可审查的 facet 规则：
+  - [x] 方法：`method / approach / mechanism / 方法 / 机制`。
+  - [x] 损失与公式：`loss / objective / formula / equation / 损失 / 公式 / 优化目标`。
+  - [x] 数据集与实验：`dataset / benchmark / experiment / evaluation / 数据集 / 基准 / 实验`。
+  - [x] 基线与比较：`baseline / comparison / compare / 基线 / 对比 / 比较`。
+- [x] 规则由单元测试覆盖，不能调用 LLM 生成查询 facet；当前定向测试 `19 passed`。
+- [ ] 接入后再控制额外 query 数量，并记录额外 embedding、Milvus、reranker 调用和延迟。
+- [x] section hint 只使用现有 canonical section，例如 `Method`、`Experiment`、`Related Work`；不得把 hint 当作论文事实。
 
 #### B-04-2 候选合并
 
@@ -154,12 +157,17 @@
 
 #### B-04-3 离线 A/B 验收
 
+- [x] 新增只读实验 runner `evaluation/retrieval/run_chat_facet_ab.py`，明确标记 `production_enabled=false`、`llm_called=false`、`workspace_mutated=false`。
 - [ ] 在固定 retrieval Gold Set 上跑 primary-only 与 primary+facet 两组结果。
-- [ ] 在 Chat QA draft 上比较必需论文覆盖、独立论文数、回答中有效引用覆盖和人工证据不足判断。
+- [x] 在 Chat QA draft 上比较必需论文覆盖、独立论文数、回答中有效引用覆盖和人工证据不足判断；本轮使用 5 条带审计真实样本。
 - [ ] 检查 workspace leakage 必须为 `0`。
-- [ ] 记录额外延迟、reranker 降级率和空结果变化。
+- [x] 记录额外延迟、reranker 降级率和空结果变化；本轮 5/5 检索成功、5/5 reranker `applied`。
 - [ ] 只有在覆盖提升或明确解决已人工确认的缺口，且无安全/隔离回归时，才提出启用方案。
 - [ ] 若没有稳定收益，保留 planner 作为实验工具，不接入默认 Chat。
+
+本轮 A/B 实验报告为 `evaluation/retrieval/reports/chat_gnn_facet_ab_draft_unsandboxed.json`。embedding、Milvus 和 reranker 恢复后，primary-only 的必需论文平均覆盖为 `1.0`，primary+facet 为 `0.875`；5 个问题中 facet 提升 `0` 条、回归 `1` 条。回归发生在 `chat-gnn-03`：方法 facet 将必需的 `Self-Interpretable Graph Learning with Sufficient and Necessary Explanations` 排出 top-k，覆盖从 `1.0` 降至 `0.5`；四个带 facet 问题平均增加约 `794.15 ms`。因此当前结论是保持 facet 默认关闭，不能据此接入生产 Chat，也不能把方法 facet 宣称为质量提升。
+
+此前的受限网络运行曾将 5 个 primary query 分型为 `embedding_unavailable`；该结果保留在本地失败报告中，但不作为质量结论。后续 A/B 必须优先确认 embedding 可达，再比较检索结果。
 
 ### B-05. 章节优先级
 
