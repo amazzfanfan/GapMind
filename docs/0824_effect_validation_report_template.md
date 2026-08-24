@@ -14,7 +14,7 @@
 | 产品 | GapMind |
 | 代码 commit | 待填 |
 | 分支 | `yx_dev` |
-| 迁移 head | `0024_chat_generation_observability` |
+| 迁移 head | 候选为 `0028_search_acl`，最终冻结时重验 |
 | 模型/服务版本 | 待填 |
 | 知识库快照 | 待填 |
 | Gold 版本 | 待填 |

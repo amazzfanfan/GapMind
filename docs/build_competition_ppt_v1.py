@@ -415,7 +415,7 @@ def slide_12(prs):
 def slide_13(prs):
     slide = add_slide(prs, 13, "路线图")
     title_block(slide, "12 / ROADMAP", "先把证据和用户验证做实，再扩展更复杂的智能能力。")
-    columns = [(0.72, 3.78, "已有工程基础", CYAN, "论文 / 知识 / 检索 / Chat\nDiscover / HITL / 计划 / 代码草稿\n\n后端 469 tests · 前端 56 tests\nTypeScript 与构建通过"),
+    columns = [(0.72, 3.78, "已有工程基础", CYAN, "论文 / 知识 / 检索 / Chat\nDiscover / HITL / 计划 / 代码草稿\n\n后端 481 tests · 前端 56 tests\nTypeScript 与构建通过"),
                (4.78, 3.78, "当前验证中", ORANGE, "两名真实用户效果\n冻结 Gold 扩展与人工评审\n真实外部服务与 Demo 稳定性\n权威知识源治理"),
                (8.84, 3.78, "后续方向", PURPLE, "混合检索 / GraphRAG A/B\n最小多模态或专业数据分析\n受控代码执行\n多租户与规模化")]
     for x, w, t, c, b in columns:

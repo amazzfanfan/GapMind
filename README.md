@@ -4,6 +4,10 @@ Evidence-grounded, Human-in-the-Loop research innovation assistant for graph mac
 
 GapMind 当前聚焦计算机科学—图机器学习/图神经网络科研场景，面向研究生/科研助理与导师/教师，支持三类核心任务：有证据的论文问答、研究机会核验、研究计划和代码草稿辅助。系统将论文证据、相似工作、反证、外部核验、Critic 收窄和人工确认组织成一个研究流程。
 
+正式产品入口是 `frontend/` 中的 React/Vite 应用；请按下方启动命令访问 `http://localhost:5173`。仓库根目录可能存在未跟踪的历史静态原型文件，不属于 GapMind 正式入口或比赛交付物。
+
+部署到 staging/production 时必须配置 `APP_ENV`、`AUTH_TOKENS`（格式为 `token:user_id`，多个用逗号分隔）和 `VITE_API_TOKEN`；此时 API 只接受 Bearer token，不能用可伪造的 `X-User-ID` 代替身份。
+
 AI 输出默认是候选或草稿，不自动成为科学事实；资料不足时会保留不确定性，代码生成默认只做静态检查和预览/下载，不自动执行。当前版本不将 GraphRAG、成熟多模态、最终生成模型 SFT、多租户规模化和真实用户效果宣称为已完成能力，详细边界见 [`docs/0824_scope_and_claims.md`](docs/0824_scope_and_claims.md)。
 
 ## Tech Stack

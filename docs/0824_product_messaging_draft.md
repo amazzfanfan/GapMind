@@ -68,9 +68,9 @@ GapMind 从 Workspace 中的论文和知识证据出发，先提供可追溯的�
 
 - [x] README 产品简介和能力边界；
 - [x] 首页/ChatHub 首屏文案；
-- [~] 作品方案 PPT 的产品概述、功能、创新点和限制（已生成 v1：`submission/GapMind_作品方案_v1.pptx`，源脚本：`docs/build_competition_ppt_v1.py`；真实效果页待补）；
+- [x] 作品方案 PPT 的产品概述、功能、创新点和限制（已生成 v1：`submission/GapMind_作品方案_v1.pptx`；真实效果页待补，不影响产品口径同步）；
 - [x] `docs/0811_demo_script.md` 或新的三分钟 Demo 脚本；
-- [~] 效果验证报告的产品定位和限制（已完成模板，见 `docs/0824_effect_validation_report_template.md`）；
-- [~] 视频字幕/旁白（已完成检查清单，见 `docs/0824_three_minute_demo_checklist.md`）；
+- [x] 效果验证报告的产品定位和限制（已完成模板，见 `docs/0824_effect_validation_report_template.md`；真实数据待补）；
+- [x] 视频字幕/旁白口径（已完成检查清单，见 `docs/0824_three_minute_demo_checklist.md`；录制待完成）；
 - [ ] 对外链接、部署说明和现场话术；
-- [ ] 同步完成后重新执行文档一致性检查。
+- [x] 已执行第一轮文档和入口一致性检查，见 `docs/0824_entry_and_material_consistency_audit.md`；最终提交链接和冻结资料待补。
