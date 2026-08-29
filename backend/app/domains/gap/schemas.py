@@ -101,7 +101,6 @@ class GapAnnotationOutput(BaseModel):
 class GapExtractionRequest(BaseModel):
     paper_ids: list[str] = Field(min_length=1, max_length=200)
     force: bool = False
-    allow_remote_fallback: bool = False
 
 
 class GapExtractionTask(BaseModel):

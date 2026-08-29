@@ -192,7 +192,7 @@ class _SuccessfulExtractor:
 class _FakeRemoteExtractor:
     provider = "remote"
     model = "remote-test"
-    model_parameters = {"response_format": "json_schema"}
+    model_parameters = {"response_format": "json_object"}
     calls = 0
 
     def extract(self, markdown: str, *, repair_attempts: int | None = None):
@@ -213,6 +213,16 @@ class _FakeGateway:
     def chat_completion(self, messages, **kwargs):
         self.calls.append({"messages": messages, **kwargs})
         return type("Response", (), {"content": self.content})()
+
+
+class _SequenceGateway:
+    def __init__(self, contents: list[str]) -> None:
+        self.contents = list(contents)
+        self.calls: list[dict] = []
+
+    def chat_completion(self, messages, **kwargs):
+        self.calls.append({"messages": messages, **kwargs})
+        return type("Response", (), {"content": self.contents.pop(0)})()
 
 
 def test_ollama_extractor_repairs_invalid_enum() -> None:
@@ -279,14 +289,37 @@ def test_remote_extractor_uses_structured_schema_and_disables_thinking() -> None
     assert result.provider == "remote"
     assert result.model == "remote-model"
     assert gateway.calls[0]["disable_thinking"] is True
-    assert gateway.calls[0]["response_format"]["type"] == "json_schema"
+    assert gateway.calls[0]["response_format"] == {"type": "json_object"}
     assert "reasoning_effort" not in gateway.calls[0]
+
+
+def test_remote_extractor_repairs_semantic_validation_failure() -> None:
+    invalid = _output()
+    invalid["entities"][1]["type"] = "MODEL"
+    gateway = _SequenceGateway([json.dumps(invalid), json.dumps(_output())])
+    extractor = RemoteGapExtractor(
+        api_key="test-key",
+        base_url="https://remote.test/v1",
+        model="remote-model",
+        gateway=gateway,
+    )
+
+    result = extractor.extract("# Introduction\n" + "Paper body " * 100, repair_attempts=1)
+
+    assert result.output is not None
+    assert result.attempts == 2
+    assert len(result.raw_responses) == 2
+    assert len(gateway.calls) == 2
+    assert gateway.calls[1]["messages"][-2]["role"] == "assistant"
+    assert "必须是 METHOD" in gateway.calls[1]["messages"][-1]["content"]
 
 
 def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
     db_session: Session, monkeypatch, tmp_path
 ) -> None:
-    from app.workers.tasks.extract_gap_annotation import _run_gap_extraction
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", False)
 
     workspace = Workspace(
         id=str(uuid4()),
@@ -333,7 +366,7 @@ def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
         )
     )
 
-    result = _run_gap_extraction(
+    result = gap_task_mod._run_gap_extraction(
         db_session,
         task.id,
         extractor=_UnavailableExtractor(),
@@ -352,7 +385,7 @@ def test_gap_worker_marks_annotation_invalid_when_extractor_is_unavailable(
     assert task_after.status == "failed"
 
 
-def _prepare_gap_task(db_session: Session, monkeypatch, tmp_path, *, allow_remote: bool) -> tuple[str, Paper]:
+def _prepare_gap_task(db_session: Session, monkeypatch, tmp_path) -> tuple[str, Paper]:
     from app.workers.tasks.extract_gap_annotation import _run_gap_extraction
 
     workspace = Workspace(
@@ -395,7 +428,6 @@ def _prepare_gap_task(db_session: Session, monkeypatch, tmp_path, *, allow_remot
             payload={
                 "paper_id": paper.id,
                 "force": False,
-                "allow_remote_fallback": allow_remote,
             },
         )
     )
@@ -407,7 +439,7 @@ def test_local_gap_extractor_remains_primary_when_remote_is_configured(
 ) -> None:
     from app.workers.tasks import extract_gap_annotation as gap_task_mod
 
-    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
@@ -424,12 +456,12 @@ def test_local_gap_extractor_remains_primary_when_remote_is_configured(
     assert result["provider"] == "ollama"
 
 
-def test_remote_gap_fallback_requires_consent_and_records_remote_provenance(
+def test_remote_gap_fallback_is_automatic_and_records_remote_provenance(
     db_session: Session, monkeypatch, tmp_path
 ) -> None:
     from app.workers.tasks import extract_gap_annotation as gap_task_mod
 
-    task_id, paper = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    task_id, paper = _prepare_gap_task(db_session, monkeypatch, tmp_path)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
@@ -454,16 +486,41 @@ def test_remote_gap_fallback_requires_consent_and_records_remote_provenance(
     assert remote_row.fallback_reason == "local_model_unavailable"
 
 
-def test_remote_gap_fallback_does_not_send_without_explicit_consent(
+def test_remote_gap_fallback_is_automatic_after_local_validation_failure(
     db_session: Session, monkeypatch, tmp_path
 ) -> None:
     from app.workers.tasks import extract_gap_annotation as gap_task_mod
 
-    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=False)
+    task_id, paper = _prepare_gap_task(db_session, monkeypatch, tmp_path)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "https://remote.test/v1")
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "test-key")
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "remote-model")
+    remote = _FakeRemoteExtractor()
+    monkeypatch.setattr(gap_task_mod, "RemoteGapExtractor", lambda: remote)
+
+    result = gap_task_mod._run_gap_extraction(db_session, task_id, extractor=_InvalidExtractor())
+
+    assert result["status"] == "valid"
+    assert result["remote_fallback"] is True
+    assert result["provider"] == "remote"
+    assert remote.calls == 1
+    remote_row = db_session.get(PaperGapAnnotation, result["annotation_id"])
+    assert remote_row is not None
+    assert remote_row.paper_id == paper.id
+    assert remote_row.fallback_reason == "local_validation_failed"
+
+
+def test_remote_gap_fallback_does_not_send_when_remote_is_not_configured(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", False)
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_base_url", "")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_api_key", "")
+    monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_model", "")
     remote = _FakeRemoteExtractor()
     monkeypatch.setattr(gap_task_mod, "RemoteGapExtractor", lambda: remote)
 
@@ -474,7 +531,7 @@ def test_remote_gap_fallback_does_not_send_without_explicit_consent(
     )
 
     assert result["status"] == "unavailable"
-    assert result["fallback_reason"] == "remote_consent_required"
+    assert result["fallback_reason"] == "remote_fallback_not_configured"
     assert remote.calls == 0
 
 
@@ -483,7 +540,7 @@ def test_gap_fallback_is_not_attempted_for_short_content(
 ) -> None:
     from app.workers.tasks import extract_gap_annotation as gap_task_mod
 
-    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path, allow_remote=True)
+    task_id, _ = _prepare_gap_task(db_session, monkeypatch, tmp_path)
     markdown_path = tmp_path / "fallback.md"
     markdown_path.write_text("short", encoding="utf-8")
     monkeypatch.setattr(gap_task_mod.settings, "gap_extractor_remote_enabled", True)
@@ -717,8 +774,8 @@ def test_board_collapses_taxonomy_and_suppresses_cartesian_only_cells(
 
 def test_spawn_gap_extraction_skips_already_annotated_paper(db_session: Session) -> None:
     """spawn_gap_extraction must NOT enqueue a task for a paper that already has
-    a valid annotation for the current model+prompt (so "抽取已解析论文" on a
-    large corpus only processes genuinely new papers)."""
+    a valid annotation (so "抽取已解析论文" on a large corpus only processes
+    genuinely new papers)."""
     from app.core.config import settings
     from app.workers.tasks.extract_gap_annotation import (
         PROMPT_VERSION,
@@ -766,6 +823,88 @@ def test_spawn_gap_extraction_skips_already_annotated_paper(db_session: Session)
     task_id, skipped = spawn_gap_extraction(db_session, paper.id, workspace.id)
     assert skipped is True
     assert task_id is None
+
+
+def test_spawn_gap_extraction_skips_valid_remote_or_old_prompt_annotation(
+    db_session: Session,
+) -> None:
+    """Incremental extraction must reuse valid results across provider/version."""
+    from app.workers.tasks.extract_gap_annotation import spawn_gap_extraction
+
+    workspace = Workspace(
+        id=str(uuid4()),
+        name="Gap Skip Existing",
+        keywords=[],
+        active_questions=[],
+        is_archived=False,
+        is_deleted=False,
+    )
+    db_session.add(workspace)
+    db_session.flush()
+    artifact = Artifact(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        kind="parsed_markdown",
+        file_path="p.md",
+        size_bytes=10,
+        is_deleted=False,
+    )
+    paper = Paper(
+        id=str(uuid4()),
+        workspace_id=workspace.id,
+        title="P",
+        authors=[],
+        source="manual",
+        parse_status="parsed",
+        parsed_markdown_artifact_id=artifact.id,
+        chunk_count=0,
+        extract_status="not_applicable",
+        is_deleted=False,
+    )
+    db_session.add_all([artifact, paper])
+    db_session.flush()
+
+    row = _annotation(db_session, workspace, artifact, paper, _output())
+    row.model_name = "deepseek-remote-model"
+    row.model_provider = "remote"
+    row.prompt_version = "gap-schema3-v1"
+    db_session.commit()
+
+    task_id, skipped = spawn_gap_extraction(db_session, paper.id, workspace.id)
+
+    assert skipped is True
+    assert task_id is None
+
+
+def test_run_gap_extraction_skips_queued_duplicate_for_valid_annotation(
+    db_session: Session, monkeypatch, tmp_path
+) -> None:
+    """Already queued duplicate tasks must not call a model after the fix."""
+    from app.workers.tasks import extract_gap_annotation as gap_task_mod
+
+    task_id, paper = _prepare_gap_task(db_session, monkeypatch, tmp_path)
+    workspace = db_session.get(Workspace, paper.workspace_id)
+    artifact = db_session.get(Artifact, paper.parsed_markdown_artifact_id)
+    assert workspace is not None and artifact is not None
+    existing = _annotation(db_session, workspace, artifact, paper, _output())
+
+    class _MustNotRunExtractor:
+        def extract(self, markdown: str):
+            raise AssertionError("queued duplicate must be skipped")
+
+    result = gap_task_mod._run_gap_extraction(
+        db_session,
+        task_id,
+        extractor=_MustNotRunExtractor(),
+    )
+
+    assert result == {
+        "annotation_id": existing.id,
+        "status": "valid",
+        "provider": existing.model_provider,
+        "idempotent": True,
+    }
+    assert TaskService(db_session).get(task_id).status == "succeeded"
 
 
 def test_spawn_gap_extraction_does_not_skip_without_annotation(db_session: Session, monkeypatch) -> None:

@@ -19,11 +19,13 @@ from app.domains.agent.models import AgentArtifact, AgentRun, AgentStep
 from app.domains.chat.models import ChatConversation, ChatMessage, ChatMessageEvidence
 from app.domains.chat.service import ChatService
 from app.domains.discover.models import (
+    DiscoverExternalCandidate,
     OpportunityEvidence,
     OpportunityVersion,
     ResearchOpportunity,
     ResearchPlan,
 )
+from app.domains.paper.models import Paper
 from app.domains.retrieval.schemas import RetrievalResultItem
 from app.domains.retrieval.service import semantic_search
 from app.domains.task.models import Task
@@ -1366,8 +1368,8 @@ class AgentService:
         self._materialize_citations(run, response.items)
         return self._evidence_list(response.items)
 
-    @staticmethod
-    def _evidence_list(items: list[RetrievalResultItem], limit: int | None = None) -> list[dict[str, Any]]:
+    def _evidence_list(self, items: list[RetrievalResultItem], limit: int | None = None) -> list[dict[str, Any]]:
+        paper_titles = self._paper_titles({str(item.paper_id) for item in items if item.paper_id})
         evidence: list[dict[str, Any]] = []
         for index, item in enumerate(items, 1):
             if limit is not None and index > limit:
@@ -1379,14 +1381,76 @@ class AgentService:
                 {
                     "evidence_id": f"E{index}",
                     "paper_id": item.paper_id,
-                    "paper_title": ChatService._postgres_safe_text(item.paper_title) or None,
+                    "paper_title": self._clean_source_title(item.paper_title)
+                    or paper_titles.get(str(item.paper_id)),
                     "chunk_id": ChatService._postgres_safe_text(item.chunk_id) or None,
-                    "section": ChatService._postgres_safe_text(item.section) or None,
+                    "section": self._source_section(item.section),
                     "score": round(float(item.score), 4),
                     "text": text[:3000],
                 }
             )
         return evidence
+
+    def _paper_titles(self, paper_ids: set[str]) -> dict[str, str]:
+        if not paper_ids:
+            return {}
+        rows = self.db.execute(
+            select(Paper.id, Paper.title).where(
+                Paper.id.in_(paper_ids),
+                Paper.is_deleted.is_(False),
+            )
+        ).all()
+        return {
+            str(paper_id): title
+            for paper_id, raw_title in rows
+            if (title := self._clean_source_title(raw_title))
+        }
+
+    def _external_candidate_titles(self, candidate_ids: set[str]) -> dict[str, str]:
+        if not candidate_ids:
+            return {}
+        rows = self.db.execute(
+            select(DiscoverExternalCandidate.id, DiscoverExternalCandidate.title).where(
+                DiscoverExternalCandidate.id.in_(candidate_ids)
+            )
+        ).all()
+        return {
+            str(candidate_id): title
+            for candidate_id, raw_title in rows
+            if (title := self._clean_source_title(raw_title))
+        }
+
+    @staticmethod
+    def _clean_source_title(value: Any) -> str | None:
+        title = ChatService._postgres_safe_text(str(value or "")).strip()
+        if not title or title.lower() in {"unknown", "未命名论文", "外部或已核验证据"}:
+            return None
+        return title
+
+    @staticmethod
+    def _source_section(value: Any, default: str | None = None) -> str | None:
+        section = ChatService._postgres_safe_text(str(value or "")).strip()
+        if not section or section.lower() == "unknown":
+            return default
+        return section
+
+    def _evidence_title(
+        self,
+        *,
+        paper_id: str | None,
+        external_candidate_id: str | None,
+        snapshot: dict[str, Any] | None,
+        paper_titles: dict[str, str],
+        external_titles: dict[str, str],
+    ) -> str:
+        snapshot = snapshot or {}
+        return (
+            paper_titles.get(str(paper_id))
+            or external_titles.get(str(external_candidate_id))
+            or self._clean_source_title(snapshot.get("paper_title"))
+            or self._clean_source_title(snapshot.get("title"))
+            or "未命名论文"
+        )
 
     def _materialize_citations(self, run: AgentRun, items: list[RetrievalResultItem]) -> None:
         if not run.assistant_message_id or self.db.scalar(
@@ -1529,14 +1593,26 @@ class AgentService:
                 )
             )
         )
+        paper_titles = self._paper_titles({str(item.paper_id) for item in rows if item.paper_id})
+        external_titles = self._external_candidate_titles(
+            {str(item.external_candidate_id) for item in rows if item.external_candidate_id}
+        )
         return [
             {
                 "evidence_id": f"D{index}",
                 "paper_id": item.paper_id,
-                "paper_title": str(
-                    (item.snapshot_payload or {}).get("paper_title") or "外部或已核验证据"
+                "external_candidate_id": item.external_candidate_id,
+                "paper_title": self._evidence_title(
+                    paper_id=item.paper_id,
+                    external_candidate_id=item.external_candidate_id,
+                    snapshot=item.snapshot_payload,
+                    paper_titles=paper_titles,
+                    external_titles=external_titles,
                 ),
-                "section": str((item.snapshot_payload or {}).get("section") or "Discover 核验证据"),
+                "section": self._source_section(
+                    (item.snapshot_payload or {}).get("section"),
+                    "Discover 核验证据",
+                ),
                 "relation": item.relation,
                 "source_scope": item.source_scope,
                 "evidence_level": item.evidence_level,

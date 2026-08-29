@@ -191,28 +191,6 @@ export default function ResearchPlansPage() {
     }
   };
 
-  const refinePlan = async (plan: ResearchPlan) => {
-    setActionId(`refine-${plan.id}`);
-    try {
-      const conversation = await chatApi.createConversation(`完善研究计划：${plan.title}`.slice(0, 80), workspace.id);
-      await agentApi.start(workspace.id, {
-        agent_type: "research_plan",
-        prompt: "将当前研究计划完整改写为简体中文，并依据工作区证据补齐数据集、对比基线、评价指标、验证步骤、预期支持结果与明确的证伪标准。证据不足的选择必须标记为暂定方案，不得留空。",
-        conversation_id: conversation.id,
-        input: {
-          research_plan_id: plan.id,
-          opportunity_id: plan.opportunity_id,
-          resource_constraints: plan.resource_constraints,
-        },
-      });
-      message.success("计划完善 Agent 已启动；请前往 AI 助手审核并确认后回填原计划");
-    } catch (error) {
-      message.error(`计划完善启动失败：${errorMessage(error)}`);
-    } finally {
-      setActionId(null);
-    }
-  };
-
   const openRun = async (run: AgentRun) => {
     setReportLoading(true);
     try {
@@ -290,7 +268,6 @@ export default function ResearchPlansPage() {
         <List.Item
           actions={[
             <Button key="detail" onClick={() => setSelectedPlan(plan)}>查看完整计划</Button>,
-            <Button key="refine" icon={<RobotOutlined />} loading={actionId === `refine-${plan.id}`} onClick={() => void refinePlan(plan)}>AI 完善并中文化</Button>,
             <Button key="deep" type="primary" icon={<SearchOutlined />} loading={actionId === plan.id} onClick={() => void startDeepResearch(plan)}>启动深度研究</Button>,
           ]}
         >

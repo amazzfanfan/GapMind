@@ -2866,11 +2866,6 @@ export interface components {
              * @default false
              */
             force: boolean;
-            /**
-             * Allow Remote Fallback
-             * @default false
-             */
-            allow_remote_fallback: boolean;
         };
         /** GapExtractionResponse */
         GapExtractionResponse: {

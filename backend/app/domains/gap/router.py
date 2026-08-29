@@ -72,7 +72,6 @@ def extract_papers(
                 paper_id,
                 workspace_id,
                 force=payload.force,
-                allow_remote_fallback=payload.allow_remote_fallback,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -87,9 +87,9 @@ class Settings(BaseSettings):
     gap_extractor_top_p: float = 1.0
     gap_extractor_repeat_penalty: float = 1.05
     gap_extractor_seed: int = 42
-    # Remote gap extraction is opt-in twice: this server-side feature flag must
-    # be enabled, and each extraction request must explicitly grant material
-    # transfer consent. No remote endpoint is configured by default.
+    # Remote gap extraction is controlled by this server-side feature flag and
+    # the complete remote endpoint configuration. No remote endpoint is
+    # configured by default; eligible local failures trigger it automatically.
     gap_extractor_remote_enabled: bool = False
     gap_extractor_remote_base_url: str = ""
     gap_extractor_remote_api_key: str = ""
