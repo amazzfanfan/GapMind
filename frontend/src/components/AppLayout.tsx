@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { Button, Layout, Menu, Space, Tag, Tooltip, theme } from "antd";
 import {
+  BarChartOutlined,
   AppstoreOutlined,
   BulbOutlined,
-  DashboardOutlined,
+  CodeOutlined,
+  EditOutlined,
+  ExperimentOutlined,
+  FileSearchOutlined,
+  FolderOpenOutlined,
+  HomeOutlined,
   MessageOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
   ProjectOutlined,
-  ReadOutlined,
-  SearchOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -20,12 +24,19 @@ import { useTheme } from "../state/theme";
 
 const { Header, Sider, Content } = Layout;
 
-const globalNavigation = [
-  { key: "/", icon: <DashboardOutlined />, label: "首页" },
+const primaryNavigation = [
+  { key: "/", icon: <HomeOutlined />, label: "首页" },
   { key: "/workspaces", icon: <ProjectOutlined />, label: "课题空间" },
-  { key: "/search", icon: <SearchOutlined />, label: "论文检索" },
-  { key: "/chat", icon: <MessageOutlined />, label: "AI 助手" },
-  { key: "/reading", icon: <ReadOutlined />, label: "论文阅读" },
+  { key: "/knowledge", icon: <FolderOpenOutlined />, label: "知识库" },
+];
+
+const lifecycleNavigation = [
+  { key: "/discover", icon: <FileSearchOutlined />, label: "Discover" },
+  { key: "/plan", icon: <ExperimentOutlined />, label: "Plan" },
+  { key: "/execute", icon: <CodeOutlined />, label: "Execute" },
+  { key: "/analyze", icon: <BarChartOutlined />, label: "Analyze" },
+  { key: "/publish", icon: <EditOutlined />, label: "Publish" },
+  { key: "/respond", icon: <MessageOutlined />, label: "Respond" },
 ];
 
 export default function AppLayout() {
@@ -39,16 +50,41 @@ export default function AppLayout() {
   const currentWorkspaceName = useAppStore((state) => state.currentWorkspaceName);
 
   useEffect(() => {
-    if (!mobile) setCollapsed(false);
+    setCollapsed(mobile);
   }, [mobile]);
 
-  const items = globalNavigation.map((item) => ({
-    ...item,
-    onClick: () => {
-      navigate(item.key);
-      if (mobile) setCollapsed(true);
+  const openNavigation = (key: string) => {
+    const workspaceId = currentWorkspaceId;
+    const workspaceRoute = workspaceId ? `/workspaces/${workspaceId}` : null;
+    const target = key === "/knowledge"
+      ? workspaceRoute ? `${workspaceRoute}/knowledge` : "/workspaces"
+      : key === "/discover"
+        ? workspaceRoute ? `${workspaceRoute}/discover` : "/workspaces"
+        : key === "/plan"
+          ? workspaceRoute ? `${workspaceRoute}/plans` : "/workspaces"
+          : key === "/execute"
+            ? workspaceRoute ? `${workspaceRoute}/assistant?mode=code_generation` : "/workspaces"
+            : key === "/analyze"
+              ? workspaceRoute ? `${workspaceRoute}/assistant?mode=analyze` : "/chat/new?mode=analyze"
+              : key === "/publish"
+                ? workspaceRoute ? `${workspaceRoute}/assistant?mode=write` : "/chat/new?mode=write"
+                : key === "/respond"
+                  ? workspaceRoute ? `${workspaceRoute}/assistant?mode=respond` : "/chat/new?mode=respond"
+                  : key;
+    navigate(target);
+    if (mobile) setCollapsed(true);
+  };
+
+  const items = [
+    ...primaryNavigation.map((item) => ({ ...item, onClick: () => openNavigation(item.key) })),
+    { type: "divider" as const, key: "lifecycle-divider" },
+    {
+      type: "group" as const,
+      key: "lifecycle",
+      label: "研究生命周期",
+      children: lifecycleNavigation.map((item) => ({ ...item, onClick: () => openNavigation(item.key) })),
     },
-  }));
+  ];
 
   return (
     <Layout className="gm-app-layout">
@@ -58,7 +94,10 @@ export default function AppLayout() {
         collapsedWidth={0}
         collapsed={collapsed}
         trigger={null}
-        onBreakpoint={setMobile}
+        onBreakpoint={(broken) => {
+          setMobile(broken);
+          if (broken) setCollapsed(true);
+        }}
         className="gm-sider"
         style={{ background: token.colorBgContainer }}
       >
@@ -69,9 +108,19 @@ export default function AppLayout() {
             <span>Research workspace</span>
           </div>
         </div>
+        <button className="gm-workspace-selector" type="button" onClick={() => navigate("/workspaces")}>
+          <span className="gm-workspace-selector-icon">
+            {(currentWorkspaceName || "课").slice(0, 1).toUpperCase()}
+          </span>
+          <span className="gm-workspace-selector-copy">
+            <strong>{currentWorkspaceName || "选择课题空间"}</strong>
+            <small>{currentWorkspaceName ? "当前活跃课题" : "从一个课题开始"}</small>
+          </span>
+          <span className="gm-workspace-selector-chevron">⌄</span>
+        </button>
         <Menu
           mode="inline"
-          selectedKeys={[selectedGlobalKey(location.pathname)]}
+          selectedKeys={[selectedGlobalKey(location.pathname, location.search)]}
           items={items}
           style={{ borderRight: 0 }}
         />

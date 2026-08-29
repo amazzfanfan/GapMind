@@ -46,8 +46,8 @@ export default function WorkspaceLayout() {
 
   return (
     <div className={`gm-workspace-shell${isAssistantPage ? " gm-workspace-shell--assistant" : ""}`}>
-      <Breadcrumb items={[{ title: <Link to="/">首页</Link> }, { title: <Link to="/workspaces">课题空间</Link> }, { title: workspace.name }]} />
-      <div className="gm-workspace-heading">
+      {!isAssistantPage && <Breadcrumb items={[{ title: <Link to="/">首页</Link> }, { title: <Link to="/workspaces">课题空间</Link> }, { title: workspace.name }]} />}
+      {!isAssistantPage && <div className="gm-workspace-heading">
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>{workspace.name}</Typography.Title>
           <Typography.Paragraph type="secondary" ellipsis={{ rows: 1 }} style={{ margin: "4px 0 0" }}>
@@ -55,14 +55,14 @@ export default function WorkspaceLayout() {
           </Typography.Paragraph>
         </div>
         <Tag color={workspace.is_archived ? "default" : "green"}>{workspace.is_archived ? "已归档" : "进行中"}</Tag>
-      </div>
-      <Menu
+      </div>}
+      {!isAssistantPage && <Menu
         className="gm-workspace-nav"
         mode="horizontal"
         selectedKeys={[selectedWorkspaceKey(location.pathname)]}
         items={WORKSPACE_NAVIGATION.map((item) => ({ ...item }))}
         onClick={({ key }) => navigate(workspaceNavigationPath(workspace.id, key))}
-      />
+      />}
       <Outlet context={{ workspace, reloadWorkspace }} />
     </div>
   );

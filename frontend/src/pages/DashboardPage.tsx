@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Col, List, Row, Space, Tag, Typography } from "antd";
 import { BookOutlined, FileSearchOutlined, PlusOutlined, RightOutlined, SettingOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router-dom";
@@ -11,6 +11,7 @@ import type { Task } from "../api/types/domain";
 import PageHeader from "../components/common/PageHeader";
 import EmptyGuide from "../components/common/EmptyGuide";
 import LifecycleModules from "../components/LifecycleModules";
+import ActiveWorkspacePanel from "../components/ActiveWorkspacePanel";
 import { useAppStore } from "../store/appStore";
 import StatusBadge from "../components/common/StatusBadge";
 import { isTaskNeedingAttention } from "../state/taskAttention";
@@ -20,7 +21,7 @@ import {
   type DashboardRecommendationEntry,
 } from "../state/dashboardRecommendationState";
 
-interface WorkspaceSummary {
+export interface WorkspaceSummary {
   workspace: Workspace;
   counts: WorkspaceReadiness["counts"] | null;
   pendingTasks: Task[] | null;
@@ -37,6 +38,25 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const recommendationRequestIdRef = useRef(0);
   const recommendationEntriesRef = useRef(new Map<string, DashboardRecommendationEntry[]>());
+
+  const activeSummary = useMemo(
+    () => {
+      const eligible = summaries.filter(
+        (summary) => !summary.workspace.is_archived && summary.workspace.name !== "__independent__",
+      );
+      return eligible.find((summary) => summary.workspace.id === currentWorkspaceId)
+        ?? eligible.sort(
+          (a, b) => new Date(b.workspace.updated_at).getTime() - new Date(a.workspace.updated_at).getTime(),
+        )[0]
+        ?? null;
+    },
+    [currentWorkspaceId, summaries],
+  );
+  const setCurrentWorkspace = useAppStore((state) => state.setCurrentWorkspace);
+
+  useEffect(() => {
+    setCurrentWorkspace(activeSummary?.workspace.id ?? null, activeSummary?.workspace.name ?? null);
+  }, [activeSummary, setCurrentWorkspace]);
 
   const loadRecommendations = useCallback((workspaces: Workspace[]) => {
     // Render each source as it arrives. A cold workspace can wait on S2 while
@@ -109,7 +129,7 @@ export default function DashboardPage() {
   ]).slice(0, 8);
 
   return (
-    <div>
+    <div className="gm-dashboard-page">
       <PageHeader
         eyebrow="GapMind"
         title="继续你的研究"
@@ -123,6 +143,15 @@ export default function DashboardPage() {
         <Card><EmptyGuide description="还没有建立课题。先创建一个课题，再开始收集文献和证据。" actionText="创建第一个课题" actionIcon={<PlusOutlined />} onAction={() => navigate("/workspaces")} /></Card>
       ) : (
         <>
+          <ActiveWorkspacePanel
+            workspace={activeSummary?.workspace ?? null}
+            counts={activeSummary?.counts ?? null}
+            pendingTasks={activeSummary?.pendingTasks ?? null}
+            waitingRuns={activeSummary?.waitingRuns ?? null}
+            opportunities={activeSummary?.opportunities ?? null}
+            pendingOpportunityCount={activeSummary?.pendingOpportunityCount ?? null}
+            loading={loading}
+          />
           {actions.length > 0 && <Card title="需要你处理" extra={<Link to="/workspaces">查看课题</Link>} style={{ marginBottom: 20 }}><List size="small" dataSource={actions} renderItem={(item) => <List.Item actions={[<Link key="open" to={item.href}><RightOutlined /></Link>]}><Space><Tag>{item.workspace.name}</Tag><Typography.Text>{item.title}</Typography.Text><StatusBadge status={item.status} /></Space></List.Item>} /></Card>}
           {recommendations.length > 0 && <Card title={<Space size={6}><BookOutlined />论文推荐</Space>} extra={<Typography.Text type="secondary">来自各课题语料画像 · 完整操作见课题概览</Typography.Text>} style={{ marginBottom: 20 }}><List size="small" dataSource={recommendations} renderItem={({ workspace, item }) => <List.Item actions={[<Link key="open" to={`/workspaces/${workspace.id}/overview`}>查看课题 <RightOutlined /></Link>]}><Space direction="vertical" size={2} style={{ width: "100%" }}><Space wrap><Tag color="blue">{workspace.name}</Tag><Typography.Text strong ellipsis={{ tooltip: item.paper.title }} style={{ maxWidth: 480 }}>{item.paper.title || "未命名论文"}</Typography.Text><Typography.Text type="secondary">{item.paper.publicationDate?.slice(0, 4) || (item.paper.year ?? "年份未知")}</Typography.Text><Tag>相关度 {Math.round(item.score * 100)}%</Tag></Space>{item.reasons[0] && <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: item.reasons[0] }}>{item.reasons[0]}</Typography.Text>}</Space></List.Item>} /></Card>}
           <Typography.Title level={4}>最近课题</Typography.Title>
