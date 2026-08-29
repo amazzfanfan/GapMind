@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.domains.gap.prompt import TRAINING_INSTRUCTION, repair_prompt
 from app.domains.gap.schemas import GapAnnotationOutput
 from app.domains.gap.validation import (
@@ -15,6 +16,8 @@ from app.domains.gap.validation import (
     parse_model_json,
     validate_annotation,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -174,10 +177,10 @@ class OllamaGapExtractor:
 class RemoteGapExtractor:
     """Explicitly enabled OpenAI-compatible structured-output backup.
 
-    The worker is responsible for checking feature flag and user consent before
-    constructing this adapter. The adapter itself uses the shared LLM gateway so
-    structured calls always pass ``disable_thinking=True`` and never use
-    ``reasoning_effort``.
+    The worker is responsible for checking the server-side feature flag and
+    complete remote configuration before constructing this adapter. The adapter
+    itself uses the shared LLM gateway so structured calls always pass
+    ``disable_thinking=True`` and never use ``reasoning_effort``.
     """
 
     def __init__(
@@ -209,7 +212,10 @@ class RemoteGapExtractor:
     @property
     def model_parameters(self) -> dict[str, Any]:
         return {
-            "response_format": "json_schema",
+            # DeepSeek Chat Completions supports JSON Output rather than the
+            # Responses API's native json_schema format. Schema 3.0 is still
+            # enforced locally by validate_annotation below.
+            "response_format": "json_object",
             "temperature": 0.0,
             "max_tokens": settings.gap_extractor_remote_max_tokens,
             "disable_thinking": True,
@@ -222,46 +228,74 @@ class RemoteGapExtractor:
         instruction: str = TRAINING_INSTRUCTION,
         repair_attempts: int | None = None,
     ) -> GapExtractionResult:
-        del repair_attempts
+        maximum_repairs = (
+            settings.gap_extractor_repair_attempts
+            if repair_attempts is None
+            else max(0, repair_attempts)
+        )
         messages = [{"role": "user", "content": f"{instruction.strip()}\n\n{markdown.strip()}"}]
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "gap_annotation",
-                "strict": True,
-                "schema": GapAnnotationOutput.model_json_schema(),
-            },
-        }
-        try:
-            response = self._gateway.chat_completion(
-                messages,
-                temperature=0.0,
-                max_tokens=settings.gap_extractor_remote_max_tokens,
-                response_format=response_format,
-                disable_thinking=True,
-            )
-        except Exception as exc:
-            raise GapExtractorUnavailableError(
-                "远程研究空白备份模型不可用，请检查远程 API 配置和服务状态后重试。"
-            ) from exc
-
-        raw = response.content
+        raw_responses: list[str] = []
         errors: list[str] = []
-        try:
-            parsed = parse_model_json(raw)
-            output, errors = validate_annotation(parsed)
-        except ValueError as exc:
-            output = None
-            errors = [str(exc)]
-        categories = categorize_validation_errors(errors)
+        response_format = {"type": "json_object"}
+
+        for attempt in range(1, maximum_repairs + 2):
+            try:
+                response = self._gateway.chat_completion(
+                    messages,
+                    temperature=0.0,
+                    max_tokens=settings.gap_extractor_remote_max_tokens,
+                    response_format=response_format,
+                    disable_thinking=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "gap_extractor.remote_request_failed",
+                    model=self.model,
+                    base_url=self.base_url,
+                    attempt=attempt,
+                    error=str(exc)[:500],
+                )
+                raise GapExtractorUnavailableError(
+                    "远程研究空白备份模型不可用，请检查远程 API 配置和服务状态后重试。"
+                ) from exc
+
+            raw = response.content
+            raw_responses.append(raw)
+            try:
+                parsed = parse_model_json(raw)
+                output, errors = validate_annotation(parsed)
+            except ValueError as exc:
+                output = None
+                errors = [str(exc)]
+
+            if output is not None:
+                return GapExtractionResult(
+                    output,
+                    attempt,
+                    raw_responses,
+                    [],
+                    [],
+                    self.provider,
+                    self.model,
+                    [],
+                )
+
+            if attempt <= maximum_repairs:
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": raw},
+                        {"role": "user", "content": repair_prompt(errors)},
+                    ]
+                )
+
         return GapExtractionResult(
-            output,
-            1,
-            [raw],
+            None,
+            len(raw_responses),
+            raw_responses,
             [],
             errors,
             self.provider,
             self.model,
-            categories,
+            categorize_validation_errors(errors),
         )
 

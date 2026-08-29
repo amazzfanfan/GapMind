@@ -61,13 +61,11 @@ export const gapApi = {
     workspaceId: string,
     paperIds: string[],
     force = false,
-    allowRemoteFallback = false,
   ): Promise<{ tasks: GapExtractionTask[] }> {
     return (
       await apiClient.post(`/workspaces/${workspaceId}/gap/extractions`, {
         paper_ids: paperIds,
         force,
-        allow_remote_fallback: allowRemoteFallback,
       })
     ).data;
   },

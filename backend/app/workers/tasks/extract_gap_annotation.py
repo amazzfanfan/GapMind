@@ -65,10 +65,20 @@ def _run_gap_extraction(
     task = tasks.transition(task_id, "running", progress=0.05)
     paper_id = str((task.payload or {}).get("paper_id") or "")
     force = bool((task.payload or {}).get("force"))
-    allow_remote_fallback = bool((task.payload or {}).get("allow_remote_fallback"))
     paper = db.get(Paper, paper_id)
     if paper is None or paper.is_deleted or paper.workspace_id != task.workspace_id:
         return _fail(tasks, task_id, f"paper not found in workspace: {paper_id}")
+    if not force:
+        existing = _get_valid_annotation(db, paper_id)
+        if existing is not None:
+            result = {
+                "annotation_id": existing.id,
+                "status": "valid",
+                "provider": existing.model_provider,
+                "idempotent": True,
+            }
+            tasks.transition(task_id, "succeeded", progress=1.0, result=result)
+            return result
     if not paper.parsed_markdown_artifact_id:
         return _fail(tasks, task_id, "paper has no parsed_markdown_artifact")
     artifact = db.get(Artifact, paper.parsed_markdown_artifact_id)
@@ -155,7 +165,6 @@ def _run_gap_extraction(
             local_error=message,
             local_status="unavailable",
             local_failure_kind="model_unavailable",
-            allow_remote_fallback=allow_remote_fallback,
             force=force,
         )
     except RuntimeError:
@@ -180,7 +189,6 @@ def _run_gap_extraction(
             local_error=message,
             local_status="unavailable",
             local_failure_kind="model_unavailable",
-            allow_remote_fallback=allow_remote_fallback,
             force=force,
         )
     row.attempts = result.attempts
@@ -212,7 +220,6 @@ def _run_gap_extraction(
             local_error=_failure_message(failure_kind),
             local_status="invalid",
             local_failure_kind=failure_kind,
-            allow_remote_fallback=allow_remote_fallback,
             force=force,
         )
 
@@ -281,7 +288,6 @@ def _try_remote_fallback(
     local_error: str,
     local_status: str,
     local_failure_kind: str,
-    allow_remote_fallback: bool,
     force: bool,
 ) -> dict:
     base_result = {
@@ -296,18 +302,31 @@ def _try_remote_fallback(
         base_result["retryable"] = True
     if local_failure_kind in {"content_insufficient", "not_applicable"}:
         return _fail(tasks, task_id, local_error, result=base_result)
-    if not allow_remote_fallback:
-        local_row.fallback_reason = "remote_consent_required"
-        db.commit()
-        base_result["fallback_reason"] = local_row.fallback_reason
-        return _fail(tasks, task_id, local_error, result=base_result)
     if not _remote_is_configured():
+        logger.warning(
+            "gap_extraction.remote_fallback_skipped",
+            task_id=task_id,
+            paper_id=local_row.paper_id,
+            reason="remote_fallback_not_configured",
+        )
         local_row.fallback_reason = "remote_fallback_not_configured"
         db.commit()
         base_result["fallback_reason"] = local_row.fallback_reason
         return _fail(tasks, task_id, local_error, result=base_result)
 
     remote = RemoteGapExtractor()
+    logger.info(
+        "gap_extraction.remote_fallback_started",
+        task_id=task_id,
+        paper_id=local_row.paper_id,
+        model=remote.model,
+        reason=(
+            "local_model_unavailable"
+            if local_status == "unavailable"
+            else "local_validation_failed"
+        ),
+    )
+    tasks.update_progress(task_id, 0.85)
     remote_row = _get_or_create_remote_row(
         db,
         local_row,
@@ -330,7 +349,10 @@ def _try_remote_fallback(
     remote_row.model_parameters = remote.model_parameters
     remote_row.fallback_reason = "local_model_unavailable" if local_status == "unavailable" else "local_validation_failed"
     try:
-        remote_result = remote.extract(markdown, repair_attempts=0)
+        # JSON Output only guarantees syntactically valid JSON. The adapter
+        # re-runs the same semantic validator and feeds its errors back to
+        # the model before the result can become a board annotation.
+        remote_result = remote.extract(markdown)
     except GapExtractorUnavailableError as exc:
         message = str(exc)
         _store_failed_annotation(
@@ -355,6 +377,7 @@ def _try_remote_fallback(
                 "provider": remote_row.model_provider,
                 "fallback_reason": remote_row.fallback_reason,
                 "local_error": local_error,
+                "remote_fallback": True,
             },
         )
 
@@ -387,6 +410,7 @@ def _try_remote_fallback(
                 "provider": remote_row.model_provider,
                 "fallback_reason": remote_row.fallback_reason,
                 "local_error": local_error,
+                "remote_fallback": True,
             },
         )
 
@@ -461,19 +485,25 @@ def _fail(
 
 
 def _has_valid_annotation(db: Session, paper_id: str) -> bool:
-    """True if the paper already has a valid annotation for the CURRENT model
-    + prompt version (the demo corpus: papers are parsed once, so a valid
-    annotation means re-extraction would just short-circuit idempotently)."""
-    row = db.execute(
-        select(PaperGapAnnotation.id).where(
+    """True if the paper already has any valid annotation.
+
+    A valid result from the local model or the configured remote fallback is
+    already usable by the board. Prompt/model versions are provenance for
+    re-extraction and auditing, not a reason for the incremental "extract all
+    parsed papers" action to rerun an entire corpus. Explicit ``force=True``
+    remains the opt-in path for re-extraction.
+    """
+    return _get_valid_annotation(db, paper_id) is not None
+
+
+def _get_valid_annotation(db: Session, paper_id: str) -> PaperGapAnnotation | None:
+    return db.execute(
+        select(PaperGapAnnotation).where(
             PaperGapAnnotation.paper_id == paper_id,
-            PaperGapAnnotation.model_name == settings.gap_extractor_model,
-            PaperGapAnnotation.prompt_version == PROMPT_VERSION,
             PaperGapAnnotation.status == "valid",
             PaperGapAnnotation.is_deleted.is_(False),
         ).limit(1)
     ).scalars().first()
-    return row is not None
 
 
 def spawn_gap_extraction(
@@ -482,13 +512,14 @@ def spawn_gap_extraction(
     workspace_id: str,
     *,
     force: bool = False,
-    allow_remote_fallback: bool = False,
 ) -> tuple[str | None, bool]:
     """Create (or reuse) a gap-extraction task for a paper.
 
     Returns ``(task_id, skipped)``. ``skipped=True`` means the paper already has
-    a valid annotation for the current model + prompt and no task was created
-    (so "抽取已解析论文" on a large corpus only actually enqueues new papers).
+    a valid annotation from any provider/version and no task was created (so
+    "抽取已解析论文" on a large corpus only actually enqueues new papers).
+    Use ``force=True`` when a prompt/model migration intentionally requires a
+    re-extraction.
     """
     paper = db.get(Paper, paper_id)
     if paper is None or paper.is_deleted or paper.workspace_id != workspace_id:
@@ -518,7 +549,6 @@ def spawn_gap_extraction(
             payload={
                 "paper_id": paper_id,
                 "force": force,
-                "allow_remote_fallback": allow_remote_fallback,
             },
         )
     )

@@ -7,13 +7,22 @@ import json
 import zipfile
 from dataclasses import dataclass
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.domains.agent.models import AgentArtifact
 from app.domains.agent.service import AgentConflictError, AgentInputError, AgentService
-from app.domains.discover.models import ResearchPlan
+from app.domains.discover.models import (
+    DiscoverExternalCandidate,
+    DiscoverRun,
+    OpportunityEvidence,
+    OpportunityVersion,
+    ResearchOpportunity,
+    ResearchPlan,
+)
+from app.domains.paper.models import Paper
 from app.domains.retrieval.schemas import RetrievalResponse, RetrievalResultItem
 
 
@@ -270,6 +279,85 @@ def test_deep_research_agent_binds_plan_generates_grounded_report_and_waits_for_
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["research_plan_id"] == plan.id
     assert confirmed.json()["run"]["result"]["review_status"] == "confirmed"
+
+
+def test_agent_evidence_resolves_workspace_paper_title(client, db_session: Session):
+    workspace, _ = _workspace_conversation(client)
+    db_session.add(
+        Paper(
+            id="paper-real",
+            workspace_id=workspace["id"],
+            title="真实工作区论文标题",
+            authors=[],
+            source="manual",
+            parse_status="parsed",
+            extract_status="extracted",
+            is_deleted=False,
+        )
+    )
+    db_session.commit()
+
+    evidence = AgentService(db_session)._evidence_list(
+        [
+            RetrievalResultItem(
+                paper_id="paper-real",
+                paper_title=None,
+                chunk_id="chunk-real",
+                section="Methods",
+                text="evidence text",
+                score=0.9,
+            )
+        ]
+    )
+
+    assert evidence[0]["paper_title"] == "真实工作区论文标题"
+
+
+def test_agent_evidence_resolves_external_candidate_title(client, db_session: Session):
+    workspace, _ = _workspace_conversation(client)
+    discover_run = DiscoverRun(id=str(uuid4()), workspace_id=workspace["id"])
+    opportunity = ResearchOpportunity(
+        id=str(uuid4()),
+        workspace_id=workspace["id"],
+        title="机会",
+        summary="摘要",
+        rationale="理由",
+    )
+    version = OpportunityVersion(
+        id=str(uuid4()),
+        opportunity_id=opportunity.id,
+        version_number=1,
+        title="机会版本",
+        problem_statement="问题",
+    )
+    candidate = DiscoverExternalCandidate(
+        id=str(uuid4()),
+        discover_run_id=discover_run.id,
+        query="q",
+        rank=1,
+        external_paper_id="S2-real",
+        title="真实外部论文标题",
+        authors=[],
+        snapshot_payload={},
+    )
+    evidence = OpportunityEvidence(
+        opportunity_version_id=version.id,
+        relation="supports",
+        source_scope="external",
+        evidence_level="metadata_only",
+        external_candidate_id=candidate.id,
+        display_excerpt="external evidence",
+        snapshot_payload={},
+    )
+    db_session.add_all([discover_run, opportunity, version, candidate, evidence])
+    db_session.commit()
+
+    result = AgentService(db_session)._discover_evidence(
+        {"opportunity_version_id": version.id}
+    )
+
+    assert result[0]["paper_title"] == "真实外部论文标题"
+    assert result[0]["external_candidate_id"] == candidate.id
 
 
 def test_code_agent_requires_plan_and_generates_safe_downloadable_files(

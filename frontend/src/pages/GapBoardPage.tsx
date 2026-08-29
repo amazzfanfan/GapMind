@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { App, Alert, Button, Card, Checkbox, Empty, Popconfirm, Select, Space, Statistic, Table, Typography } from "antd";
+import { App, Alert, Button, Card, Empty, Popconfirm, Select, Space, Statistic, Table, Typography } from "antd";
 import {
   ArrowRightOutlined,
   CheckCircleFilled,
@@ -69,7 +69,6 @@ export default function GapBoardPage() {
   const [extracting, setExtracting] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [discovering, setDiscovering] = useState<string | null>(null);
-  const [allowRemoteFallback, setAllowRemoteFallback] = useState(false);
   // P0-5: 矩阵可按机会类型筛选（只看某一类，如"明确剩余局限"），矩阵变大后不至于难读。
   const [tierFilter, setTierFilter] = useState<GapTierFilter>("recommended");
 
@@ -125,7 +124,6 @@ export default function GapBoardPage() {
           workspaceId,
           eligible.slice(index, index + 200),
           false,
-          allowRemoteFallback,
         );
         for (const task of response.tasks) {
           if (task.skipped) skipped += 1;
@@ -343,12 +341,6 @@ export default function GapBoardPage() {
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>
             刷新
           </Button>
-          <Checkbox
-            checked={allowRemoteFallback}
-            onChange={(event) => setAllowRemoteFallback(event.target.checked)}
-          >
-            允许远程备份（外发 Markdown）
-          </Checkbox>
           <Button icon={<RobotOutlined />} loading={extracting} onClick={() => void runExtraction()}>
             抽取已解析论文
           </Button>
@@ -382,16 +374,6 @@ export default function GapBoardPage() {
           </span>
         </Card>
       </div>
-
-      {allowRemoteFallback ? (
-        <Alert
-          className="gm-gap-board-alert"
-          type="warning"
-          showIcon
-          message="已允许远程备份"
-          description="仅当本地模型不可用或输出连续校验失败时，才会把论文 Markdown 发送到已配置的远程结构化模型；远程结果仍会经过同一 Schema 校验，并标记为“远程降级候选”。"
-        />
-      ) : null}
 
       <Alert
         className="gm-gap-board-alert"
