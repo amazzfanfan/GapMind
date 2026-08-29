@@ -3,10 +3,17 @@ import { selectedGlobalKey, selectedWorkspaceKey, workspaceNavigationPath } from
 
 describe("navigation helpers", () => {
   it("keeps global navigation selected for nested routes", () => {
-    expect(selectedGlobalKey("/workspaces/ws-1/discover/runs/run-1")).toBe("/workspaces");
+    expect(selectedGlobalKey("/workspaces/ws-1/discover/runs/run-1")).toBe("/discover");
     expect(selectedGlobalKey("/search?query=gnn")).toBe("/search");
     expect(selectedGlobalKey("/chat/conversation-1")).toBe("/chat");
     expect(selectedGlobalKey("/")).toBe("/");
+  });
+
+  it("selects lifecycle entries for workspace and assistant routes", () => {
+    expect(selectedGlobalKey("/workspaces/ws-1/knowledge")).toBe("/knowledge");
+    expect(selectedGlobalKey("/workspaces/ws-1/plans")).toBe("/plan");
+    expect(selectedGlobalKey("/workspaces/ws-1/assistant", "?mode=code_generation")).toBe("/execute");
+    expect(selectedGlobalKey("/chat/new", "?mode=respond")).toBe("/respond");
   });
 
   it("keeps workspace navigation selected for graph and discover details", () => {

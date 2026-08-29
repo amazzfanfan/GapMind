@@ -10,8 +10,16 @@ export const WORKSPACE_NAVIGATION = [
   { key: "settings", label: "设置" },
 ] as const;
 
-export function selectedGlobalKey(pathname: string): string {
+export function selectedGlobalKey(pathname: string, search = ""): string {
   if (pathname === "/") return "/";
+  const mode = new URLSearchParams(search).get("mode");
+  if (mode === "code_generation") return "/execute";
+  if (mode === "analyze") return "/analyze";
+  if (mode === "write") return "/publish";
+  if (mode === "respond") return "/respond";
+  if (pathname.includes("/knowledge")) return "/knowledge";
+  if (pathname.includes("/discover")) return "/discover";
+  if (pathname.includes("/plans")) return "/plan";
   if (pathname.startsWith("/search")) return "/search";
   if (pathname.startsWith("/chat")) return "/chat";
   if (pathname.startsWith("/reading")) return "/reading";
