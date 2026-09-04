@@ -9,6 +9,24 @@ GapMind 是面向 CS/AI 科研的证据驱动研究工作空间，服务研究�
 
 AI 输出默认是候选或草稿，不自动成为科学事实；资料不足时会保留不确定性，代码生成默认只做静态检查和预览/下载，不自动执行。
 
+## 界面展示
+
+### 方法 × 问题科研棋盘
+
+对跨论文的研究方法与问题进行归一化和语义去重，以矩阵形式展示已有覆盖、跨论文迁移候选及待核验研究空白。
+
+![研究空白棋盘总览](docs/images/research-gap-board.png)
+
+![方法与问题矩阵](docs/images/method-problem-matrix.jpg)
+
+### 研究机会发现与证据核验
+
+串联工作区检索、相似工作、反证检索、外部论文检索与全文核验，记录各阶段状态并生成带证据覆盖信息的研究机会候选。
+
+![研究机会发现工作台](docs/images/opportunity-discovery-workbench.jpg)
+
+![研究机会与支持证据详情](docs/images/opportunity-detail.jpg)
+
 ## Tech Stack
 
 | Layer | Technology |
